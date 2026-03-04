@@ -107,6 +107,33 @@ All methods are available on the object returned by `createFs(config)`.
 | `getLockData(assetDir, lockName)` | `Promise<LockData \| null>` |
 | `cleanStaleLocks(assetDir)` | `Promise<string[]>` |
 
+## Locking
+
+Distributed locking is filesystem-based, using dotfiles placed inside asset directories.
+
+### Mechanism
+
+**Acquire** — uses [`O_CREAT | O_EXCL`](https://github.com/justintanner/clipfirst-fs/blob/ab9a508/src/lock/acquire.ts#L25-L26) flags so the OS atomically creates the lock file only if it doesn't already exist. No TOCTOU race is possible. Each lock stores a JSON payload with a [`created_at` timestamp and `pid`](https://github.com/justintanner/clipfirst-fs/blob/ab9a508/src/lock/acquire.ts#L16-L19). If the file already exists, the caller gets back a `LOCK_HELD` error.
+
+**Release** — [`unlink()`](https://github.com/justintanner/clipfirst-fs/blob/ab9a508/src/lock/release.ts#L14-L29) removes the lock file. There is no ownership check — any process can release any lock. This is a deliberate simplicity tradeoff; stale-lock cleanup handles orphans.
+
+**Query** — [`isLocked`](https://github.com/justintanner/clipfirst-fs/blob/ab9a508/src/lock/query.ts#L6-L16) checks file existence; [`getLockData`](https://github.com/justintanner/clipfirst-fs/blob/ab9a508/src/lock/query.ts#L18-L46) reads the JSON inside.
+
+**Stale lock cleanup** — [`cleanStaleLocks`](https://github.com/justintanner/clipfirst-fs/blob/ab9a508/src/lock/orphan.ts#L15-L45) scans for `.lock` files, reads each PID, and removes locks whose [owning process is no longer alive](https://github.com/justintanner/clipfirst-fs/blob/ab9a508/src/lock/orphan.ts#L6-L13).
+
+**Batch operations** — [`acquireAllLocks`](https://github.com/justintanner/clipfirst-fs/blob/ab9a508/src/lock/acquire-all.ts#L38-L60) grabs every lock type for an asset atomically (rolls back on failure); [`releaseAllLocks`](https://github.com/justintanner/clipfirst-fs/blob/ab9a508/src/lock/acquire-all.ts#L62-L68) releases them all.
+
+### Two file types
+
+| Type | Pattern | Git | Purpose |
+|------|---------|-----|---------|
+| [Lock files](https://github.com/justintanner/clipfirst-fs/blob/ab9a508/src/constants.ts#L3-L14) | `.*.lock` | ignored | Ephemeral — represent in-progress operations (transcribing, rendering, etc.) |
+| [Error files](https://github.com/justintanner/clipfirst-fs/blob/ab9a508/src/constants.ts#L17-L25) | `.*.error` | tracked | Persistent — represent [failed operations](https://github.com/justintanner/clipfirst-fs/blob/ab9a508/src/lock/error-file.ts#L11-L29) that need attention |
+
+### Status machine
+
+The combination of lock files, error files, and generated output files feeds into [`deriveAssetStatus`](https://github.com/justintanner/clipfirst-fs/blob/ab9a508/src/asset/status.ts#L66-L102), which computes a single status for each asset. Video assets have the most complex path through [`deriveVideoStatus`](https://github.com/justintanner/clipfirst-fs/blob/ab9a508/src/asset/status.ts#L104-L161), producing orientation-aware statuses like `rendering-landscape` or `render-error-portrait`.
+
 ### Configuration
 
 ```typescript
