@@ -1,5 +1,9 @@
 # clipfirst-fs
 
+[![CI](https://github.com/justintanner/clipfirst-fs/actions/workflows/ci.yml/badge.svg)](https://github.com/justintanner/clipfirst-fs/actions/workflows/ci.yml)
+[![Node.js](https://img.shields.io/badge/node-%3E%3D20-brightgreen)](https://nodejs.org)
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.5-blue)](https://www.typescriptlang.org)
+
 TypeScript/Node.js filesystem abstraction for managing video and image asset projects. Provides structured project/asset lifecycles with integrated Git version control and distributed file locking. Every mutation produces an atomic git commit.
 
 ## Install
