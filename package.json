@@ -21,7 +21,8 @@
     "example:basic": "tsx examples/basic-usage.ts",
     "example:projects": "tsx examples/project-management.ts",
     "example:git": "tsx examples/git-history.ts",
-    "examples": "tsx examples/basic-usage.ts && tsx examples/project-management.ts && tsx examples/git-history.ts"
+    "examples": "tsx examples/basic-usage.ts && tsx examples/project-management.ts && tsx examples/git-history.ts",
+    "bench": "vitest bench --config vitest.config.bench.ts"
   },
   "engines": {
     "node": ">=20"
