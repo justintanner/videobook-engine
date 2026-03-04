@@ -15,7 +15,11 @@
     "build": "tsc",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "example:basic": "tsx examples/basic-usage.ts",
+    "example:projects": "tsx examples/project-management.ts",
+    "example:git": "tsx examples/git-history.ts",
+    "examples": "tsx examples/basic-usage.ts && tsx examples/project-management.ts && tsx examples/git-history.ts"
   },
   "engines": {
     "node": ">=20"
@@ -25,6 +29,7 @@
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
+    "tsx": "^4.19.0",
     "typescript": "^5.5.0",
     "vitest": "^2.0.0"
   }
