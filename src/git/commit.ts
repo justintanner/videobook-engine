@@ -63,7 +63,7 @@ export async function commitOperation(
     }
 
     // Build commit message
-    const subject = assetId ? `${operation}: ${assetId}` : `${operation}: project`;
+    const subject = assetId ? `[${assetId}] ${operation}` : `${operation}: project`;
     const bodyLines: string[] = [];
     if (details) {
       for (const [key, value] of Object.entries(details)) {

@@ -28,12 +28,18 @@ export function slugifyName(name: string, prefix: string): string {
 export async function uniqueSlug(
   outputDir: string,
   baseSlug: string,
+  historicalSlugs?: ReadonlySet<string>,
 ): Promise<string> {
   const MAX_ATTEMPTS = 1000;
   let candidate = baseSlug;
   let counter = 2;
 
   for (let i = 0; i < MAX_ATTEMPTS; i++) {
+    if (historicalSlugs?.has(candidate)) {
+      candidate = `${baseSlug}-${counter}`;
+      counter++;
+      continue;
+    }
     try {
       // Atomic mkdir (no recursive) — acts as both uniqueness check and reservation
       await fs.mkdir(path.join(outputDir, candidate));

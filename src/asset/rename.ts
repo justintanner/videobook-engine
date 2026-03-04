@@ -15,6 +15,7 @@ import {
   LOCK_RENDERING_SQUARE,
   LOCK_DOWNLOADING,
 } from '../constants.js';
+import { getHistoricalSlugs } from '../git/slugs.js';
 import { slugifyName, uniqueSlug } from './slug.js';
 import { isSafePath, invalidInput, VALID_PREFIXES } from '../validation.js';
 
@@ -58,7 +59,8 @@ export async function renameAsset(
   // Extract prefix
   const prefix = cleanId.split('-')[0]!;
   const baseSlug = slugifyName(newName, prefix);
-  const newSlug = await uniqueSlug(projectDir, baseSlug);
+  const historicalSlugs = await getHistoricalSlugs(projectDir, gitPath);
+  const newSlug = await uniqueSlug(projectDir, baseSlug, historicalSlugs);
 
   // uniqueSlug atomically creates the target directory — remove it before git mv
   await fs.rmdir(path.join(projectDir, newSlug));

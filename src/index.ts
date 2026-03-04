@@ -1,3 +1,6 @@
+import * as fs from 'node:fs/promises';
+import * as path from 'node:path';
+
 import type {
   FsConfig,
   FsError,
@@ -29,6 +32,7 @@ import { writeMetadata, readMetadata } from './file/metadata.js';
 import { commitOperation } from './git/commit.js';
 import { getHistory, getAssetHistory } from './git/history.js';
 import { restoreAsset } from './git/restore.js';
+import { getHistoricalSlugs } from './git/slugs.js';
 
 import { acquireLock } from './lock/acquire.js';
 import { releaseLock } from './lock/release.js';
@@ -69,6 +73,9 @@ export interface ClipfirstFs {
   isLocked(assetDir: string, lockName: string): Promise<boolean>;
   getLockData(assetDir: string, lockName: string): Promise<LockData | null>;
   cleanStaleLocks(assetDir: string): Promise<string[]>;
+
+  // Query
+  slugTaken(slug: string, projectSlug?: string): Promise<boolean>;
 }
 
 export function createFs(config: FsConfig): ClipfirstFs {
@@ -170,6 +177,18 @@ export function createFs(config: FsConfig): ClipfirstFs {
     isLocked,
     getLockData,
     cleanStaleLocks,
+
+    // Query
+    slugTaken: async (slug, projectSlug) => {
+      const r = await resolveOrErr(projectSlug);
+      if (!r.ok) return false;
+      try {
+        await fs.access(path.join(r.value, slug));
+        return true;
+      } catch {}
+      const historical = await getHistoricalSlugs(r.value, gitPath);
+      return historical.has(slug);
+    },
   };
 }
 
