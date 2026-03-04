@@ -1,15 +1,15 @@
-import * as path from 'node:path';
+import * as path from "node:path";
 
-import type { FsError } from '../types.js';
-import type { Result } from '../result.js';
-import { ok, err } from '../result.js';
-import { gitMv } from '../git/mv.js';
-import { commitOperation } from '../git/commit.js';
-import { withGitLock } from '../git/mutex.js';
-import { getHistoricalSlugs } from '../git/slugs.js';
-import { slugifyName } from './slug.js';
-import { isSafePath, invalidInput, VALID_PREFIXES } from '../validation.js';
-import { acquireAllLocks, releaseAllLocks } from '../lock/acquire-all.js';
+import type { FsError } from "../types.js";
+import type { Result } from "../result.js";
+import { ok, err } from "../result.js";
+import { gitMv } from "../git/mv.js";
+import { commitOperation } from "../git/commit.js";
+import { withGitLock } from "../git/mutex.js";
+import { getHistoricalSlugs } from "../git/slugs.js";
+import { slugifyName } from "./slug.js";
+import { isSafePath, invalidInput, VALID_PREFIXES } from "../validation.js";
+import { acquireAllLocks, releaseAllLocks } from "../lock/acquire-all.js";
 
 const MAX_SLUG_ATTEMPTS = 1000;
 
@@ -20,16 +20,22 @@ export async function renameAsset(
   gitPath?: string,
 ): Promise<Result<{ old_asset_id: string; new_asset_id: string }, FsError>> {
   // Strip @ prefix if present
-  const cleanId = assetId.replace(/^@/, '');
+  const cleanId = assetId.replace(/^@/, "");
 
   if (!isSafePath(cleanId)) return invalidInput(`Invalid asset ID: ${cleanId}`);
 
-  if (cleanId === 'plan' || cleanId === 'final') {
-    return err({ code: 'INVALID_INPUT', message: `Cannot rename singleton asset: ${cleanId}` });
+  if (cleanId === "final") {
+    return err({
+      code: "INVALID_INPUT",
+      message: `Cannot rename singleton asset: ${cleanId}`,
+    });
   }
 
   if (!VALID_PREFIXES.some((p) => cleanId.startsWith(p))) {
-    return err({ code: 'INVALID_INPUT', message: `Invalid asset ID format: ${cleanId}` });
+    return err({
+      code: "INVALID_INPUT",
+      message: `Invalid asset ID format: ${cleanId}`,
+    });
   }
 
   const assetDir = path.join(projectDir, cleanId);
@@ -41,7 +47,7 @@ export async function renameAsset(
   }
 
   // Extract prefix and build base slug
-  const prefix = cleanId.split('-')[0]!;
+  const prefix = cleanId.split("-")[0]!;
   const baseSlug = slugifyName(newName, prefix);
   const historicalSlugs = await getHistoricalSlugs(projectDir, gitPath);
 
@@ -72,20 +78,27 @@ export async function renameAsset(
 
     if (!newSlug) {
       return err({
-        code: 'IO_ERROR' as const,
+        code: "IO_ERROR" as const,
         message: `Could not find unique slug after ${MAX_SLUG_ATTEMPTS} attempts for: ${baseSlug}`,
       });
     }
 
     // Commit
     const commitHash = await commitOperation(
-      projectDir, 'rename', newSlug, { from: cleanId }, gitPath,
+      projectDir,
+      "rename",
+      newSlug,
+      { from: cleanId },
+      gitPath,
     );
 
     if (commitHash === null) {
       // Rollback
       await gitMv(projectDir, newSlug, cleanId, gitPath);
-      return err({ code: 'GIT_ERROR' as const, message: 'Git commit failed, rename rolled back' });
+      return err({
+        code: "GIT_ERROR" as const,
+        message: "Git commit failed, rename rolled back",
+      });
     }
 
     return ok({ old_asset_id: cleanId, new_asset_id: newSlug });
