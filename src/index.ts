@@ -142,7 +142,7 @@ export function createFs(config: FsConfig): ClipfirstFs {
   return {
     // Project
     createProject: (slug) => createProject(outputDir, slug, gitPath),
-    listProjects: () => listProjects(outputDir),
+    listProjects: () => listProjects(outputDir, gitPath),
     getProject: (slug) => getProject(outputDir, slug, gitPath),
     switchProject: (slug) => switchProject(outputDir, slug),
 
@@ -155,7 +155,7 @@ export function createFs(config: FsConfig): ClipfirstFs {
     listAssets: async (projectSlug) => {
       const dir = await resolve(projectSlug);
       if (!dir) return [];
-      return listAssets(dir);
+      return listAssets(dir, gitPath);
     },
     deleteAsset: async (assetId, projectSlug) => {
       const r = await resolveOrErr(projectSlug);

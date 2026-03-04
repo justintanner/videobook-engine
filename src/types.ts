@@ -16,7 +16,7 @@ export interface AssetManifest {
   directories?: Record<string, string[]>;
 }
 
-// Project metadata as stored in .project file
+// Project metadata derived from git history and directory name
 export interface ProjectMetadata {
   slug: string;
   created: number;

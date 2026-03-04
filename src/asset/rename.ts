@@ -83,13 +83,14 @@ export async function renameAsset(
       });
     }
 
-    // Commit
+    // Commit (allowEmpty for assets with no tracked files yet)
     const commitHash = await commitOperation(
       projectDir,
       "rename",
       newSlug,
       { from: cleanId },
       gitPath,
+      true,
     );
 
     if (commitHash === null) {

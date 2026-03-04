@@ -1,11 +1,15 @@
-import * as fs from 'node:fs/promises';
-import * as path from 'node:path';
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
 
-import type { ProjectMetadata } from '../types.js';
-import { PROJECT_METADATA, DEFAULT_PROJECT_FILE } from '../constants.js';
-import { isProjectSlug } from './slug.js';
+import type { ProjectMetadata } from "../types.js";
+import { DEFAULT_PROJECT_FILE } from "../constants.js";
+import { isProjectSlug } from "./slug.js";
+import { getProjectTimestamps } from "../git/timestamps.js";
 
-export async function listProjects(outputDir: string): Promise<ProjectMetadata[]> {
+export async function listProjects(
+  outputDir: string,
+  gitPath?: string,
+): Promise<ProjectMetadata[]> {
   try {
     await fs.access(outputDir);
   } catch {
@@ -14,30 +18,39 @@ export async function listProjects(outputDir: string): Promise<ProjectMetadata[]
 
   let defaultSlug: string | null = null;
   try {
-    defaultSlug = (await fs.readFile(path.join(outputDir, DEFAULT_PROJECT_FILE), 'utf-8')).trim();
+    defaultSlug = (
+      await fs.readFile(path.join(outputDir, DEFAULT_PROJECT_FILE), "utf-8")
+    ).trim();
   } catch {
     // No default file
   }
 
   const entries = await fs.readdir(outputDir, { withFileTypes: true });
-  const projects: ProjectMetadata[] = [];
+  const candidates: { name: string; dir: string }[] = [];
 
   for (const entry of entries) {
     if (!entry.isDirectory() || !isProjectSlug(entry.name)) continue;
-
-    const metadataFile = path.join(outputDir, entry.name, PROJECT_METADATA);
+    const dir = path.join(outputDir, entry.name);
     try {
-      const content = await fs.readFile(metadataFile, 'utf-8');
-      const metadata = JSON.parse(content) as ProjectMetadata;
-      const stat = await fs.stat(metadataFile);
-      metadata.path = path.join(outputDir, entry.name);
-      metadata.is_default = entry.name === defaultSlug;
-      metadata.last_activity = stat.mtimeMs / 1000;
-      projects.push(metadata);
+      await fs.access(path.join(dir, ".git"));
+      candidates.push({ name: entry.name, dir });
     } catch {
-      // Skip entries without valid .project metadata
+      // Not a git-initialized project — skip
     }
   }
+
+  const projects = await Promise.all(
+    candidates.map(async ({ name, dir }): Promise<ProjectMetadata> => {
+      const timestamps = await getProjectTimestamps(dir, gitPath);
+      return {
+        slug: name,
+        created: timestamps?.created ?? Date.now() / 1000,
+        path: dir,
+        is_default: name === defaultSlug,
+        last_activity: timestamps?.lastActivity,
+      };
+    }),
+  );
 
   projects.sort((a, b) => (b.last_activity ?? 0) - (a.last_activity ?? 0));
   return projects;

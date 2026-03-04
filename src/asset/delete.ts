@@ -49,7 +49,14 @@ export async function deleteAsset(
   // Delete + commit under mutex — lock files are deleted with the directory
   const commitHash = await withGitLock(projectDir, async () => {
     await fs.rm(assetDir, { recursive: true, force: true });
-    return commitOperation(projectDir, "delete", assetId, undefined, gitPath);
+    return commitOperation(
+      projectDir,
+      "delete",
+      assetId,
+      undefined,
+      gitPath,
+      true,
+    );
   });
 
   const deletedAt = new Date().toISOString();

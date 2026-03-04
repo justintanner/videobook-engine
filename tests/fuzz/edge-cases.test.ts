@@ -42,7 +42,7 @@ describe("edge-cases fuzz tests", () => {
     expect(ids.size).toBe(105);
   }, 30_000);
 
-  it("getProject for bare directory without .project does NOT auto-create", async () => {
+  it("getProject for bare directory without .git does NOT auto-create", async () => {
     const bareSlug = "bare-dir-no-project";
     const bareDir = path.join(sandbox.outputDir, bareSlug);
     await fs.mkdir(bareDir, { recursive: true });
@@ -53,12 +53,12 @@ describe("edge-cases fuzz tests", () => {
       expect(result.error.code).toBe("NOT_FOUND");
     }
 
-    // Verify .project was NOT auto-created
-    const metadataExists = await fs.access(path.join(bareDir, ".project")).then(
+    // Verify .git was NOT auto-created
+    const gitExists = await fs.access(path.join(bareDir, ".git")).then(
       () => true,
       () => false,
     );
-    expect(metadataExists).toBe(false);
+    expect(gitExists).toBe(false);
   }, 30_000);
 
   it("createAsset with empty name produces {prefix}-untitled", async () => {

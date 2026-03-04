@@ -1,6 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs/promises";
-import * as path from "node:path";
 
 import { createSandbox, type Sandbox } from "./helpers/sandbox.js";
 
@@ -30,26 +29,30 @@ describe("asset operations", () => {
 
     expect(result.value.assetId).toMatch(/^vid-dancing-cats/);
 
-    // .created_at exists
-    const createdAt = await fs.readFile(
-      path.join(result.value.path, ".created_at"),
-      "utf-8",
-    );
-    expect(parseFloat(createdAt)).toBeGreaterThan(0);
+    // Verify timestamp is available via listAssets
+    const assets = await sandbox.fs.listAssets(projectSlug);
+    const created = assets.find((a) => a.id === result.value.assetId);
+    expect(created).toBeDefined();
+    expect(new Date(created!.created_at).getTime()).toBeGreaterThan(0);
   });
 
   it("lists assets including video", async () => {
-    const projectDir = path.join(sandbox.outputDir, projectSlug);
-    const assetDir = path.join(projectDir, "vid-test-video");
-    await fs.mkdir(assetDir, { recursive: true });
-    await fs.writeFile(
-      path.join(assetDir, ".created_at"),
-      String(Date.now() / 1000),
+    const createResult = await sandbox.fs.createAsset(
+      "vid",
+      "test video",
+      projectSlug,
     );
-    await fs.writeFile(path.join(assetDir, "original.mp4"), "fake-video-data");
+    if (!createResult.ok) throw new Error("Failed to create asset");
+
+    await sandbox.fs.writeFile(
+      createResult.value.assetId,
+      "original.mp4",
+      Buffer.from("fake-video-data"),
+      projectSlug,
+    );
 
     const assets = await sandbox.fs.listAssets(projectSlug);
-    const vid = assets.find((a) => a.id === "vid-test-video");
+    const vid = assets.find((a) => a.id === createResult.value.assetId);
     expect(vid).toBeDefined();
     expect(vid!.type).toBe("video");
   });
@@ -115,7 +118,7 @@ describe("asset operations", () => {
     expect(manifestResult.ok).toBe(true);
     if (!manifestResult.ok) return;
 
-    expect(manifestResult.value.file_count).toBeGreaterThanOrEqual(2); // .created_at + original.mp4
+    expect(manifestResult.value.file_count).toBeGreaterThanOrEqual(1); // original.mp4
     const mp4 = manifestResult.value.files.find(
       (f) => f.name === "original.mp4",
     );

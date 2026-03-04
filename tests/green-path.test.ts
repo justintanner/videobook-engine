@@ -263,8 +263,8 @@ describe("green path — real binary files", () => {
 
     const history = await sandbox.fs.getAssetHistory(assetId, projectSlug);
 
-    // At least 3 commits: asset create + mp4 write + jpg write
-    expect(history.length).toBeGreaterThanOrEqual(3);
+    // At least 2 commits: mp4 write + jpg write (create is an empty commit, not path-scoped)
+    expect(history.length).toBeGreaterThanOrEqual(2);
   });
 
   it("multiple assets in one project", async () => {

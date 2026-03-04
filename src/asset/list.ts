@@ -2,7 +2,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
 import type { AssetEntry, AssetType } from "../types.js";
-import { CREATED_AT_FILE } from "../constants.js";
+import { getAssetCreationTimestamps } from "../git/timestamps.js";
 
 function getAssetType(name: string): AssetType {
   if (name.startsWith("vid-")) return "video";
@@ -13,20 +13,10 @@ function getAssetType(name: string): AssetType {
   throw new Error(`Unknown asset prefix: ${name}`);
 }
 
-async function readCreatedAt(assetDir: string): Promise<number | null> {
-  try {
-    const content = await fs.readFile(
-      path.join(assetDir, CREATED_AT_FILE),
-      "utf-8",
-    );
-    const val = parseFloat(content.trim());
-    return isNaN(val) ? null : val;
-  } catch {
-    return null;
-  }
-}
-
-export async function listAssets(projectDir: string): Promise<AssetEntry[]> {
+export async function listAssets(
+  projectDir: string,
+  gitPath?: string,
+): Promise<AssetEntry[]> {
   try {
     await fs.access(projectDir);
   } catch {
@@ -34,6 +24,7 @@ export async function listAssets(projectDir: string): Promise<AssetEntry[]> {
   }
 
   const entries = await fs.readdir(projectDir, { withFileTypes: true });
+  const timestampMap = await getAssetCreationTimestamps(projectDir, gitPath);
   const assets: AssetEntry[] = [];
 
   for (const entry of entries) {
@@ -55,11 +46,11 @@ export async function listAssets(projectDir: string): Promise<AssetEntry[]> {
     try {
       const assetType = getAssetType(name);
 
-      // Timestamp
-      const createdTs = await readCreatedAt(assetDir);
+      // Timestamp from git commit, fallback to directory birthtime
+      const gitTs = timestampMap.get(name);
       let createdAt: string;
-      if (createdTs !== null) {
-        createdAt = new Date(createdTs * 1000).toISOString();
+      if (gitTs !== undefined) {
+        createdAt = new Date(gitTs * 1000).toISOString();
       } else {
         const stat = await fs.stat(assetDir);
         createdAt = new Date(stat.birthtimeMs).toISOString();
@@ -73,7 +64,7 @@ export async function listAssets(projectDir: string): Promise<AssetEntry[]> {
       });
     } catch (error: unknown) {
       const e = error as NodeJS.ErrnoException;
-      if (e.code === "ENOENT") continue; // Asset vanished — skip it
+      if (e.code === "ENOENT") continue;
       throw error;
     }
   }
