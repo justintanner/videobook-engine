@@ -28,10 +28,9 @@ describe("lock safety fuzz tests", () => {
     const assetId = asset.value.assetId;
     const assetDir = path.join(sandbox.outputDir, projectSlug, assetId);
 
-    const lockResult = await sandbox.fs.acquireLock(
-      assetDir,
-      ".rendering-square.lock",
-    );
+    const lockResult = await sandbox.fs.acquireLock(assetDir, {
+      timeoutMs: 60_000,
+    });
     expect(lockResult.ok).toBe(true);
 
     const renameResult = await sandbox.fs.renameAsset(
@@ -42,51 +41,12 @@ describe("lock safety fuzz tests", () => {
     expect(renameResult.ok).toBe(false);
     if (!renameResult.ok) {
       expect(renameResult.error.code).toBe("LOCKED");
-      expect(renameResult.error.message).toContain("lock held");
     }
 
-    await sandbox.fs.releaseLock(assetDir, ".rendering-square.lock");
+    await sandbox.fs.releaseLock(assetDir);
   }, 30_000);
 
-  it("renameAsset rejects when any lock is held", async () => {
-    const lockNames = [
-      ".transcribing.lock",
-      ".generating.lock",
-      ".rendering-landscape.lock",
-      ".rendering-portrait.lock",
-      ".rendering-square.lock",
-      ".downloading.lock",
-    ];
-
-    for (const lockName of lockNames) {
-      const asset = await sandbox.fs.createAsset(
-        "vid",
-        `lock-test-${lockName}`,
-        projectSlug,
-      );
-      if (!asset.ok) throw new Error(`Failed to create asset for ${lockName}`);
-      const assetId = asset.value.assetId;
-      const assetDir = path.join(sandbox.outputDir, projectSlug, assetId);
-
-      const lockResult = await sandbox.fs.acquireLock(assetDir, lockName);
-      expect(lockResult.ok).toBe(true);
-
-      const renameResult = await sandbox.fs.renameAsset(
-        assetId,
-        "renamed",
-        projectSlug,
-      );
-      expect(renameResult.ok).toBe(false);
-      if (!renameResult.ok) {
-        expect(renameResult.error.code).toBe("LOCKED");
-        expect(renameResult.error.message).toContain("lock held");
-      }
-
-      await sandbox.fs.releaseLock(assetDir, lockName);
-    }
-  }, 30_000);
-
-  it("deleteAsset rejects deletion when any lock is held", async () => {
+  it("deleteAsset rejects deletion when lock is held", async () => {
     const asset = await sandbox.fs.createAsset(
       "vid",
       "delete-locked",
@@ -96,20 +56,18 @@ describe("lock safety fuzz tests", () => {
     const assetId = asset.value.assetId;
     const assetDir = path.join(sandbox.outputDir, projectSlug, assetId);
 
-    const lockResult = await sandbox.fs.acquireLock(
-      assetDir,
-      ".rendering-landscape.lock",
-    );
+    const lockResult = await sandbox.fs.acquireLock(assetDir, {
+      timeoutMs: 60_000,
+    });
     expect(lockResult.ok).toBe(true);
 
     const deleteResult = await sandbox.fs.deleteAsset(assetId, projectSlug);
     expect(deleteResult.ok).toBe(false);
     if (!deleteResult.ok) {
       expect(deleteResult.error.code).toBe("LOCKED");
-      expect(deleteResult.error.message).toContain("lock held");
     }
 
-    await sandbox.fs.releaseLock(assetDir, ".rendering-landscape.lock");
+    await sandbox.fs.releaseLock(assetDir);
   }, 30_000);
 
   it("deleteAsset succeeds after lock released", async () => {
@@ -122,10 +80,9 @@ describe("lock safety fuzz tests", () => {
     const assetId = asset.value.assetId;
     const assetDir = path.join(sandbox.outputDir, projectSlug, assetId);
 
-    const lockResult = await sandbox.fs.acquireLock(
-      assetDir,
-      ".generating.lock",
-    );
+    const lockResult = await sandbox.fs.acquireLock(assetDir, {
+      timeoutMs: 60_000,
+    });
     expect(lockResult.ok).toBe(true);
 
     // Should fail while locked
@@ -136,10 +93,7 @@ describe("lock safety fuzz tests", () => {
     }
 
     // Release the lock
-    const releaseResult = await sandbox.fs.releaseLock(
-      assetDir,
-      ".generating.lock",
-    );
+    const releaseResult = await sandbox.fs.releaseLock(assetDir);
     expect(releaseResult.ok).toBe(true);
 
     // Should succeed after release
@@ -164,7 +118,7 @@ describe("lock safety fuzz tests", () => {
     );
 
     const attempts = Array.from({ length: 20 }, () =>
-      sandbox.fs.acquireLock(assetDir, ".generating.lock"),
+      sandbox.fs.acquireLock(assetDir, { timeoutMs: 60_000 }),
     );
 
     const results = await Promise.all(attempts);
@@ -180,7 +134,7 @@ describe("lock safety fuzz tests", () => {
       }
     }
 
-    await sandbox.fs.releaseLock(assetDir, ".generating.lock");
+    await sandbox.fs.releaseLock(assetDir);
   }, 30_000);
 
   it("document lock ownership gap (no PID check on release)", async () => {
@@ -196,45 +150,30 @@ describe("lock safety fuzz tests", () => {
       asset.value.assetId,
     );
 
-    // Acquire the lock — it records process.pid
-    const lockResult = await sandbox.fs.acquireLock(
-      assetDir,
-      ".transcribing.lock",
-    );
+    const lockResult = await sandbox.fs.acquireLock(assetDir, {
+      timeoutMs: 60_000,
+    });
     expect(lockResult.ok).toBe(true);
     if (lockResult.ok) {
       expect(lockResult.value.pid).toBe(process.pid);
     }
 
-    // Verify the lock is held
-    expect(await sandbox.fs.isLocked(assetDir, ".transcribing.lock")).toBe(
-      true,
-    );
+    expect(await sandbox.fs.isLocked(assetDir)).toBe(true);
 
-    // Release from the same process but without any ownership validation —
-    // this documents that releaseLock does NOT check if the caller matches the
-    // PID that acquired the lock. Any caller can release any lock.
-    const releaseResult = await sandbox.fs.releaseLock(
-      assetDir,
-      ".transcribing.lock",
-    );
+    const releaseResult = await sandbox.fs.releaseLock(assetDir);
     expect(releaseResult.ok).toBe(true);
     if (releaseResult.ok) {
       expect(releaseResult.value).toBe(true);
     }
 
-    // Lock is now released
-    expect(await sandbox.fs.isLocked(assetDir, ".transcribing.lock")).toBe(
-      false,
-    );
+    expect(await sandbox.fs.isLocked(assetDir)).toBe(false);
 
-    // Can re-acquire after foreign release
-    const reacquire = await sandbox.fs.acquireLock(
-      assetDir,
-      ".transcribing.lock",
-    );
+    // Can re-acquire after release
+    const reacquire = await sandbox.fs.acquireLock(assetDir, {
+      timeoutMs: 60_000,
+    });
     expect(reacquire.ok).toBe(true);
 
-    await sandbox.fs.releaseLock(assetDir, ".transcribing.lock");
+    await sandbox.fs.releaseLock(assetDir);
   }, 30_000);
 });

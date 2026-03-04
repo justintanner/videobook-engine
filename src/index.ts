@@ -34,7 +34,8 @@ import { getHistoricalSlugs } from "./git/slugs.js";
 import { acquireLock } from "./lock/acquire.js";
 import { releaseLock } from "./lock/release.js";
 import { isLocked, getLockData } from "./lock/query.js";
-import { cleanStaleLocks } from "./lock/orphan.js";
+import { cleanStaleLock } from "./lock/clean.js";
+import type { LockOptions } from "./lock/data.js";
 
 import { ok, err } from "./result.js";
 
@@ -107,16 +108,12 @@ export interface ClipfirstFs {
   // Lock
   acquireLock(
     assetDir: string,
-    lockName: string,
-    data?: Record<string, unknown>,
+    options: LockOptions,
   ): Promise<Result<LockData, FsError>>;
-  releaseLock(
-    assetDir: string,
-    lockName: string,
-  ): Promise<Result<boolean, FsError>>;
-  isLocked(assetDir: string, lockName: string): Promise<boolean>;
-  getLockData(assetDir: string, lockName: string): Promise<LockData | null>;
-  cleanStaleLocks(assetDir: string): Promise<string[]>;
+  releaseLock(assetDir: string): Promise<Result<boolean, FsError>>;
+  isLocked(assetDir: string): Promise<boolean>;
+  getLockData(assetDir: string): Promise<LockData | null>;
+  cleanStaleLock(assetDir: string): Promise<boolean>;
 
   // Query
   slugTaken(slug: string, projectSlug?: string): Promise<boolean>;
@@ -212,7 +209,7 @@ export function createFs(config: FsConfig): ClipfirstFs {
     releaseLock,
     isLocked,
     getLockData,
-    cleanStaleLocks,
+    cleanStaleLock,
 
     // Query
     slugTaken: async (slug, projectSlug) => {
@@ -242,5 +239,6 @@ export type {
   FsConfig,
 } from "./types.js";
 
+export type { LockOptions } from "./lock/data.js";
 export type { Result } from "./result.js";
 export { ok, err } from "./result.js";

@@ -144,8 +144,9 @@ describe("e2e full API tour", () => {
     // ── Phase 3: Locks ──
 
     // 12. acquireLock
-    const lock = await cfs.acquireLock(assetDir, ".generating.lock", {
-      task_id: "test-123",
+    const lock = await cfs.acquireLock(assetDir, {
+      timeoutMs: 60_000,
+      data: { task_id: "test-123" },
     });
     expect(lock.ok).toBe(true);
     if (!lock.ok) return;
@@ -153,32 +154,33 @@ describe("e2e full API tour", () => {
     expect(lock.value.task_id).toBe("test-123");
 
     // 13. isLocked
-    const locked = await cfs.isLocked(assetDir, ".generating.lock");
+    const locked = await cfs.isLocked(assetDir);
     expect(locked).toBe(true);
 
     // 14. getLockData
-    const lockData = await cfs.getLockData(assetDir, ".generating.lock");
+    const lockData = await cfs.getLockData(assetDir);
     expect(lockData).not.toBeNull();
     expect(lockData!.task_id).toBe("test-123");
 
     // 15. releaseLock
-    const released = await cfs.releaseLock(assetDir, ".generating.lock");
+    const released = await cfs.releaseLock(assetDir);
     expect(released.ok).toBe(true);
     if (!released.ok) return;
     expect(released.value).toBe(true);
-    const lockedAfter = await cfs.isLocked(assetDir, ".generating.lock");
+    const lockedAfter = await cfs.isLocked(assetDir);
     expect(lockedAfter).toBe(false);
 
-    // 16. cleanStaleLocks — write a stale lock with dead PID
-    const staleLockPath = path.join(assetDir, ".generating.lock");
+    // 16. cleanStaleLock — write a stale lock with dead PID
+    const staleLockPath = path.join(assetDir, ".lock");
     const staleLockData = JSON.stringify({
-      created_at: Date.now(),
+      created_at: Date.now() / 1000,
+      timeout_at: Date.now() / 1000 + 3600,
       pid: 999999,
       task_id: "stale",
     });
     await fs.writeFile(staleLockPath, staleLockData);
-    const cleaned = await cfs.cleanStaleLocks(assetDir);
-    expect(cleaned).toContain(".generating.lock");
+    const cleaned = await cfs.cleanStaleLock(assetDir);
+    expect(cleaned).toBe(true);
 
     // ── Phase 4: Git operations ──
 

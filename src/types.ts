@@ -36,6 +36,7 @@ export interface GitCommit {
 // Lock data stored in lock files
 export interface LockData {
   created_at: number;
+  timeout_at: number;
   pid?: number;
   [key: string]: unknown;
 }

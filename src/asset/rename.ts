@@ -9,7 +9,7 @@ import { withGitLock } from "../git/mutex.js";
 import { getHistoricalSlugs } from "../git/slugs.js";
 import { slugifyName } from "./slug.js";
 import { isSafePath, invalidInput, VALID_PREFIXES } from "../validation.js";
-import { acquireAllLocks, releaseAllLocks } from "../lock/acquire-all.js";
+import { isLocked } from "../lock/query.js";
 
 const MAX_SLUG_ATTEMPTS = 1000;
 
@@ -40,10 +40,8 @@ export async function renameAsset(
 
   const assetDir = path.join(projectDir, cleanId);
 
-  // Atomically acquire all locks — prevents TOCTOU between check and rename
-  const lockResult = await acquireAllLocks(assetDir);
-  if (!lockResult.ok) {
-    return err(lockResult.error);
+  if (await isLocked(assetDir)) {
+    return err({ code: "LOCKED", message: `Asset is locked: ${cleanId}` });
   }
 
   // Extract prefix and build base slug
@@ -104,13 +102,6 @@ export async function renameAsset(
 
     return ok({ old_asset_id: cleanId, new_asset_id: newSlug });
   });
-
-  // Release locks at the appropriate directory
-  if (result.ok) {
-    await releaseAllLocks(path.join(projectDir, result.value.new_asset_id));
-  } else {
-    await releaseAllLocks(assetDir);
-  }
 
   return result;
 }

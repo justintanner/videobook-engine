@@ -12,7 +12,7 @@ import {
   invalidInput,
   VALID_PREFIXES,
 } from "../validation.js";
-import { acquireAllLocks } from "../lock/acquire-all.js";
+import { isLocked } from "../lock/query.js";
 
 export async function deleteAsset(
   projectDir: string,
@@ -40,10 +40,8 @@ export async function deleteAsset(
     return err({ code: "NOT_FOUND", message: `Asset not found: ${assetId}` });
   }
 
-  // Atomically acquire all locks — prevents TOCTOU between check and delete
-  const lockResult = await acquireAllLocks(assetDir);
-  if (!lockResult.ok) {
-    return err(lockResult.error);
+  if (await isLocked(assetDir)) {
+    return err({ code: "LOCKED", message: `Asset is locked: ${assetId}` });
   }
 
   // Delete + commit under mutex — lock files are deleted with the directory

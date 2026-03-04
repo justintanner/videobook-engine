@@ -1,43 +1,66 @@
-import * as fs from 'node:fs/promises';
-import * as path from 'node:path';
-import { constants } from 'node:fs';
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
+import { constants } from "node:fs";
 
-import type { LockData, FsError } from '../types.js';
-import type { Result } from '../result.js';
-import { ok, err } from '../result.js';
+import type { LockData, FsError } from "../types.js";
+import type { Result } from "../result.js";
+import { ok, err } from "../result.js";
+import { LOCK_FILE } from "../constants.js";
+import {
+  type LockOptions,
+  buildLockData,
+  parseLockContent,
+  isExpired,
+} from "./data.js";
 
-export async function acquireLock(
-  assetDir: string,
-  lockName: string,
-  data?: Record<string, unknown>,
+async function tryCreateLock(
+  lockPath: string,
+  lockData: LockData,
 ): Promise<Result<LockData, FsError>> {
-  const lockPath = path.join(assetDir, lockName);
-
-  const lockData: LockData = {
-    created_at: Date.now() / 1000,
-    pid: process.pid,
-    ...data,
-  };
-
   let fd: fs.FileHandle | undefined;
   try {
-    // Atomic lock creation — O_CREAT | O_EXCL guarantees no TOCTOU race
     fd = await fs.open(
       lockPath,
       constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL,
     );
     await fd.writeFile(JSON.stringify(lockData));
-    await fd.close();
-    fd = undefined;
     return ok(lockData);
   } catch (error: unknown) {
-    if (fd) {
-      await fd.close().catch(() => {});
-    }
     const e = error as NodeJS.ErrnoException;
-    if (e.code === 'EEXIST') {
-      return err({ code: 'LOCK_HELD', message: `Lock already held: ${lockName}` });
+    if (e.code === "EEXIST") {
+      return err({ code: "LOCK_HELD", message: "Lock already held" });
     }
-    return err({ code: 'IO_ERROR', message: e.message });
+    return err({ code: "IO_ERROR", message: e.message });
+  } finally {
+    if (fd) await fd.close().catch(() => {});
   }
+}
+
+export async function acquireLock(
+  assetDir: string,
+  options: LockOptions,
+): Promise<Result<LockData, FsError>> {
+  const lockPath = path.join(assetDir, LOCK_FILE);
+  const now = Date.now() / 1000;
+  const lockData = buildLockData(now, process.pid, options);
+
+  const first = await tryCreateLock(lockPath, lockData);
+  if (first.ok) return first;
+
+  // On EEXIST: check if expired and take over
+  if (first.error.code === "LOCK_HELD") {
+    try {
+      const content = await fs.readFile(lockPath, "utf-8");
+      const existing = parseLockContent(content);
+      if (existing && isExpired(existing)) {
+        await fs.unlink(lockPath).catch(() => {});
+        return tryCreateLock(lockPath, lockData);
+      }
+    } catch {
+      // File gone between check — retry once
+      return tryCreateLock(lockPath, lockData);
+    }
+  }
+
+  return first;
 }
