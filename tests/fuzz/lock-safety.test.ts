@@ -29,7 +29,7 @@ describe("lock safety fuzz tests", () => {
     const assetDir = path.join(sandbox.outputDir, projectSlug, assetId);
 
     const lockResult = await sandbox.fs.acquireLock(assetDir, {
-      timeoutMs: 60_000,
+      durationMs: 60_000,
     });
     expect(lockResult.ok).toBe(true);
 
@@ -57,7 +57,7 @@ describe("lock safety fuzz tests", () => {
     const assetDir = path.join(sandbox.outputDir, projectSlug, assetId);
 
     const lockResult = await sandbox.fs.acquireLock(assetDir, {
-      timeoutMs: 60_000,
+      durationMs: 60_000,
     });
     expect(lockResult.ok).toBe(true);
 
@@ -81,7 +81,7 @@ describe("lock safety fuzz tests", () => {
     const assetDir = path.join(sandbox.outputDir, projectSlug, assetId);
 
     const lockResult = await sandbox.fs.acquireLock(assetDir, {
-      timeoutMs: 60_000,
+      durationMs: 60_000,
     });
     expect(lockResult.ok).toBe(true);
 
@@ -118,7 +118,7 @@ describe("lock safety fuzz tests", () => {
     );
 
     const attempts = Array.from({ length: 20 }, () =>
-      sandbox.fs.acquireLock(assetDir, { timeoutMs: 60_000 }),
+      sandbox.fs.acquireLock(assetDir, { durationMs: 60_000 }),
     );
 
     const results = await Promise.all(attempts);
@@ -130,7 +130,7 @@ describe("lock safety fuzz tests", () => {
 
     for (const loss of losses) {
       if (!loss.ok) {
-        expect(loss.error.code).toBe("LOCK_HELD");
+        expect(loss.error.code).toBe("LOCKED");
       }
     }
 
@@ -151,7 +151,7 @@ describe("lock safety fuzz tests", () => {
     );
 
     const lockResult = await sandbox.fs.acquireLock(assetDir, {
-      timeoutMs: 60_000,
+      durationMs: 60_000,
     });
     expect(lockResult.ok).toBe(true);
     if (lockResult.ok) {
@@ -170,7 +170,7 @@ describe("lock safety fuzz tests", () => {
 
     // Can re-acquire after release
     const reacquire = await sandbox.fs.acquireLock(assetDir, {
-      timeoutMs: 60_000,
+      durationMs: 60_000,
     });
     expect(reacquire.ok).toBe(true);
 

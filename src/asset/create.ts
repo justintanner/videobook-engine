@@ -1,9 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
-import type { FsError } from "../types.js";
-import type { Result } from "../result.js";
-import { ok, err } from "../result.js";
+import { type FsError, type Result, ok, err } from "../types.js";
 import { commitOperation } from "../git/commit.js";
 import { withGitLock } from "../git/mutex.js";
 import { getHistoricalSlugs } from "../git/slugs.js";

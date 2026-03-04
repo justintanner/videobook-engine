@@ -1,12 +1,15 @@
-import * as fs from 'node:fs/promises';
-import * as path from 'node:path';
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
 
-import type { FsError } from '../types.js';
-import type { Result } from '../result.js';
-import { ok, err } from '../result.js';
-import { commitOperation } from '../git/commit.js';
-import { withGitLock } from '../git/mutex.js';
-import { isSafeFilename, isSafePath, isWithinDir, invalidInput } from '../validation.js';
+import { type FsError, type Result, ok, err } from "../types.js";
+import { commitOperation } from "../git/commit.js";
+import { withGitLock } from "../git/mutex.js";
+import {
+  isSafeFilename,
+  isSafePath,
+  isWithinDir,
+  invalidInput,
+} from "../validation.js";
 
 export async function writeFile(
   projectDir: string,
@@ -16,23 +19,31 @@ export async function writeFile(
   gitPath?: string,
 ): Promise<Result<string, FsError>> {
   if (!isSafePath(assetId)) return invalidInput(`Invalid asset ID: ${assetId}`);
-  if (!isSafeFilename(filename)) return invalidInput(`Invalid filename: ${filename}`);
+  if (!isSafeFilename(filename))
+    return invalidInput(`Invalid filename: ${filename}`);
 
   const assetDir = path.join(projectDir, assetId);
 
   try {
     await fs.access(assetDir);
   } catch {
-    return err({ code: 'NOT_FOUND', message: `Asset not found: ${assetId}` });
+    return err({ code: "NOT_FOUND", message: `Asset not found: ${assetId}` });
   }
 
   const filePath = path.join(assetDir, filename);
-  if (!isWithinDir(projectDir, filePath)) return invalidInput('Path escapes project directory');
+  if (!isWithinDir(projectDir, filePath))
+    return invalidInput("Path escapes project directory");
 
   // Write + commit together under mutex so each write gets its own scoped commit
   await withGitLock(projectDir, async () => {
     await fs.writeFile(filePath, data);
-    await commitOperation(projectDir, 'write', assetId, { file: filename }, gitPath);
+    await commitOperation(
+      projectDir,
+      "write",
+      assetId,
+      { file: filename },
+      gitPath,
+    );
   });
 
   return ok(filePath);

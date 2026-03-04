@@ -1,7 +1,7 @@
 import type { LockData } from "../types.js";
 
 export interface LockOptions {
-  timeoutMs: number;
+  durationMs: number;
   data?: Record<string, unknown>;
 }
 
@@ -10,7 +10,7 @@ export function buildLockData(
   pid: number,
   options: LockOptions,
 ): LockData {
-  const timeoutAt = now + options.timeoutMs / 1000;
+  const timeoutAt = now + options.durationMs / 1000;
   return {
     created_at: now,
     timeout_at: timeoutAt,

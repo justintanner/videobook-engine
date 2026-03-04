@@ -23,14 +23,14 @@ describe("lock timeout behavior", () => {
 
   it("re-acquires expired lock (expired takeover)", async () => {
     // Acquire with 1ms timeout — will be expired immediately
-    const first = await cfs.acquireLock(assetDir, { timeoutMs: 1 });
+    const first = await cfs.acquireLock(assetDir, { durationMs: 1 });
     expect(first.ok).toBe(true);
 
     // Small delay to ensure expiry
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     // Should succeed because the existing lock is expired
-    const second = await cfs.acquireLock(assetDir, { timeoutMs: 60_000 });
+    const second = await cfs.acquireLock(assetDir, { durationMs: 60_000 });
     expect(second.ok).toBe(true);
     if (second.ok) {
       expect(second.value.timeout_at).toBeGreaterThan(second.value.created_at);
@@ -66,18 +66,18 @@ describe("lock timeout behavior", () => {
   });
 
   it("non-expired lock blocks acquisition", async () => {
-    const first = await cfs.acquireLock(assetDir, { timeoutMs: 60_000 });
+    const first = await cfs.acquireLock(assetDir, { durationMs: 60_000 });
     expect(first.ok).toBe(true);
 
-    const second = await cfs.acquireLock(assetDir, { timeoutMs: 60_000 });
+    const second = await cfs.acquireLock(assetDir, { durationMs: 60_000 });
     expect(second.ok).toBe(false);
     if (!second.ok) {
-      expect(second.error.code).toBe("LOCK_HELD");
+      expect(second.error.code).toBe("LOCKED");
     }
   });
 
   it("getLockData includes timeout_at", async () => {
-    await cfs.acquireLock(assetDir, { timeoutMs: 30_000 });
+    await cfs.acquireLock(assetDir, { durationMs: 30_000 });
     const data = await cfs.getLockData(assetDir);
     expect(data).toBeTruthy();
     expect(data!.timeout_at).toBeGreaterThan(data!.created_at);

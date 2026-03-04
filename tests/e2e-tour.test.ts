@@ -145,7 +145,7 @@ describe("e2e full API tour", () => {
 
     // 12. acquireLock
     const lock = await cfs.acquireLock(assetDir, {
-      timeoutMs: 60_000,
+      durationMs: 60_000,
       data: { task_id: "test-123" },
     });
     expect(lock.ok).toBe(true);

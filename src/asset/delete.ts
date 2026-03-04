@@ -1,17 +1,10 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
-import type { FsError } from "../types.js";
-import type { Result } from "../result.js";
-import { ok, err } from "../result.js";
+import { type FsError, type Result, ok, err } from "../types.js";
 import { commitOperation } from "../git/commit.js";
 import { withGitLock } from "../git/mutex.js";
-import {
-  isSafePath,
-  isWithinDir,
-  invalidInput,
-  VALID_PREFIXES,
-} from "../validation.js";
+import { isValidAssetId, isWithinDir, invalidInput } from "../validation.js";
 import { isLocked } from "../lock/query.js";
 
 export async function deleteAsset(
@@ -19,16 +12,8 @@ export async function deleteAsset(
   assetId: string,
   gitPath?: string,
 ): Promise<Result<{ deleted_at: string }, FsError>> {
-  if (!isSafePath(assetId)) return invalidInput(`Invalid asset ID: ${assetId}`);
-
-  const hasValidPrefix =
-    VALID_PREFIXES.some((p) => assetId.startsWith(p)) || assetId === "final";
-  if (!hasValidPrefix) {
-    return err({
-      code: "INVALID_INPUT",
-      message: `Invalid asset ID format: ${assetId}`,
-    });
-  }
+  if (!isValidAssetId(assetId))
+    return invalidInput(`Invalid asset ID: ${assetId}`);
 
   const assetDir = path.join(projectDir, assetId);
   if (!isWithinDir(projectDir, assetDir))

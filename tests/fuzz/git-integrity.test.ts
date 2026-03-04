@@ -7,7 +7,6 @@ import { promisify } from "node:util";
 
 import { createSandbox, type Sandbox } from "../helpers/sandbox.js";
 import { commitMessageInjectionArb } from "../helpers/arbitraries.js";
-import { rewindToCommit } from "../../src/git/rewind.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -210,18 +209,5 @@ describe("git-integrity fuzz tests", () => {
       (l) => l.includes(asset2Id) && l.includes("committed.txt"),
     );
     expect(asset2InStatus).toBe(false);
-  });
-
-  it("rewindToCommit with invalid hash returns Result error", async () => {
-    const projectDir = path.join(sandbox.outputDir, projectSlug);
-    const result = await rewindToCommit(
-      projectDir,
-      "deadbeef1234567890abcdef1234567890abcdef",
-    );
-    expect(result.ok).toBe(false);
-    if (!result.ok) {
-      expect(result.error.code).toBe("GIT_ERROR");
-      expect(result.error.message.length).toBeGreaterThan(0);
-    }
   });
 });

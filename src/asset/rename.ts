@@ -1,14 +1,12 @@
 import * as path from "node:path";
 
-import type { FsError } from "../types.js";
-import type { Result } from "../result.js";
-import { ok, err } from "../result.js";
+import { type FsError, type Result, ok, err } from "../types.js";
 import { gitMv } from "../git/mv.js";
 import { commitOperation } from "../git/commit.js";
 import { withGitLock } from "../git/mutex.js";
 import { getHistoricalSlugs } from "../git/slugs.js";
 import { slugifyName } from "./slug.js";
-import { isSafePath, invalidInput, VALID_PREFIXES } from "../validation.js";
+import { isValidAssetId, invalidInput, VALID_PREFIXES } from "../validation.js";
 import { isLocked } from "../lock/query.js";
 
 const MAX_SLUG_ATTEMPTS = 1000;
@@ -22,21 +20,12 @@ export async function renameAsset(
   // Strip @ prefix if present
   const cleanId = assetId.replace(/^@/, "");
 
-  if (!isSafePath(cleanId)) return invalidInput(`Invalid asset ID: ${cleanId}`);
-
   if (cleanId === "final") {
-    return err({
-      code: "INVALID_INPUT",
-      message: `Cannot rename singleton asset: ${cleanId}`,
-    });
+    return invalidInput(`Cannot rename singleton asset: ${cleanId}`);
   }
 
-  if (!VALID_PREFIXES.some((p) => cleanId.startsWith(p))) {
-    return err({
-      code: "INVALID_INPUT",
-      message: `Invalid asset ID format: ${cleanId}`,
-    });
-  }
+  if (!isValidAssetId(cleanId))
+    return invalidInput(`Invalid asset ID: ${cleanId}`);
 
   const assetDir = path.join(projectDir, cleanId);
 

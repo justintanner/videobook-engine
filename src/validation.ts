@@ -1,8 +1,6 @@
 import * as path from "node:path";
 
-import type { FsError } from "./types.js";
-import type { Result } from "./result.js";
-import { err } from "./result.js";
+import { type FsError, type Result, err } from "./types.js";
 
 export const VALID_PREFIXES = ["img-", "vid-", "aud-", "script-"] as const;
 export const SINGLETON_ASSETS = ["final"] as const;

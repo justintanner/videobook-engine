@@ -14,13 +14,12 @@
 
 ### Core Pattern: Result<T, FsError>
 - All public methods return `Result<T, FsError>` — discriminated union, no thrown exceptions for control flow
-- Defined in `src/result.ts`
-- Error codes in `src/types.ts`: `NOT_FOUND`, `ALREADY_EXISTS`, `LOCK_HELD`, `GIT_ERROR`, `INVALID_INPUT`, `IO_ERROR`, `LOCKED`
+- Defined in `src/types.ts` (Result type, ok/err helpers, and error codes)
+- Error codes: `NOT_FOUND`, `ALREADY_EXISTS`, `GIT_ERROR`, `INVALID_INPUT`, `IO_ERROR`, `LOCKED`
 
 ### Module Layout
 - `src/project/` — project lifecycle (create, list, get, switch)
 - `src/asset/` — asset lifecycle (create, delete, rename, list, manifest)
-- `src/asset/status.ts` — 16-state status machine (orientation-aware)
 - `src/file/` — file I/O (read, write, metadata), writes trigger git commits
 - `src/git/` — git operations via `child_process.execFile`, exponential backoff retry
 - `src/lock/` — distributed locking via `O_CREAT | O_EXCL` atomic file creation

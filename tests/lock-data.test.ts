@@ -10,7 +10,7 @@ describe("buildLockData", () => {
   it("sets created_at, timeout_at, pid, and merges custom data", () => {
     const now = 1700000000;
     const result = buildLockData(now, 42, {
-      timeoutMs: 60_000,
+      durationMs: 60_000,
       data: { task_id: "abc" },
     });
 
@@ -21,7 +21,7 @@ describe("buildLockData", () => {
   });
 
   it("works without custom data", () => {
-    const result = buildLockData(100, 1, { timeoutMs: 5000 });
+    const result = buildLockData(100, 1, { durationMs: 5000 });
     expect(result.created_at).toBe(100);
     expect(result.timeout_at).toBe(105);
     expect(result.pid).toBe(1);

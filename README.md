@@ -54,7 +54,7 @@ interface FsError {
 }
 ```
 
-**Error codes:** `NOT_FOUND` | `ALREADY_EXISTS` | `LOCK_HELD` | `LOCK_NOT_FOUND` | `GIT_ERROR` | `INVALID_INPUT` | `IO_ERROR` | `LOCKED`
+**Error codes:** `NOT_FOUND` | `ALREADY_EXISTS` | `GIT_ERROR` | `INVALID_INPUT` | `IO_ERROR` | `LOCKED`
 
 ## API
 
@@ -113,7 +113,7 @@ Distributed locking is filesystem-based, using dotfiles placed inside asset dire
 
 ### Mechanism
 
-**Acquire** — uses [`O_CREAT | O_EXCL`](https://github.com/justintanner/clipfirst-fs/blob/ab9a508/src/lock/acquire.ts#L25-L26) flags so the OS atomically creates the lock file only if it doesn't already exist. No TOCTOU race is possible. Each lock stores a JSON payload with a [`created_at` timestamp and `pid`](https://github.com/justintanner/clipfirst-fs/blob/ab9a508/src/lock/acquire.ts#L16-L19). If the file already exists, the caller gets back a `LOCK_HELD` error.
+**Acquire** — uses `O_CREAT | O_EXCL` flags so the OS atomically creates the lock file only if it doesn't already exist. No TOCTOU race is possible. Each lock stores a JSON payload with a `created_at` timestamp, `timeout_at`, and `pid`. If the file already exists, the caller gets back a `LOCKED` error.
 
 **Release** — [`unlink()`](https://github.com/justintanner/clipfirst-fs/blob/ab9a508/src/lock/release.ts#L14-L29) removes the lock file. There is no ownership check — any process can release any lock. This is a deliberate simplicity tradeoff; stale-lock cleanup handles orphans.
 

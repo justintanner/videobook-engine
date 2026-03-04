@@ -1,16 +1,18 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
-import type {
-  FsConfig,
-  FsError,
-  AssetEntry,
-  AssetManifest,
-  ProjectMetadata,
-  GitCommit,
-  LockData,
+import {
+  type FsConfig,
+  type FsError,
+  type AssetEntry,
+  type AssetManifest,
+  type ProjectMetadata,
+  type GitCommit,
+  type LockData,
+  type Result,
+  ok,
+  err,
 } from "./types.js";
-import type { Result } from "./result.js";
 
 import { createProject } from "./project/create.js";
 import { listProjects } from "./project/list.js";
@@ -36,8 +38,6 @@ import { releaseLock } from "./lock/release.js";
 import { isLocked, getLockData } from "./lock/query.js";
 import { cleanStaleLock } from "./lock/clean.js";
 import type { LockOptions } from "./lock/data.js";
-
-import { ok, err } from "./result.js";
 
 export interface ClipfirstFs {
   // Project
@@ -126,14 +126,13 @@ export function createFs(config: FsConfig): ClipfirstFs {
     return resolveProjectDir(outputDir, projectSlug, gitPath);
   }
 
-  async function resolveOrErr(
-    projectSlug?: string,
-  ): Promise<Result<string, FsError>> {
+  async function withProject<T>(
+    projectSlug: string | undefined,
+    fn: (dir: string) => Promise<Result<T, FsError>>,
+  ): Promise<Result<T, FsError>> {
     const dir = await resolve(projectSlug);
-    if (!dir) {
-      return err({ code: "NOT_FOUND", message: "Project not found" });
-    }
-    return ok(dir);
+    if (!dir) return err({ code: "NOT_FOUND", message: "Project not found" });
+    return fn(dir);
   }
 
   return {
@@ -144,43 +143,31 @@ export function createFs(config: FsConfig): ClipfirstFs {
     switchProject: (slug) => switchProject(outputDir, slug),
 
     // Asset
-    createAsset: async (prefix, name, projectSlug) => {
-      const r = await resolveOrErr(projectSlug);
-      if (!r.ok) return r;
-      return createAsset(r.value, prefix, name, gitPath);
-    },
+    createAsset: (prefix, name, projectSlug) =>
+      withProject(projectSlug, (dir) =>
+        createAsset(dir, prefix, name, gitPath),
+      ),
     listAssets: async (projectSlug) => {
       const dir = await resolve(projectSlug);
       if (!dir) return [];
       return listAssets(dir, gitPath);
     },
-    deleteAsset: async (assetId, projectSlug) => {
-      const r = await resolveOrErr(projectSlug);
-      if (!r.ok) return r;
-      return deleteAsset(r.value, assetId, gitPath);
-    },
-    renameAsset: async (assetId, newName, projectSlug) => {
-      const r = await resolveOrErr(projectSlug);
-      if (!r.ok) return r;
-      return renameAsset(r.value, assetId, newName, gitPath);
-    },
-    getManifest: async (assetId, projectSlug) => {
-      const r = await resolveOrErr(projectSlug);
-      if (!r.ok) return r;
-      return getManifest(r.value, assetId);
-    },
+    deleteAsset: (assetId, projectSlug) =>
+      withProject(projectSlug, (dir) => deleteAsset(dir, assetId, gitPath)),
+    renameAsset: (assetId, newName, projectSlug) =>
+      withProject(projectSlug, (dir) =>
+        renameAsset(dir, assetId, newName, gitPath),
+      ),
+    getManifest: (assetId, projectSlug) =>
+      withProject(projectSlug, (dir) => getManifest(dir, assetId)),
 
     // File
-    writeFile: async (assetId, filename, data, projectSlug) => {
-      const r = await resolveOrErr(projectSlug);
-      if (!r.ok) return r;
-      return writeFile(r.value, assetId, filename, data, gitPath);
-    },
-    readFile: async (assetId, filename, projectSlug) => {
-      const r = await resolveOrErr(projectSlug);
-      if (!r.ok) return r;
-      return readFile(r.value, assetId, filename);
-    },
+    writeFile: (assetId, filename, data, projectSlug) =>
+      withProject(projectSlug, (dir) =>
+        writeFile(dir, assetId, filename, data, gitPath),
+      ),
+    readFile: (assetId, filename, projectSlug) =>
+      withProject(projectSlug, (dir) => readFile(dir, assetId, filename)),
 
     // Git
     commitOperation: async (operation, assetId, details, projectSlug) => {
@@ -213,13 +200,13 @@ export function createFs(config: FsConfig): ClipfirstFs {
 
     // Query
     slugTaken: async (slug, projectSlug) => {
-      const r = await resolveOrErr(projectSlug);
-      if (!r.ok) return false;
+      const dir = await resolve(projectSlug);
+      if (!dir) return false;
       try {
-        await fs.access(path.join(r.value, slug));
+        await fs.access(path.join(dir, slug));
         return true;
       } catch {}
-      const historical = await getHistoricalSlugs(r.value, gitPath);
+      const historical = await getHistoricalSlugs(dir, gitPath);
       return historical.has(slug);
     },
   };
@@ -240,5 +227,5 @@ export type {
 } from "./types.js";
 
 export type { LockOptions } from "./lock/data.js";
-export type { Result } from "./result.js";
-export { ok, err } from "./result.js";
+export type { Result } from "./types.js";
+export { ok, err } from "./types.js";

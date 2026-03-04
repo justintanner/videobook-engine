@@ -1,9 +1,7 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
-import type { FsError } from "../types.js";
-import type { Result } from "../result.js";
-import { ok, err } from "../result.js";
+import { type FsError, type Result, ok, err } from "../types.js";
 import { LOCK_FILE } from "../constants.js";
 
 export async function releaseLock(

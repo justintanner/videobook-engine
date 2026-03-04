@@ -2,6 +2,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
 import type { AssetEntry, AssetType } from "../types.js";
+import { isValidAssetId } from "../validation.js";
 import { getAssetCreationTimestamps } from "../git/timestamps.js";
 
 function getAssetType(name: string): AssetType {
@@ -31,15 +32,7 @@ export async function listAssets(
     if (!entry.isDirectory()) continue;
     const name = entry.name;
 
-    if (
-      !name.startsWith("img-") &&
-      !name.startsWith("vid-") &&
-      !name.startsWith("aud-") &&
-      !name.startsWith("script-") &&
-      name !== "final"
-    ) {
-      continue;
-    }
+    if (!isValidAssetId(name)) continue;
 
     const assetDir = path.join(projectDir, name);
 

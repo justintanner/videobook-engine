@@ -3,8 +3,7 @@ import * as path from "node:path";
 import { constants } from "node:fs";
 
 import type { LockData, FsError } from "../types.js";
-import type { Result } from "../result.js";
-import { ok, err } from "../result.js";
+import { type Result, ok, err } from "../types.js";
 import { LOCK_FILE } from "../constants.js";
 import {
   type LockOptions,
@@ -28,7 +27,7 @@ async function tryCreateLock(
   } catch (error: unknown) {
     const e = error as NodeJS.ErrnoException;
     if (e.code === "EEXIST") {
-      return err({ code: "LOCK_HELD", message: "Lock already held" });
+      return err({ code: "LOCKED", message: "Lock already held" });
     }
     return err({ code: "IO_ERROR", message: e.message });
   } finally {
@@ -48,7 +47,7 @@ export async function acquireLock(
   if (first.ok) return first;
 
   // On EEXIST: check if expired and take over
-  if (first.error.code === "LOCK_HELD") {
+  if (first.error.code === "LOCKED") {
     try {
       const content = await fs.readFile(lockPath, "utf-8");
       const existing = parseLockContent(content);

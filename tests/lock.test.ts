@@ -22,7 +22,7 @@ describe("lock operations", () => {
   const cfs = createFs({ outputDir: "/tmp/unused" });
 
   it("acquires a lock atomically", async () => {
-    const result = await cfs.acquireLock(assetDir, { timeoutMs: 60_000 });
+    const result = await cfs.acquireLock(assetDir, { durationMs: 60_000 });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
 
@@ -36,34 +36,34 @@ describe("lock operations", () => {
   });
 
   it("rejects acquiring held lock", async () => {
-    await cfs.acquireLock(assetDir, { timeoutMs: 60_000 });
-    const result = await cfs.acquireLock(assetDir, { timeoutMs: 60_000 });
+    await cfs.acquireLock(assetDir, { durationMs: 60_000 });
+    const result = await cfs.acquireLock(assetDir, { durationMs: 60_000 });
     expect(result.ok).toBe(false);
     if (result.ok) return;
-    expect(result.error.code).toBe("LOCK_HELD");
+    expect(result.error.code).toBe("LOCKED");
   });
 
   it("releases a lock", async () => {
-    await cfs.acquireLock(assetDir, { timeoutMs: 60_000 });
+    await cfs.acquireLock(assetDir, { durationMs: 60_000 });
     const result = await cfs.releaseLock(assetDir);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value).toBe(true);
 
     // Can acquire again
-    const reacquire = await cfs.acquireLock(assetDir, { timeoutMs: 60_000 });
+    const reacquire = await cfs.acquireLock(assetDir, { durationMs: 60_000 });
     expect(reacquire.ok).toBe(true);
   });
 
   it("checks if locked", async () => {
     expect(await cfs.isLocked(assetDir)).toBe(false);
-    await cfs.acquireLock(assetDir, { timeoutMs: 60_000 });
+    await cfs.acquireLock(assetDir, { durationMs: 60_000 });
     expect(await cfs.isLocked(assetDir)).toBe(true);
   });
 
   it("reads lock data", async () => {
     await cfs.acquireLock(assetDir, {
-      timeoutMs: 60_000,
+      durationMs: 60_000,
       data: { url: "https://example.com" },
     });
     const data = await cfs.getLockData(assetDir);
@@ -74,7 +74,7 @@ describe("lock operations", () => {
 
   it("stores custom data in lock", async () => {
     await cfs.acquireLock(assetDir, {
-      timeoutMs: 60_000,
+      durationMs: 60_000,
       data: { task_id: "abc123", model: "veo3" },
     });
     const data = await cfs.getLockData(assetDir);
@@ -84,9 +84,9 @@ describe("lock operations", () => {
 
   it("concurrency: only one process wins the lock", async () => {
     const results = await Promise.all([
-      cfs.acquireLock(assetDir, { timeoutMs: 60_000 }),
-      cfs.acquireLock(assetDir, { timeoutMs: 60_000 }),
-      cfs.acquireLock(assetDir, { timeoutMs: 60_000 }),
+      cfs.acquireLock(assetDir, { durationMs: 60_000 }),
+      cfs.acquireLock(assetDir, { durationMs: 60_000 }),
+      cfs.acquireLock(assetDir, { durationMs: 60_000 }),
     ]);
 
     const wins = results.filter((r) => r.ok);
@@ -110,7 +110,7 @@ describe("lock operations", () => {
   });
 
   it("does not clean lock from live PID", async () => {
-    await cfs.acquireLock(assetDir, { timeoutMs: 60_000 });
+    await cfs.acquireLock(assetDir, { durationMs: 60_000 });
     const cleaned = await cfs.cleanStaleLock(assetDir);
     expect(cleaned).toBe(false);
     expect(await cfs.isLocked(assetDir)).toBe(true);

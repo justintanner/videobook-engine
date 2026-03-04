@@ -75,7 +75,7 @@ describe("concurrency stress tests", () => {
 
     const results = await Promise.all(
       Array.from({ length: 20 }, () =>
-        sandbox.fs.acquireLock(assetDir, { timeoutMs: 60_000 }),
+        sandbox.fs.acquireLock(assetDir, { durationMs: 60_000 }),
       ),
     );
 
@@ -85,7 +85,7 @@ describe("concurrency stress tests", () => {
     expect(losses.length).toBe(19);
     for (const loss of losses) {
       if (!loss.ok) {
-        expect(loss.error.code).toBe("LOCK_HELD");
+        expect(loss.error.code).toBe("LOCKED");
       }
     }
   }, 30_000);
