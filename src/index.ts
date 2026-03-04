@@ -134,7 +134,7 @@ export function createFs(config: FsConfig): ClipfirstFs {
     writeMetadata: async (assetId, metadata, projectSlug) => {
       const r = await resolveOrErr(projectSlug);
       if (!r.ok) return r;
-      return writeMetadata(r.value, assetId, metadata);
+      return writeMetadata(r.value, assetId, metadata, gitPath);
     },
     readMetadata: async (assetId, projectSlug) => {
       const r = await resolveOrErr(projectSlug);

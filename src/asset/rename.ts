@@ -1,3 +1,4 @@
+import * as fs from 'node:fs/promises';
 import * as path from 'node:path';
 
 import type { FsError } from '../types.js';
@@ -11,11 +12,11 @@ import {
   LOCK_GENERATING,
   LOCK_RENDERING_LANDSCAPE,
   LOCK_RENDERING_PORTRAIT,
+  LOCK_RENDERING_SQUARE,
   LOCK_DOWNLOADING,
 } from '../constants.js';
 import { slugifyName, uniqueSlug } from './slug.js';
-
-const VALID_PREFIXES = ['img-', 'vid-', 'aud-', 'script-'];
+import { isSafePath, invalidInput, VALID_PREFIXES } from '../validation.js';
 
 export async function renameAsset(
   projectDir: string,
@@ -25,6 +26,8 @@ export async function renameAsset(
 ): Promise<Result<{ old_asset_id: string; new_asset_id: string }, FsError>> {
   // Strip @ prefix if present
   const cleanId = assetId.replace(/^@/, '');
+
+  if (!isSafePath(cleanId)) return invalidInput(`Invalid asset ID: ${cleanId}`);
 
   if (cleanId === 'plan' || cleanId === 'final') {
     return err({ code: 'INVALID_INPUT', message: `Cannot rename singleton asset: ${cleanId}` });
@@ -42,6 +45,7 @@ export async function renameAsset(
     [LOCK_GENERATING, 'generation in progress'],
     [LOCK_RENDERING_LANDSCAPE, 'landscape rendering in progress'],
     [LOCK_RENDERING_PORTRAIT, 'portrait rendering in progress'],
+    [LOCK_RENDERING_SQUARE, 'square rendering in progress'],
     [LOCK_DOWNLOADING, 'download in progress'],
   ];
 
@@ -55,6 +59,9 @@ export async function renameAsset(
   const prefix = cleanId.split('-')[0]!;
   const baseSlug = slugifyName(newName, prefix);
   const newSlug = await uniqueSlug(projectDir, baseSlug);
+
+  // uniqueSlug atomically creates the target directory — remove it before git mv
+  await fs.rmdir(path.join(projectDir, newSlug));
 
   // Git mv
   if (!(await gitMv(projectDir, cleanId, newSlug, gitPath))) {

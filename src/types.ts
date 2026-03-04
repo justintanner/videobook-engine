@@ -17,7 +17,6 @@ export type AssetStatus =
   | 'render-error-portrait'
   | 'render-error-square'
   | 'ready'
-  | 'untranscribed'
   | 'unreviewed'
   | 'whitelisted'
   | 'corrupt';
@@ -38,6 +37,7 @@ export interface AssetManifestFrames {
   original_frames?: string[];
   landscape_frames?: string[];
   portrait_frames?: string[];
+  square_frames?: string[];
 }
 
 export interface AssetManifest {

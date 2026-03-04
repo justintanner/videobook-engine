@@ -5,7 +5,6 @@ import type { ProjectMetadata, FsError } from '../types.js';
 import type { Result } from '../result.js';
 import { ok, err } from '../result.js';
 import { PROJECT_METADATA } from '../constants.js';
-import { initProjectRepo } from '../git/init.js';
 import { getDefaultProject } from './switch.js';
 
 export async function getProject(
@@ -28,19 +27,14 @@ export async function getProject(
     return err({ code: 'NOT_FOUND', message: `Project not found: ${normalizedSlug}` });
   }
 
-  // Ensure .project metadata exists
   const metadataFile = path.join(projectDir, PROJECT_METADATA);
   let metadata: ProjectMetadata;
   try {
     const content = await fs.readFile(metadataFile, 'utf-8');
     metadata = JSON.parse(content) as ProjectMetadata;
   } catch {
-    metadata = { slug: normalizedSlug, created: Date.now() / 1000 };
-    await fs.writeFile(metadataFile, JSON.stringify(metadata, null, 2));
+    return err({ code: 'NOT_FOUND', message: `Project metadata not found: ${normalizedSlug}` });
   }
-
-  // Ensure git repo is initialized
-  await initProjectRepo(projectDir, gitPath);
 
   return ok({ metadata, path: projectDir });
 }

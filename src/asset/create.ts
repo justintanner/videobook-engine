@@ -7,6 +7,7 @@ import { ok, err } from '../result.js';
 import { CREATED_AT_FILE } from '../constants.js';
 import { commitOperation } from '../git/commit.js';
 import { slugifyName, uniqueSlug } from './slug.js';
+import { isValidAssetPrefix, invalidInput } from '../validation.js';
 
 export async function createAsset(
   projectDir: string,
@@ -14,16 +15,16 @@ export async function createAsset(
   name: string,
   gitPath?: string,
 ): Promise<Result<{ assetId: string; path: string }, FsError>> {
+  if (!isValidAssetPrefix(prefix)) return invalidInput(`Invalid asset prefix: ${prefix}`);
   const baseSlug = slugifyName(name, prefix);
-  const assetId = await uniqueSlug(projectDir, baseSlug);
-  const assetDir = path.join(projectDir, assetId);
-
+  let assetId: string;
   try {
-    await fs.mkdir(assetDir, { recursive: true });
+    assetId = await uniqueSlug(projectDir, baseSlug);
   } catch (error: unknown) {
-    const e = error as NodeJS.ErrnoException;
+    const e = error as Error;
     return err({ code: 'IO_ERROR', message: e.message });
   }
+  const assetDir = path.join(projectDir, assetId);
 
   // Write .created_at
   await fs.writeFile(

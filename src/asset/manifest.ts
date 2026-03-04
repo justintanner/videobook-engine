@@ -8,12 +8,16 @@ import {
   ORIGINAL_FRAMES_DIR,
   LANDSCAPE_FRAMES_DIR,
   PORTRAIT_FRAMES_DIR,
+  SQUARE_FRAMES_DIR,
 } from '../constants.js';
+import { isSafePath, isValidAssetId, invalidInput } from '../validation.js';
 
 export async function getManifest(
   projectDir: string,
   assetId: string,
 ): Promise<Result<AssetManifest, FsError>> {
+  if (!isSafePath(assetId)) return invalidInput(`Invalid asset ID: ${assetId}`);
+  if (!isValidAssetId(assetId)) return invalidInput(`Invalid asset ID format: ${assetId}`);
   const assetDir = path.join(projectDir, assetId);
 
   try {
@@ -38,7 +42,7 @@ export async function getManifest(
 
   // Collect frame directories
   const frames: Record<string, string[]> = {};
-  for (const frameDirName of [ORIGINAL_FRAMES_DIR, LANDSCAPE_FRAMES_DIR, PORTRAIT_FRAMES_DIR]) {
+  for (const frameDirName of [ORIGINAL_FRAMES_DIR, LANDSCAPE_FRAMES_DIR, PORTRAIT_FRAMES_DIR, SQUARE_FRAMES_DIR]) {
     const frameDir = path.join(assetDir, frameDirName);
     try {
       const frameStat = await fs.stat(frameDir);

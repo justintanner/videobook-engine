@@ -12,7 +12,7 @@ export async function getHistory(
   }
 
   const result = await gitExecSafe(
-    ['log', `--max-count=${limit}`, '--format=%H|%s|%ai|%an'],
+    ['log', `--max-count=${limit}`, '--format=%H\x1f%s\x1f%ai\x1f%an'],
     { cwd: projectDir, gitPath },
   );
 
@@ -34,7 +34,7 @@ export async function getAssetHistory(
   }
 
   const result = await gitExecSafe(
-    ['log', `--max-count=${limit}`, '--format=%H|%s|%ai', '--', assetId],
+    ['log', `--max-count=${limit}`, '--format=%H\x1f%s\x1f%ai', '--', assetId],
     { cwd: projectDir, gitPath },
   );
 
@@ -49,7 +49,7 @@ function parseHistoryLines(stdout: string, includeAuthor: boolean): GitCommit[] 
   const history: GitCommit[] = [];
   for (const line of stdout.trim().split('\n')) {
     if (!line) continue;
-    const parts = line.split('|');
+    const parts = line.split('\x1f');
     const minParts = includeAuthor ? 4 : 3;
     if (parts.length < minParts) continue;
 

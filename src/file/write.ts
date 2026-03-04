@@ -5,6 +5,7 @@ import type { FsError } from '../types.js';
 import type { Result } from '../result.js';
 import { ok, err } from '../result.js';
 import { commitOperation } from '../git/commit.js';
+import { isSafeFilename, isSafePath, isWithinDir, invalidInput } from '../validation.js';
 
 export async function writeFile(
   projectDir: string,
@@ -13,6 +14,9 @@ export async function writeFile(
   data: Buffer | string,
   gitPath?: string,
 ): Promise<Result<string, FsError>> {
+  if (!isSafePath(assetId)) return invalidInput(`Invalid asset ID: ${assetId}`);
+  if (!isSafeFilename(filename)) return invalidInput(`Invalid filename: ${filename}`);
+
   const assetDir = path.join(projectDir, assetId);
 
   try {
@@ -22,6 +26,7 @@ export async function writeFile(
   }
 
   const filePath = path.join(assetDir, filename);
+  if (!isWithinDir(projectDir, filePath)) return invalidInput('Path escapes project directory');
   await fs.writeFile(filePath, data);
 
   await commitOperation(projectDir, 'write', assetId, { file: filename }, gitPath);

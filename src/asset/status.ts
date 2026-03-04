@@ -82,7 +82,6 @@ export async function deriveAssetStatus(
   if (assetType === 'image') {
     if (await fileExists(path.join(assetDir, LOCK_DOWNLOADING))) return 'downloading';
     if (await fileExists(path.join(assetDir, LOCK_GENERATING))) return 'generating';
-    if (await fileExists(path.join(assetDir, ERROR_TRANSCRIBE))) return 'error';
     if (await fileExists(path.join(assetDir, ERROR_GENERATING))) return 'error';
     if (hasOriginal) return 'ready';
     return 'corrupt';
@@ -90,7 +89,6 @@ export async function deriveAssetStatus(
 
   if (assetType === 'audio') {
     if (await fileExists(path.join(assetDir, LOCK_GENERATING))) return 'generating';
-    if (await fileExists(path.join(assetDir, ERROR_TRANSCRIBE))) return 'error';
     if (await fileExists(path.join(assetDir, ERROR_GENERATING))) return 'error';
     if (hasOriginal) return 'ready';
     return 'corrupt';
@@ -169,7 +167,7 @@ export function getAssetType(name: string): AssetType {
   if (name.startsWith('script-')) return 'script';
   if (name === 'final') return 'final';
   if (name === 'plan') return 'plan';
-  return 'video'; // fallback
+  throw new Error(`Unknown asset prefix: ${name}`);
 }
 
 export function getEnabledOrientations(orientations: string[]): string[] {

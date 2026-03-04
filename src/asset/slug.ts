@@ -29,16 +29,25 @@ export async function uniqueSlug(
   outputDir: string,
   baseSlug: string,
 ): Promise<string> {
+  const MAX_ATTEMPTS = 1000;
   let candidate = baseSlug;
   let counter = 2;
 
-  while (true) {
+  for (let i = 0; i < MAX_ATTEMPTS; i++) {
     try {
-      await fs.access(path.join(outputDir, candidate));
-      candidate = `${baseSlug}-${counter}`;
-      counter++;
-    } catch {
+      // Atomic mkdir (no recursive) — acts as both uniqueness check and reservation
+      await fs.mkdir(path.join(outputDir, candidate));
       return candidate;
+    } catch (error: unknown) {
+      const e = error as NodeJS.ErrnoException;
+      if (e.code === 'EEXIST') {
+        candidate = `${baseSlug}-${counter}`;
+        counter++;
+        continue;
+      }
+      throw error;
     }
   }
+
+  throw new Error(`Could not find unique slug after ${MAX_ATTEMPTS} attempts for: ${baseSlug}`);
 }

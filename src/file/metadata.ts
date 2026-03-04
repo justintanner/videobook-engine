@@ -4,17 +4,21 @@ import * as path from 'node:path';
 import type { OriginalMetadata, ToolParams, FsError } from '../types.js';
 import type { Result } from '../result.js';
 import { ok, err } from '../result.js';
+import { commitOperation } from '../git/commit.js';
 import {
   ORIGINAL_METADATA_FILE,
   TOOL_PARAMS_FILE,
   CREATED_AT_FILE,
 } from '../constants.js';
+import { isSafePath, invalidInput } from '../validation.js';
 
 export async function writeMetadata(
   projectDir: string,
   assetId: string,
   metadata: OriginalMetadata,
+  gitPath?: string,
 ): Promise<Result<OriginalMetadata, FsError>> {
+  if (!isSafePath(assetId)) return invalidInput(`Invalid asset ID: ${assetId}`);
   const assetDir = path.join(projectDir, assetId);
   try {
     await fs.access(assetDir);
@@ -33,6 +37,8 @@ export async function writeMetadata(
     await fs.writeFile(createdAtPath, String(Date.now() / 1000));
   }
 
+  await commitOperation(projectDir, 'metadata', assetId, undefined, gitPath);
+
   return ok(metadata);
 }
 
@@ -40,6 +46,7 @@ export async function readMetadata(
   projectDir: string,
   assetId: string,
 ): Promise<Result<OriginalMetadata, FsError>> {
+  if (!isSafePath(assetId)) return invalidInput(`Invalid asset ID: ${assetId}`);
   const metadataPath = path.join(projectDir, assetId, ORIGINAL_METADATA_FILE);
   try {
     const content = await fs.readFile(metadataPath, 'utf-8');
@@ -47,7 +54,7 @@ export async function readMetadata(
   } catch (error: unknown) {
     const e = error as NodeJS.ErrnoException;
     if (e.code === 'ENOENT') {
-      return ok({}); // No metadata file — return empty
+      return err({ code: 'NOT_FOUND', message: `Metadata not found for asset: ${assetId}` });
     }
     return err({ code: 'IO_ERROR', message: e.message });
   }

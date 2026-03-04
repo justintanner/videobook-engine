@@ -6,13 +6,18 @@ import type { Result } from '../result.js';
 import { ok, err } from '../result.js';
 import { PROJECT_METADATA, DEFAULT_PROJECT_FILE } from '../constants.js';
 import { initProjectRepo } from '../git/init.js';
-import { generateProjectSlug } from './slug.js';
+import { generateProjectSlug, isProjectSlug } from './slug.js';
 
 export async function createProject(
   outputDir: string,
   slug?: string,
   gitPath?: string,
 ): Promise<Result<{ slug: string; path: string; is_default: boolean }, FsError>> {
+  if (slug !== undefined) {
+    if (!isProjectSlug(slug)) {
+      return err({ code: 'INVALID_INPUT', message: `Invalid project slug: ${slug}` });
+    }
+  }
   const projectSlug = slug ?? await generateProjectSlug(outputDir);
   const projectDir = path.join(outputDir, projectSlug);
 

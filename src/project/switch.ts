@@ -5,6 +5,7 @@ import type { FsError } from '../types.js';
 import type { Result } from '../result.js';
 import { ok, err } from '../result.js';
 import { DEFAULT_PROJECT_FILE } from '../constants.js';
+import { isProjectSlug } from './slug.js';
 
 export async function getDefaultProject(outputDir: string): Promise<string | null> {
   try {
@@ -19,6 +20,9 @@ export async function switchProject(
   outputDir: string,
   slug: string,
 ): Promise<Result<string, FsError>> {
+  if (!isProjectSlug(slug)) {
+    return err({ code: 'INVALID_INPUT', message: `Invalid project slug: ${slug}` });
+  }
   const projectDir = path.join(outputDir, slug);
   try {
     await fs.access(projectDir);

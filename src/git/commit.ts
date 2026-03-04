@@ -37,7 +37,12 @@ export async function commitOperation(
         await fs.access(scopedDir);
         addResult = await gitExecSafe(['add', '--', assetDirName!], { cwd: projectDir, gitPath });
       } catch {
-        addResult = await gitExecSafe(['add', '-A'], { cwd: projectDir, gitPath });
+        // For delete operations, the directory is gone — use -A to stage removal
+        if (operation === 'delete') {
+          addResult = await gitExecSafe(['add', '-A'], { cwd: projectDir, gitPath });
+        } else {
+          addResult = await gitExecSafe(['add', '--', assetDirName!], { cwd: projectDir, gitPath });
+        }
       }
     } else {
       addResult = await gitExecSafe(['add', '-A'], { cwd: projectDir, gitPath });
