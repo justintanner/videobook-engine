@@ -1,0 +1,39 @@
+# Curly Agent Memory
+
+## Modes
+- **Plan review**: Invoked with plan file path. Append `## Curly's FP Review` to plan. Do NOT edit source.
+- **Code review**: Invoked without plan file path. Use git diff, fix src/ files directly.
+
+## Agent Scope
+- Review `src/` files only, only files changed in the most recent commit
+- Also review untracked `src/` files when user explicitly requests review of new implementation
+- Fix simple violations directly, rewrite egregious cases
+- Do not commit, run tests, or run linters
+
+## Codebase Architecture
+
+### Core Pattern: Result<T, FsError>
+- All public methods return `Result<T, FsError>` — discriminated union, no thrown exceptions for control flow
+- Defined in `src/result.ts`
+- Error codes in `src/types.ts`: `NOT_FOUND`, `ALREADY_EXISTS`, `LOCK_HELD`, `GIT_ERROR`, `INVALID_INPUT`, `IO_ERROR`, `LOCKED`
+
+### Module Layout
+- `src/project/` — project lifecycle (create, list, get, switch)
+- `src/asset/` — asset lifecycle (create, delete, rename, list, manifest)
+- `src/asset/status.ts` — 16-state status machine (orientation-aware)
+- `src/file/` — file I/O (read, write, metadata), writes trigger git commits
+- `src/git/` — git operations via `child_process.execFile`, exponential backoff retry
+- `src/lock/` — distributed locking via `O_CREAT | O_EXCL` atomic file creation
+
+### Key Patterns
+- Zod for schema validation
+- Every mutation produces an atomic git commit
+- Slug generation: projects `{adjective}-{noun}-{number}`, assets `{prefix}-{slugified-name}[-{suffix}]`
+- Constants centralized in `src/constants.ts`
+- ESM package, Node.js >= 20
+
+## Common Patterns to Watch
+- `let` where `const` suffices — always flag
+- Functions mixing computation with `execFile` calls — extract pure computation
+- `any` type annotations — always flag, add specific types
+- In-place array mutation where `.map()` would be clearer
