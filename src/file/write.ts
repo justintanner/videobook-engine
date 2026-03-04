@@ -5,6 +5,7 @@ import type { FsError } from '../types.js';
 import type { Result } from '../result.js';
 import { ok, err } from '../result.js';
 import { commitOperation } from '../git/commit.js';
+import { withGitLock } from '../git/mutex.js';
 import { isSafeFilename, isSafePath, isWithinDir, invalidInput } from '../validation.js';
 
 export async function writeFile(
@@ -27,9 +28,12 @@ export async function writeFile(
 
   const filePath = path.join(assetDir, filename);
   if (!isWithinDir(projectDir, filePath)) return invalidInput('Path escapes project directory');
-  await fs.writeFile(filePath, data);
 
-  await commitOperation(projectDir, 'write', assetId, { file: filename }, gitPath);
+  // Write + commit together under mutex so each write gets its own scoped commit
+  await withGitLock(projectDir, async () => {
+    await fs.writeFile(filePath, data);
+    await commitOperation(projectDir, 'write', assetId, { file: filename }, gitPath);
+  });
 
   return ok(filePath);
 }

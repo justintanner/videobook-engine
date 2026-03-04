@@ -3,6 +3,7 @@ import type { Result } from '../result.js';
 import { ok, err } from '../result.js';
 import { gitExecSafe } from './exec.js';
 import { isGitRepo } from './init.js';
+import { withGitLock } from './mutex.js';
 
 export async function rewindToCommit(
   projectDir: string,
@@ -13,9 +14,11 @@ export async function rewindToCommit(
     return err({ code: 'GIT_ERROR', message: `Not a git repository: ${projectDir}` });
   }
 
-  const result = await gitExecSafe(['checkout', commitHash], { cwd: projectDir, gitPath });
-  if (result.exitCode !== 0) {
-    return err({ code: 'GIT_ERROR', message: result.stderr || `Failed to rewind to ${commitHash}` });
-  }
-  return ok(undefined);
+  return withGitLock(projectDir, async () => {
+    const result = await gitExecSafe(['checkout', commitHash], { cwd: projectDir, gitPath });
+    if (result.exitCode !== 0) {
+      return err({ code: 'GIT_ERROR', message: result.stderr || `Failed to rewind to ${commitHash}` });
+    }
+    return ok(undefined);
+  });
 }

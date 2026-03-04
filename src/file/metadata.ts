@@ -5,6 +5,7 @@ import type { OriginalMetadata, ToolParams, FsError } from '../types.js';
 import type { Result } from '../result.js';
 import { ok, err } from '../result.js';
 import { commitOperation } from '../git/commit.js';
+import { withGitLock } from '../git/mutex.js';
 import {
   ORIGINAL_METADATA_FILE,
   TOOL_PARAMS_FILE,
@@ -26,18 +27,21 @@ export async function writeMetadata(
     return err({ code: 'NOT_FOUND', message: `Asset not found: ${assetId}` });
   }
 
-  const metadataPath = path.join(assetDir, ORIGINAL_METADATA_FILE);
-  await fs.writeFile(metadataPath, JSON.stringify(metadata, null, 2));
+  // Write + commit together under mutex so each metadata write gets its own scoped commit
+  await withGitLock(projectDir, async () => {
+    const metadataPath = path.join(assetDir, ORIGINAL_METADATA_FILE);
+    await fs.writeFile(metadataPath, JSON.stringify(metadata, null, 2));
 
-  // Also write .created_at if not exists
-  const createdAtPath = path.join(assetDir, CREATED_AT_FILE);
-  try {
-    await fs.access(createdAtPath);
-  } catch {
-    await fs.writeFile(createdAtPath, String(Date.now() / 1000));
-  }
+    // Atomically write .created_at if not exists — O_EXCL prevents TOCTOU
+    const createdAtPath = path.join(assetDir, CREATED_AT_FILE);
+    try {
+      await fs.writeFile(createdAtPath, String(Date.now() / 1000), { flag: 'wx' });
+    } catch {
+      // Already exists — fine
+    }
 
-  await commitOperation(projectDir, 'metadata', assetId, undefined, gitPath);
+    await commitOperation(projectDir, 'metadata', assetId, undefined, gitPath);
+  });
 
   return ok(metadata);
 }

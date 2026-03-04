@@ -31,13 +31,17 @@ export async function getManifest(
 
   for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
     if (!entry.isFile()) continue;
-    const stat = await fs.stat(path.join(assetDir, entry.name));
-    const ext = path.extname(entry.name);
-    files.push({
-      name: entry.name,
-      size_bytes: stat.size,
-      extension: ext ? ext.slice(1) : null,
-    });
+    try {
+      const stat = await fs.stat(path.join(assetDir, entry.name));
+      const ext = path.extname(entry.name);
+      files.push({
+        name: entry.name,
+        size_bytes: stat.size,
+        extension: ext ? ext.slice(1) : null,
+      });
+    } catch {
+      // File vanished between readdir and stat — skip it
+    }
   }
 
   // Collect frame directories

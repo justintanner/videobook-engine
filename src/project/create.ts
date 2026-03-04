@@ -18,10 +18,50 @@ export async function createProject(
       return err({ code: 'INVALID_INPUT', message: `Invalid project slug: ${slug}` });
     }
   }
-  const projectSlug = slug ?? await generateProjectSlug(outputDir);
-  const projectDir = path.join(outputDir, projectSlug);
 
-  await fs.mkdir(projectDir, { recursive: true });
+  // Ensure outputDir exists
+  await fs.mkdir(outputDir, { recursive: true });
+
+  // Atomic project directory creation
+  let projectSlug: string;
+  let projectDir: string;
+
+  if (slug !== undefined) {
+    // User-provided slug: non-recursive mkdir, EEXIST → ALREADY_EXISTS
+    projectSlug = slug;
+    projectDir = path.join(outputDir, projectSlug);
+    try {
+      await fs.mkdir(projectDir);
+    } catch (error: unknown) {
+      const e = error as NodeJS.ErrnoException;
+      if (e.code === 'EEXIST') {
+        return err({ code: 'ALREADY_EXISTS', message: `Project already exists: ${projectSlug}` });
+      }
+      throw error;
+    }
+  } else {
+    // Auto-generated slug: retry with new slug on EEXIST
+    const MAX_ATTEMPTS = 100;
+    let created = false;
+    projectSlug = '';
+    projectDir = '';
+    for (let i = 0; i < MAX_ATTEMPTS; i++) {
+      projectSlug = await generateProjectSlug(outputDir);
+      projectDir = path.join(outputDir, projectSlug);
+      try {
+        await fs.mkdir(projectDir);
+        created = true;
+        break;
+      } catch (error: unknown) {
+        const e = error as NodeJS.ErrnoException;
+        if (e.code === 'EEXIST') continue;
+        throw error;
+      }
+    }
+    if (!created) {
+      return err({ code: 'IO_ERROR', message: 'Could not generate unique project slug' });
+    }
+  }
 
   // Write .project metadata
   const metadata: ProjectMetadata = {
@@ -36,15 +76,14 @@ export async function createProject(
   // Initialize git repo
   await initProjectRepo(projectDir, gitPath);
 
-  // Check if this becomes the default
+  // Atomically set as default if no default exists — O_EXCL prevents TOCTOU
   const defaultFile = path.join(outputDir, DEFAULT_PROJECT_FILE);
   let isDefault = false;
   try {
-    await fs.access(defaultFile);
-  } catch {
-    await fs.mkdir(outputDir, { recursive: true });
-    await fs.writeFile(defaultFile, projectSlug);
+    await fs.writeFile(defaultFile, projectSlug, { flag: 'wx' });
     isDefault = true;
+  } catch {
+    // Default already exists — fine
   }
 
   return ok({ slug: projectSlug, path: projectDir, is_default: isDefault });

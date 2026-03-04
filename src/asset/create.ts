@@ -6,6 +6,7 @@ import type { Result } from '../result.js';
 import { ok, err } from '../result.js';
 import { CREATED_AT_FILE } from '../constants.js';
 import { commitOperation } from '../git/commit.js';
+import { withGitLock } from '../git/mutex.js';
 import { getHistoricalSlugs } from '../git/slugs.js';
 import { slugifyName, uniqueSlug } from './slug.js';
 import { isValidAssetPrefix, invalidInput } from '../validation.js';
@@ -28,14 +29,14 @@ export async function createAsset(
   }
   const assetDir = path.join(projectDir, assetId);
 
-  // Write .created_at
-  await fs.writeFile(
-    path.join(assetDir, CREATED_AT_FILE),
-    String(Date.now() / 1000),
-  );
-
-  // Git commit
-  await commitOperation(projectDir, 'create', assetId, undefined, gitPath);
+  // Write .created_at + commit under mutex
+  await withGitLock(projectDir, async () => {
+    await fs.writeFile(
+      path.join(assetDir, CREATED_AT_FILE),
+      String(Date.now() / 1000),
+    );
+    await commitOperation(projectDir, 'create', assetId, undefined, gitPath);
+  });
 
   return ok({ assetId, path: assetDir });
 }

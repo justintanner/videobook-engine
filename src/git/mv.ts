@@ -19,19 +19,13 @@ export async function gitMv(
     }
   }
 
-  // Fallback: filesystem rename
+  // Fallback: filesystem rename — fs.rename fails atomically if dst exists or src missing
   const src = path.join(projectDir, oldPath);
   const dst = path.join(projectDir, newPath);
 
   try {
-    await fs.access(src);
-    try {
-      await fs.access(dst);
-      return false; // dst exists
-    } catch {
-      await fs.rename(src, dst);
-      return true;
-    }
+    await fs.rename(src, dst);
+    return true;
   } catch {
     return false;
   }

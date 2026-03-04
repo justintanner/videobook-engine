@@ -112,70 +112,77 @@ export async function listAssets(projectDir: string): Promise<AssetEntry[]> {
     }
 
     const assetDir = path.join(projectDir, name);
-    const assetType = getAssetType(name);
-    const originalFile = await findOriginalFile(assetDir, assetType);
-    const hasOriginal = originalFile !== null;
 
-    const status = await deriveAssetStatus(
-      assetDir,
-      assetType,
-      hasOriginal,
-      enabledOrientations,
-    );
+    try {
+      const assetType = getAssetType(name);
+      const originalFile = await findOriginalFile(assetDir, assetType);
+      const hasOriginal = originalFile !== null;
 
-    // Timestamp
-    const createdTs = await readCreatedAt(assetDir);
-    let createdAt: string;
-    if (createdTs !== null) {
-      createdAt = new Date(createdTs * 1000).toISOString();
-    } else {
-      const stat = await fs.stat(assetDir);
-      createdAt = new Date(stat.birthtimeMs).toISOString();
-    }
+      const status = await deriveAssetStatus(
+        assetDir,
+        assetType,
+        hasOriginal,
+        enabledOrientations,
+      );
 
-    const asset: AssetEntry = {
-      id: name,
-      type: assetType,
-      status,
-      created_at: createdAt,
-      file_path: originalFile,
-    };
-
-    // Type-specific fields
-    if (assetType === 'video' || assetType === 'image') {
-      const metadata = await readOriginalMetadata(assetDir);
-      if (metadata.width) asset.width = metadata.width;
-      if (metadata.height) asset.height = metadata.height;
-      if (metadata.origin) asset.origin = metadata.origin;
-      if (assetType === 'video') {
-        if (metadata.duration) asset.duration = metadata.duration;
-        if (metadata.source_url) asset.source_url = metadata.source_url as string;
-        const hasSubtitles = await fileExists(path.join(assetDir, 'elevenlabs.json')) ||
-          await fileExists(path.join(assetDir, 'original.el.srt'));
-        asset.has_subtitles = hasSubtitles;
-      }
-    } else if (assetType === 'audio') {
-      const metadata = await readOriginalMetadata(assetDir);
-      if (metadata.duration) asset.duration = metadata.duration;
-      if (metadata.origin) asset.origin = metadata.origin;
-    } else if (assetType === 'script') {
-      const dialogPath = path.join(assetDir, DIALOG_MP3);
-      if (await fileExists(dialogPath)) {
-        asset.dialog_audio = dialogPath;
-        const buf = await fs.readFile(dialogPath);
-        asset.dialog_audio_hash = `sha256:${crypto.createHash('sha256').update(buf).digest('hex')}`;
+      // Timestamp
+      const createdTs = await readCreatedAt(assetDir);
+      let createdAt: string;
+      if (createdTs !== null) {
+        createdAt = new Date(createdTs * 1000).toISOString();
       } else {
-        asset.dialog_audio = null;
-        asset.dialog_audio_hash = null;
+        const stat = await fs.stat(assetDir);
+        createdAt = new Date(stat.birthtimeMs).toISOString();
       }
 
-      const indexFile = path.join(assetDir, INDEX_MD);
-      if (await fileExists(indexFile)) {
-        asset.prompt = await fs.readFile(indexFile, 'utf-8');
+      const asset: AssetEntry = {
+        id: name,
+        type: assetType,
+        status,
+        created_at: createdAt,
+        file_path: originalFile,
+      };
+
+      // Type-specific fields
+      if (assetType === 'video' || assetType === 'image') {
+        const metadata = await readOriginalMetadata(assetDir);
+        if (metadata.width) asset.width = metadata.width;
+        if (metadata.height) asset.height = metadata.height;
+        if (metadata.origin) asset.origin = metadata.origin;
+        if (assetType === 'video') {
+          if (metadata.duration) asset.duration = metadata.duration;
+          if (metadata.source_url) asset.source_url = metadata.source_url as string;
+          const hasSubtitles = await fileExists(path.join(assetDir, 'elevenlabs.json')) ||
+            await fileExists(path.join(assetDir, 'original.el.srt'));
+          asset.has_subtitles = hasSubtitles;
+        }
+      } else if (assetType === 'audio') {
+        const metadata = await readOriginalMetadata(assetDir);
+        if (metadata.duration) asset.duration = metadata.duration;
+        if (metadata.origin) asset.origin = metadata.origin;
+      } else if (assetType === 'script') {
+        const dialogPath = path.join(assetDir, DIALOG_MP3);
+        if (await fileExists(dialogPath)) {
+          asset.dialog_audio = dialogPath;
+          const buf = await fs.readFile(dialogPath);
+          asset.dialog_audio_hash = `sha256:${crypto.createHash('sha256').update(buf).digest('hex')}`;
+        } else {
+          asset.dialog_audio = null;
+          asset.dialog_audio_hash = null;
+        }
+
+        const indexFile = path.join(assetDir, INDEX_MD);
+        if (await fileExists(indexFile)) {
+          asset.prompt = await fs.readFile(indexFile, 'utf-8');
+        }
       }
+
+      assets.push(asset);
+    } catch (error: unknown) {
+      const e = error as NodeJS.ErrnoException;
+      if (e.code === 'ENOENT') continue; // Asset vanished — skip it
+      throw error;
     }
-
-    assets.push(asset);
   }
 
   // Check for .plan.md at project root

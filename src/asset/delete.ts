@@ -5,16 +5,9 @@ import type { FsError } from '../types.js';
 import type { Result } from '../result.js';
 import { ok, err } from '../result.js';
 import { commitOperation } from '../git/commit.js';
+import { withGitLock } from '../git/mutex.js';
 import { isSafePath, isWithinDir, invalidInput, VALID_PREFIXES } from '../validation.js';
-import { isLocked } from '../lock/query.js';
-import {
-  LOCK_TRANSCRIBING,
-  LOCK_GENERATING,
-  LOCK_RENDERING_LANDSCAPE,
-  LOCK_RENDERING_PORTRAIT,
-  LOCK_RENDERING_SQUARE,
-  LOCK_DOWNLOADING,
-} from '../constants.js';
+import { acquireAllLocks } from '../lock/acquire-all.js';
 
 export async function deleteAsset(
   projectDir: string,
@@ -42,26 +35,23 @@ export async function deleteAsset(
     return err({ code: 'NOT_FOUND', message: `Asset not found: ${assetId}` });
   }
 
-  // Check locks
-  const lockChecks: Array<[string, string]> = [
-    [LOCK_TRANSCRIBING, 'transcription in progress'],
-    [LOCK_GENERATING, 'generation in progress'],
-    [LOCK_RENDERING_LANDSCAPE, 'landscape rendering in progress'],
-    [LOCK_RENDERING_PORTRAIT, 'portrait rendering in progress'],
-    [LOCK_RENDERING_SQUARE, 'square rendering in progress'],
-    [LOCK_DOWNLOADING, 'download in progress'],
-  ];
-
-  for (const [lock, msg] of lockChecks) {
-    if (await isLocked(assetDir, lock)) {
-      return err({ code: 'LOCKED', message: `Cannot delete: ${msg}` });
-    }
+  // Atomically acquire all locks — prevents TOCTOU between check and delete
+  const lockResult = await acquireAllLocks(assetDir);
+  if (!lockResult.ok) {
+    return err(lockResult.error);
   }
 
-  await fs.rm(assetDir, { recursive: true, force: true });
+  // Delete + commit under mutex — lock files are deleted with the directory
+  const commitHash = await withGitLock(projectDir, async () => {
+    await fs.rm(assetDir, { recursive: true, force: true });
+    return commitOperation(projectDir, 'delete', assetId, undefined, gitPath);
+  });
+
   const deletedAt = new Date().toISOString();
 
-  await commitOperation(projectDir, 'delete', assetId, undefined, gitPath);
+  if (commitHash === null) {
+    return err({ code: 'GIT_ERROR', message: `Git commit failed for asset deletion: ${assetId}` });
+  }
 
   return ok({ deleted_at: deletedAt });
 }
