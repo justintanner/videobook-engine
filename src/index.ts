@@ -33,9 +33,6 @@ import { getHistory, getAssetHistory } from "./git/history.js";
 import { restoreAsset } from "./git/restore.js";
 import { rewindProject } from "./git/rewind.js";
 import { getHistoricalSlugs } from "./git/slugs.js";
-
-import { getPromptLog } from "./project/prompt-log.js";
-
 import { acquireLock } from "./lock/acquire.js";
 import { releaseLock } from "./lock/release.js";
 import { isLocked, getLockData } from "./lock/query.js";
@@ -111,11 +108,6 @@ export interface ClipfirstFs {
     commitHash: string,
     projectSlug?: string,
   ): Promise<string | null>;
-  getPromptLog(
-    projectSlug?: string,
-    limit?: number,
-  ): Promise<Record<string, unknown>[]>;
-
   // Lock
   acquireLock(
     assetDir: string,
@@ -206,12 +198,6 @@ export function createFs(config: FsConfig): ClipfirstFs {
       if (!dir) return null;
       return rewindProject(dir, commitHash, gitPath);
     },
-    getPromptLog: async (projectSlug, limit) => {
-      const dir = await resolve(projectSlug);
-      if (!dir) return [];
-      return getPromptLog(dir, limit);
-    },
-
     // Lock
     acquireLock,
     releaseLock,
