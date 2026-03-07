@@ -27,6 +27,11 @@ import { getManifest } from "./asset/manifest.js";
 
 import { writeFile } from "./file/write.js";
 import { readFile } from "./file/read.js";
+import { deleteFile } from "./file/delete.js";
+import { renameFile } from "./file/rename.js";
+import { copyFile } from "./file/copy.js";
+import { resolveAssetDir } from "./file/resolve.js";
+import { writeMetadata, readMetadata } from "./file/metadata.js";
 
 import { commitOperation } from "./git/commit.js";
 import { getHistory, getAssetHistory } from "./git/history.js";
@@ -85,6 +90,39 @@ export interface ClipfirstFs {
     filename: string,
     projectSlug?: string,
   ): Promise<Result<Buffer, FsError>>;
+  deleteFile(
+    assetId: string,
+    filename: string,
+    projectSlug?: string,
+  ): Promise<Result<string, FsError>>;
+  renameFile(
+    assetId: string,
+    oldFilename: string,
+    newFilename: string,
+    projectSlug?: string,
+  ): Promise<Result<{ oldPath: string; newPath: string }, FsError>>;
+  copyFile(
+    assetId: string,
+    filename: string,
+    destAssetId: string,
+    destFilename: string,
+    projectSlug?: string,
+  ): Promise<Result<string, FsError>>;
+  resolveAssetDir(
+    assetId: string,
+    projectSlug?: string,
+  ): Promise<Result<string, FsError>>;
+  writeMetadata(
+    assetId: string,
+    key: string,
+    data: unknown,
+    projectSlug?: string,
+  ): Promise<Result<string, FsError>>;
+  readMetadata<T>(
+    assetId: string,
+    key: string,
+    projectSlug?: string,
+  ): Promise<Result<T, FsError>>;
 
   // Git
   commitOperation(
@@ -171,6 +209,26 @@ export function createFs(config: FsConfig): ClipfirstFs {
       ),
     readFile: (assetId, filename, projectSlug) =>
       withProject(projectSlug, (dir) => readFile(dir, assetId, filename)),
+    deleteFile: (assetId, filename, projectSlug) =>
+      withProject(projectSlug, (dir) =>
+        deleteFile(dir, assetId, filename, gitPath),
+      ),
+    renameFile: (assetId, oldFilename, newFilename, projectSlug) =>
+      withProject(projectSlug, (dir) =>
+        renameFile(dir, assetId, oldFilename, newFilename, gitPath),
+      ),
+    copyFile: (assetId, filename, destAssetId, destFilename, projectSlug) =>
+      withProject(projectSlug, (dir) =>
+        copyFile(dir, assetId, filename, destAssetId, destFilename, gitPath),
+      ),
+    resolveAssetDir: (assetId, projectSlug) =>
+      withProject(projectSlug, (dir) => resolveAssetDir(dir, assetId)),
+    writeMetadata: (assetId, key, data, projectSlug) =>
+      withProject(projectSlug, (dir) =>
+        writeMetadata(dir, assetId, key, data, gitPath),
+      ),
+    readMetadata: <T>(assetId: string, key: string, projectSlug?: string) =>
+      withProject(projectSlug, (dir) => readMetadata<T>(dir, assetId, key)),
 
     // Git
     commitOperation: async (operation, assetId, details, projectSlug) => {
