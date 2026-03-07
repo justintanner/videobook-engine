@@ -26,6 +26,7 @@ export async function createAsset(
     return err({ code: "IO_ERROR", message: e.message });
   }
   const assetDir = path.join(projectDir, assetId);
+  await fs.mkdir(assetDir, { recursive: true });
 
   // Commit under mutex (allow-empty since dir has no tracked files yet)
   await withGitLock(projectDir, async () => {
