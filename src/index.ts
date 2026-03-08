@@ -66,21 +66,21 @@ export interface ClipfirstFs {
   createAsset(
     prefix: string,
     name: string,
-    projectSlug?: string,
+    projectSlug: string,
   ): Promise<Result<{ assetId: string; path: string }, FsError>>;
-  listAssets(projectSlug?: string): Promise<AssetEntry[]>;
+  listAssets(projectSlug: string): Promise<AssetEntry[]>;
   deleteAsset(
     assetId: string,
-    projectSlug?: string,
+    projectSlug: string,
   ): Promise<Result<{ deleted_at: string }, FsError>>;
   renameAsset(
     assetId: string,
     newName: string,
-    projectSlug?: string,
+    projectSlug: string,
   ): Promise<Result<{ old_asset_id: string; new_asset_id: string }, FsError>>;
   getManifest(
     assetId: string,
-    projectSlug?: string,
+    projectSlug: string,
   ): Promise<Result<AssetManifest, FsError>>;
 
   // File
@@ -88,68 +88,68 @@ export interface ClipfirstFs {
     assetId: string,
     filename: string,
     data: Buffer | string,
-    projectSlug?: string,
+    projectSlug: string,
   ): Promise<Result<string, FsError>>;
   readFile(
     assetId: string,
     filename: string,
-    projectSlug?: string,
+    projectSlug: string,
   ): Promise<Result<Buffer, FsError>>;
   deleteFile(
     assetId: string,
     filename: string,
-    projectSlug?: string,
+    projectSlug: string,
   ): Promise<Result<string, FsError>>;
   renameFile(
     assetId: string,
     oldFilename: string,
     newFilename: string,
-    projectSlug?: string,
+    projectSlug: string,
   ): Promise<Result<{ oldPath: string; newPath: string }, FsError>>;
   copyFile(
     assetId: string,
     filename: string,
     destAssetId: string,
     destFilename: string,
-    projectSlug?: string,
+    projectSlug: string,
   ): Promise<Result<string, FsError>>;
   resolveAssetDir(
     assetId: string,
-    projectSlug?: string,
+    projectSlug: string,
   ): Promise<Result<string, FsError>>;
   writeMetadata(
     assetId: string,
     key: string,
     data: unknown,
-    projectSlug?: string,
+    projectSlug: string,
   ): Promise<Result<string, FsError>>;
   readMetadata<T>(
     assetId: string,
     key: string,
-    projectSlug?: string,
+    projectSlug: string,
   ): Promise<Result<T, FsError>>;
 
   // Git
   commitOperation(
     operation: string,
-    assetId?: string,
-    details?: Record<string, unknown>,
-    projectSlug?: string,
+    assetId: string | undefined,
+    details: Record<string, unknown> | undefined,
+    projectSlug: string,
   ): Promise<string | null>;
-  getHistory(projectSlug?: string, limit?: number): Promise<GitCommit[]>;
+  getHistory(projectSlug: string, limit?: number): Promise<GitCommit[]>;
   getAssetHistory(
     assetId: string,
-    projectSlug?: string,
+    projectSlug: string,
     limit?: number,
   ): Promise<GitCommit[]>;
   restoreAsset(
     assetId: string,
     commitHash: string,
-    projectSlug?: string,
+    projectSlug: string,
   ): Promise<string | null>;
   rewindProject(
     commitHash: string,
-    projectSlug?: string,
+    projectSlug: string,
   ): Promise<string | null>;
   // Lock
   acquireLock(
@@ -165,26 +165,26 @@ export interface ClipfirstFs {
   logAction(
     action: string,
     payload: string | Record<string, unknown>,
-    projectSlug?: string,
+    projectSlug: string,
   ): Promise<Result<ActionLogEntry, FsError>>;
   getActionLog(
-    options?: ActionLogOptions,
-    projectSlug?: string,
+    options: ActionLogOptions | undefined,
+    projectSlug: string,
   ): Promise<ActionLogEntry[]>;
 
   // Query
-  slugTaken(slug: string, projectSlug?: string): Promise<boolean>;
+  slugTaken(slug: string, projectSlug: string): Promise<boolean>;
 }
 
 export function createFs(config: FsConfig): ClipfirstFs {
   const { outputDir, gitPath } = config;
 
-  async function resolve(projectSlug?: string): Promise<string | null> {
+  async function resolve(projectSlug: string): Promise<string | null> {
     return resolveProjectDir(outputDir, projectSlug, gitPath);
   }
 
   async function withProject<T>(
-    projectSlug: string | undefined,
+    projectSlug: string,
     fn: (dir: string) => Promise<Result<T, FsError>>,
   ): Promise<Result<T, FsError>> {
     const dir = await resolve(projectSlug);
@@ -243,7 +243,7 @@ export function createFs(config: FsConfig): ClipfirstFs {
       withProject(projectSlug, (dir) =>
         writeMetadata(dir, assetId, key, data, gitPath),
       ),
-    readMetadata: <T>(assetId: string, key: string, projectSlug?: string) =>
+    readMetadata: <T>(assetId: string, key: string, projectSlug: string) =>
       withProject(projectSlug, (dir) => readMetadata<T>(dir, assetId, key)),
 
     // Git
