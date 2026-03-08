@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { type FsError, type Result, ok, err } from "../types.js";
 import { commitOperation } from "../git/commit.js";
 import { withGitLock } from "../git/mutex.js";
+import { withCleanWorktree } from "../git/stash.js";
 import {
   isSafeFilename,
   isSafePath,
@@ -59,12 +60,18 @@ export async function renameFile(
   }
 
   await withGitLock(projectDir, async () => {
-    await fs.rename(oldPath, newPath);
-    await commitOperation(
+    return withCleanWorktree(
       projectDir,
-      "rename-file",
-      assetId,
-      { from: oldFilename, to: newFilename },
+      async () => {
+        await fs.rename(oldPath, newPath);
+        await commitOperation(
+          projectDir,
+          "rename-file",
+          assetId,
+          { from: oldFilename, to: newFilename },
+          gitPath,
+        );
+      },
       gitPath,
     );
   });

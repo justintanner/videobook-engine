@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { type FsError, type Result, ok, err } from "../types.js";
 import { commitOperation } from "../git/commit.js";
 import { withGitLock } from "../git/mutex.js";
+import { withCleanWorktree } from "../git/stash.js";
 import { isValidAssetId, isWithinDir, invalidInput } from "../validation.js";
 import { isLocked } from "../lock/query.js";
 
@@ -31,14 +32,20 @@ export async function deleteAsset(
 
   // Delete + commit under mutex — lock files are deleted with the directory
   const commitHash = await withGitLock(projectDir, async () => {
-    await fs.rm(assetDir, { recursive: true, force: true });
-    return commitOperation(
+    return withCleanWorktree(
       projectDir,
-      "delete",
-      assetId,
-      undefined,
+      async () => {
+        await fs.rm(assetDir, { recursive: true, force: true });
+        return commitOperation(
+          projectDir,
+          "delete",
+          assetId,
+          undefined,
+          gitPath,
+          true,
+        );
+      },
       gitPath,
-      true,
     );
   });
 

@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { type FsError, type Result, ok, err } from "../types.js";
 import { commitOperation } from "../git/commit.js";
 import { withGitLock } from "../git/mutex.js";
+import { withCleanWorktree } from "../git/stash.js";
 import {
   isSafeFilename,
   isSafePath,
@@ -66,12 +67,18 @@ export async function copyFile(
   }
 
   await withGitLock(projectDir, async () => {
-    await fs.copyFile(srcPath, destPath);
-    await commitOperation(
+    return withCleanWorktree(
       projectDir,
-      "copy-file",
-      destAssetId,
-      { from: `${assetId}/${filename}`, to: destFilename },
+      async () => {
+        await fs.copyFile(srcPath, destPath);
+        await commitOperation(
+          projectDir,
+          "copy-file",
+          destAssetId,
+          { from: `${assetId}/${filename}`, to: destFilename },
+          gitPath,
+        );
+      },
       gitPath,
     );
   });

@@ -1,7 +1,8 @@
-import { gitExec } from './exec.js';
-import { isGitRepo } from './init.js';
-import { commitOperation } from './commit.js';
-import { withGitLock } from './mutex.js';
+import { gitExec } from "./exec.js";
+import { isGitRepo } from "./init.js";
+import { commitOperation } from "./commit.js";
+import { withGitLock } from "./mutex.js";
+import { withCleanWorktree } from "./stash.js";
 
 export async function restoreAsset(
   projectDir: string,
@@ -14,20 +15,26 @@ export async function restoreAsset(
   }
 
   return withGitLock(projectDir, async () => {
-    try {
-      await gitExec(
-        ['checkout', commitHash, '--', assetId],
-        { cwd: projectDir, gitPath },
-      );
-    } catch {
-      return null;
-    }
-
-    return commitOperation(
+    return withCleanWorktree(
       projectDir,
-      'restore',
-      assetId,
-      { from_commit: commitHash.slice(0, 8) },
+      async () => {
+        try {
+          await gitExec(["checkout", commitHash, "--", assetId], {
+            cwd: projectDir,
+            gitPath,
+          });
+        } catch {
+          return null;
+        }
+
+        return commitOperation(
+          projectDir,
+          "restore",
+          assetId,
+          { from_commit: commitHash.slice(0, 8) },
+          gitPath,
+        );
+      },
       gitPath,
     );
   });

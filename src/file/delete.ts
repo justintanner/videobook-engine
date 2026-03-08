@@ -4,6 +4,7 @@ import * as path from "node:path";
 import { type FsError, type Result, ok, err } from "../types.js";
 import { commitOperation } from "../git/commit.js";
 import { withGitLock } from "../git/mutex.js";
+import { withCleanWorktree } from "../git/stash.js";
 import {
   isSafeFilename,
   isSafePath,
@@ -43,12 +44,18 @@ export async function deleteFile(
   }
 
   await withGitLock(projectDir, async () => {
-    await fs.unlink(filePath);
-    await commitOperation(
+    return withCleanWorktree(
       projectDir,
-      "delete-file",
-      assetId,
-      { file: filename },
+      async () => {
+        await fs.unlink(filePath);
+        await commitOperation(
+          projectDir,
+          "delete-file",
+          assetId,
+          { file: filename },
+          gitPath,
+        );
+      },
       gitPath,
     );
   });

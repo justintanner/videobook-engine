@@ -5,6 +5,7 @@ import { type FsError, type Result, ok, err } from "../types.js";
 import { invalidInput } from "../validation.js";
 import { commitOperation } from "../git/commit.js";
 import { withGitLock } from "../git/mutex.js";
+import { withCleanWorktree } from "../git/stash.js";
 
 const KEY_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
 const KEY_MAX_LENGTH = 100;
@@ -44,8 +45,20 @@ export async function writeProjectMeta(
   const filePath = path.join(projectDir, filename);
 
   await withGitLock(projectDir, async () => {
-    await fs.writeFile(filePath, json);
-    await commitOperation(projectDir, "write", filename, undefined, gitPath);
+    return withCleanWorktree(
+      projectDir,
+      async () => {
+        await fs.writeFile(filePath, json);
+        await commitOperation(
+          projectDir,
+          "write",
+          filename,
+          undefined,
+          gitPath,
+        );
+      },
+      gitPath,
+    );
   });
 
   return ok(filePath);
