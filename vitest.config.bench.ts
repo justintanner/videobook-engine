@@ -6,6 +6,6 @@ export default defineConfig({
       include: ["benchmarks/**/*.bench.ts"],
       reporters: ["verbose"],
     },
-    hookTimeout: 120_000,
+    hookTimeout: 1_200_000,
   },
 });

@@ -33,6 +33,7 @@ import { renameFile } from "./file/rename.js";
 import { copyFile } from "./file/copy.js";
 import { resolveAssetDir } from "./file/resolve.js";
 import { writeMetadata, readMetadata } from "./file/metadata.js";
+import { writeProjectMeta, readProjectMeta } from "./project/metadata.js";
 
 import { commitOperation } from "./git/commit.js";
 import { getHistory, getAssetHistory } from "./git/history.js";
@@ -125,6 +126,17 @@ export interface ClipfirstFs {
   ): Promise<Result<string, FsError>>;
   readMetadata<T>(
     assetId: string,
+    key: string,
+    projectSlug: string,
+  ): Promise<Result<T, FsError>>;
+
+  // Project metadata
+  writeProjectMeta(
+    key: string,
+    data: unknown,
+    projectSlug: string,
+  ): Promise<Result<string, FsError>>;
+  readProjectMeta<T>(
     key: string,
     projectSlug: string,
   ): Promise<Result<T, FsError>>;
@@ -245,6 +257,14 @@ export function createFs(config: FsConfig): ClipfirstFs {
       ),
     readMetadata: <T>(assetId: string, key: string, projectSlug: string) =>
       withProject(projectSlug, (dir) => readMetadata<T>(dir, assetId, key)),
+
+    // Project metadata
+    writeProjectMeta: (key, data, projectSlug) =>
+      withProject(projectSlug, (dir) =>
+        writeProjectMeta(dir, key, data, gitPath),
+      ),
+    readProjectMeta: <T>(key: string, projectSlug: string) =>
+      withProject(projectSlug, (dir) => readProjectMeta<T>(dir, key)),
 
     // Git
     commitOperation: async (operation, assetId, details, projectSlug) => {
