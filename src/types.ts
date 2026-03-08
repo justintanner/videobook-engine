@@ -63,6 +63,14 @@ export interface FsError {
   message: string;
 }
 
+// Action log entry from git commit
+export interface ActionLogEntry {
+  hash: string;
+  action: string;
+  payload: string | Record<string, unknown>;
+  date: string;
+}
+
 // Config for createFs
 export interface FsConfig {
   outputDir: string;

@@ -9,6 +9,7 @@ import {
   type ProjectMetadata,
   type GitCommit,
   type LockData,
+  type ActionLogEntry,
   type Result,
   ok,
   err,
@@ -38,6 +39,10 @@ import { getHistory, getAssetHistory } from "./git/history.js";
 import { restoreAsset } from "./git/restore.js";
 import { rewindProject } from "./git/rewind.js";
 import { getHistoricalSlugs } from "./git/slugs.js";
+import { logAction } from "./action/log.js";
+import { readActionLog } from "./action/read.js";
+import type { ActionLogOptions } from "./action/read.js";
+
 import { acquireLock } from "./lock/acquire.js";
 import { releaseLock } from "./lock/release.js";
 import { isLocked, getLockData } from "./lock/query.js";
@@ -156,6 +161,17 @@ export interface ClipfirstFs {
   getLockData(assetDir: string): Promise<LockData | null>;
   cleanStaleLock(assetDir: string): Promise<boolean>;
 
+  // Action log
+  logAction(
+    action: string,
+    payload: string | Record<string, unknown>,
+    projectSlug?: string,
+  ): Promise<Result<ActionLogEntry, FsError>>;
+  getActionLog(
+    options?: ActionLogOptions,
+    projectSlug?: string,
+  ): Promise<ActionLogEntry[]>;
+
   // Query
   slugTaken(slug: string, projectSlug?: string): Promise<boolean>;
 }
@@ -256,6 +272,17 @@ export function createFs(config: FsConfig): ClipfirstFs {
       if (!dir) return null;
       return rewindProject(dir, commitHash, gitPath);
     },
+    // Action log
+    logAction: (action, payload, projectSlug) =>
+      withProject(projectSlug, (dir) =>
+        logAction(dir, action, payload, gitPath),
+      ),
+    getActionLog: async (options, projectSlug) => {
+      const dir = await resolve(projectSlug);
+      if (!dir) return [];
+      return readActionLog(dir, options, gitPath);
+    },
+
     // Lock
     acquireLock,
     releaseLock,
@@ -285,11 +312,14 @@ export type {
   ProjectMetadata,
   GitCommit,
   LockData,
+  ActionLogEntry,
   AssetEntry,
   FsError,
   FsErrorCode,
   FsConfig,
 } from "./types.js";
+
+export type { ActionLogOptions } from "./action/read.js";
 
 export type { LockOptions } from "./lock/data.js";
 export type { Result } from "./types.js";
