@@ -19,6 +19,7 @@ import { createProject } from "./project/create.js";
 import { listProjects } from "./project/list.js";
 import { getProject, resolveProjectDir } from "./project/get.js";
 import { switchProject } from "./project/switch.js";
+import { renameProject } from "./project/rename.js";
 
 import { createAsset } from "./asset/create.js";
 import { listAssets } from "./asset/list.js";
@@ -62,6 +63,12 @@ export interface ClipfirstFs {
     slug?: string,
   ): Promise<Result<{ metadata: ProjectMetadata; path: string }, FsError>>;
   switchProject(slug: string): Promise<Result<string, FsError>>;
+  renameProject(
+    oldSlug: string,
+    newSlug: string,
+  ): Promise<
+    Result<{ oldSlug: string; newSlug: string; path: string }, FsError>
+  >;
 
   // Asset
   createAsset(
@@ -210,6 +217,8 @@ export function createFs(config: FsConfig): ClipfirstFs {
     listProjects: () => listProjects(projectsDir, gitPath),
     getProject: (slug) => getProject(projectsDir, slug, gitPath),
     switchProject: (slug) => switchProject(projectsDir, slug),
+    renameProject: (oldSlug, newSlug) =>
+      renameProject(projectsDir, oldSlug, newSlug, gitPath),
 
     // Asset
     createAsset: (prefix, name, projectSlug) =>
