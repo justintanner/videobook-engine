@@ -9,11 +9,11 @@ import * as path from 'node:path';
 import { createFs } from 'clipfirst-fs';
 
 const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'clipfirst-basic-'));
-const outputDir = path.join(tmpDir, 'output');
-await fs.mkdir(outputDir);
+const projectsDir = path.join(tmpDir, 'projects');
+await fs.mkdir(projectsDir);
 
 try {
-  const cfs = createFs({ outputDir });
+  const cfs = createFs({ projectsDir });
 
   // --- Create a project ---
   const projectResult = await cfs.createProject();

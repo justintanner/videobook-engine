@@ -10,15 +10,15 @@ const execFileAsync = promisify(execFile);
 
 export interface Sandbox {
   dir: string;
-  outputDir: string;
+  projectsDir: string;
   fs: ClipfirstFs;
   cleanup: () => Promise<void>;
 }
 
 export async function createSandbox(): Promise<Sandbox> {
   const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'clipfirst-fs-test-'));
-  const outputDir = path.join(dir, 'output');
-  await fs.mkdir(outputDir, { recursive: true });
+  const projectsDir = path.join(dir, 'projects');
+  await fs.mkdir(projectsDir, { recursive: true });
 
   // Configure git for test environment
   await execFileAsync('git', ['config', '--global', 'user.email', 'test@clipfirst.test'], {
@@ -28,11 +28,11 @@ export async function createSandbox(): Promise<Sandbox> {
     env: { ...process.env, HOME: dir },
   }).catch(() => {});
 
-  const instance = createFs({ outputDir });
+  const instance = createFs({ projectsDir });
 
   return {
     dir,
-    outputDir,
+    projectsDir,
     fs: instance,
     cleanup: async () => {
       await fs.rm(dir, { recursive: true, force: true });

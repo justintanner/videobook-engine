@@ -19,7 +19,7 @@ describe("lock timeout behavior", () => {
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
-  const cfs = createFs({ outputDir: "/tmp/unused" });
+  const cfs = createFs({ projectsDir: "/tmp/unused" });
 
   it("re-acquires expired lock (expired takeover)", async () => {
     // Acquire with 1ms timeout — will be expired immediately

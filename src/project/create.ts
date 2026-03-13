@@ -7,7 +7,7 @@ import { initProjectRepo } from "../git/init.js";
 import { generateProjectSlug, isProjectSlug } from "./slug.js";
 
 export async function createProject(
-  outputDir: string,
+  projectsDir: string,
   slug?: string,
   gitPath?: string,
 ): Promise<
@@ -22,8 +22,8 @@ export async function createProject(
     }
   }
 
-  // Ensure outputDir exists
-  await fs.mkdir(outputDir, { recursive: true });
+  // Ensure projectsDir exists
+  await fs.mkdir(projectsDir, { recursive: true });
 
   // Atomic project directory creation
   let projectSlug: string;
@@ -32,7 +32,7 @@ export async function createProject(
   if (slug !== undefined) {
     // User-provided slug: non-recursive mkdir, EEXIST → ALREADY_EXISTS
     projectSlug = slug;
-    projectDir = path.join(outputDir, projectSlug);
+    projectDir = path.join(projectsDir, projectSlug);
     try {
       await fs.mkdir(projectDir);
     } catch (error: unknown) {
@@ -52,8 +52,8 @@ export async function createProject(
     projectSlug = "";
     projectDir = "";
     for (let i = 0; i < MAX_ATTEMPTS; i++) {
-      projectSlug = await generateProjectSlug(outputDir);
-      projectDir = path.join(outputDir, projectSlug);
+      projectSlug = await generateProjectSlug(projectsDir);
+      projectDir = path.join(projectsDir, projectSlug);
       try {
         await fs.mkdir(projectDir);
         created = true;
@@ -76,7 +76,7 @@ export async function createProject(
   await initProjectRepo(projectDir, gitPath);
 
   // Atomically set as default if no default exists — O_EXCL prevents TOCTOU
-  const defaultFile = path.join(outputDir, DEFAULT_PROJECT_FILE);
+  const defaultFile = path.join(projectsDir, DEFAULT_PROJECT_FILE);
   let isDefault = false;
   try {
     await fs.writeFile(defaultFile, projectSlug, { flag: "wx" });

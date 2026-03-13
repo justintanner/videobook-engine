@@ -18,11 +18,11 @@ npx vitest run tests/asset.test.ts   # run a single test file
 
 ## Architecture
 
-**Entry point:** `src/index.ts` exports `createFs(config: FsConfig)` factory that returns a `ClipfirstFs` interface. Config takes `{outputDir, gitPath?}`.
+**Entry point:** `src/index.ts` exports `createFs(config: FsConfig)` factory that returns a `ClipfirstFs` interface. Config takes `{projectsDir, gitPath?}`.
 
 **Module layout** — each module is a directory with single-responsibility files:
 
-- `src/project/` — project lifecycle (create, list, get, switch). Projects are directories in outputDir, each a git repo.
+- `src/project/` — project lifecycle (create, list, get, switch). Projects are directories in projectsDir, each a git repo.
 - `src/asset/` — asset lifecycle (create, delete, rename, list, manifest). Assets are prefixed directories (`vid-`, `img-`, `aud-`, `script-`) inside a project.
 - `src/file/` — file I/O (read, write, metadata). Writes trigger atomic git commits.
 - `src/git/` — git operations via `child_process.execFile`. Commits use scoped staging, structured messages, and exponential backoff retry for index.lock contention.

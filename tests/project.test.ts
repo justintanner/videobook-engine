@@ -62,7 +62,7 @@ describe("project operations", () => {
     const result = await sandbox.fs.switchProject("project-b");
     expect(result.ok).toBe(true);
 
-    const defaultFile = path.join(sandbox.outputDir, ".default-project");
+    const defaultFile = path.join(sandbox.projectsDir, ".default-project");
     const defaultSlug = (await fs.readFile(defaultFile, "utf-8")).trim();
     expect(defaultSlug).toBe("project-b");
   });

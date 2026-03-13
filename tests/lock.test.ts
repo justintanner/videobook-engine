@@ -19,7 +19,7 @@ describe("lock operations", () => {
     await fs.rm(tmpDir, { recursive: true, force: true });
   });
 
-  const cfs = createFs({ outputDir: "/tmp/unused" });
+  const cfs = createFs({ projectsDir: "/tmp/unused" });
 
   it("acquires a lock atomically", async () => {
     const result = await cfs.acquireLock(assetDir, { durationMs: 60_000 });

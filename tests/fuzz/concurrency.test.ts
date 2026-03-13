@@ -107,7 +107,7 @@ describe("concurrency stress tests", () => {
 
     // Default project file should contain a valid slug (one of the 5)
     const defaultContent = await fs.readFile(
-      path.join(sandbox.outputDir, ".default-project"),
+      path.join(sandbox.projectsDir, ".default-project"),
       "utf-8",
     );
     const defaultSlug = defaultContent.trim();

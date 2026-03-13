@@ -99,8 +99,8 @@ describe('path traversal fuzz tests', () => {
   }, 30_000);
 
   it('deleteAsset cannot escape project directory', async () => {
-    const projectDir = path.join(sandbox.outputDir, projectSlug);
-    const siblingDir = path.join(sandbox.outputDir, 'sibling');
+    const projectDir = path.join(sandbox.projectsDir, projectSlug);
+    const siblingDir = path.join(sandbox.projectsDir, 'sibling');
     await fs.mkdir(siblingDir, { recursive: true });
     await fs.writeFile(path.join(siblingDir, 'secret.txt'), 'do not delete');
 
@@ -172,7 +172,7 @@ describe('path traversal fuzz tests', () => {
     const asset = await sandbox.fs.createAsset('img', 'safe-asset', projectSlug);
     if (!asset.ok) throw new Error('Failed to create asset');
     const assetId = asset.value.assetId;
-    const projectDir = path.join(sandbox.outputDir, projectSlug);
+    const projectDir = path.join(sandbox.projectsDir, projectSlug);
 
     await fc.assert(
       fc.asyncProperty(

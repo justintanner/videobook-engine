@@ -26,7 +26,7 @@ describe("lock safety fuzz tests", () => {
     );
     if (!asset.ok) throw new Error("Failed to create asset");
     const assetId = asset.value.assetId;
-    const assetDir = path.join(sandbox.outputDir, projectSlug, assetId);
+    const assetDir = path.join(sandbox.projectsDir, projectSlug, assetId);
 
     const lockResult = await sandbox.fs.acquireLock(assetDir, {
       durationMs: 60_000,
@@ -54,7 +54,7 @@ describe("lock safety fuzz tests", () => {
     );
     if (!asset.ok) throw new Error("Failed to create asset");
     const assetId = asset.value.assetId;
-    const assetDir = path.join(sandbox.outputDir, projectSlug, assetId);
+    const assetDir = path.join(sandbox.projectsDir, projectSlug, assetId);
 
     const lockResult = await sandbox.fs.acquireLock(assetDir, {
       durationMs: 60_000,
@@ -78,7 +78,7 @@ describe("lock safety fuzz tests", () => {
     );
     if (!asset.ok) throw new Error("Failed to create asset");
     const assetId = asset.value.assetId;
-    const assetDir = path.join(sandbox.outputDir, projectSlug, assetId);
+    const assetDir = path.join(sandbox.projectsDir, projectSlug, assetId);
 
     const lockResult = await sandbox.fs.acquireLock(assetDir, {
       durationMs: 60_000,
@@ -112,7 +112,7 @@ describe("lock safety fuzz tests", () => {
     );
     if (!asset.ok) throw new Error("Failed to create asset");
     const assetDir = path.join(
-      sandbox.outputDir,
+      sandbox.projectsDir,
       projectSlug,
       asset.value.assetId,
     );
@@ -145,7 +145,7 @@ describe("lock safety fuzz tests", () => {
     );
     if (!asset.ok) throw new Error("Failed to create asset");
     const assetDir = path.join(
-      sandbox.outputDir,
+      sandbox.projectsDir,
       projectSlug,
       asset.value.assetId,
     );

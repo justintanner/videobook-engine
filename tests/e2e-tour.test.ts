@@ -96,7 +96,7 @@ describe("e2e full API tour", () => {
     // 5. switchProject('beta-project')
     const switchBeta = await cfs.switchProject("beta-project");
     expect(switchBeta.ok).toBe(true);
-    const defaultFile = path.join(sandbox.outputDir, ".default-project");
+    const defaultFile = path.join(sandbox.projectsDir, ".default-project");
     const defaultContent = await fs.readFile(defaultFile, "utf-8");
     expect(defaultContent).toBe("beta-project");
 

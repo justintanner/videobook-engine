@@ -38,7 +38,7 @@ describe("stash isolation", () => {
     const result = await sandbox.fs.createProject("stash-test");
     if (!result.ok) throw new Error("Failed to create project");
     projectSlug = result.value.slug;
-    projectDir = path.join(sandbox.outputDir, projectSlug);
+    projectDir = path.join(sandbox.projectsDir, projectSlug);
   });
 
   afterEach(async () => {

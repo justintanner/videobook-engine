@@ -44,7 +44,7 @@ describe("edge-cases fuzz tests", () => {
 
   it("getProject for bare directory without .git does NOT auto-create", async () => {
     const bareSlug = "bare-dir-no-project";
-    const bareDir = path.join(sandbox.outputDir, bareSlug);
+    const bareDir = path.join(sandbox.projectsDir, bareSlug);
     await fs.mkdir(bareDir, { recursive: true });
 
     const result = await sandbox.fs.getProject(bareSlug);

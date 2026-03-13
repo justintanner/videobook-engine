@@ -20,7 +20,7 @@ describe('git operations', () => {
   });
 
   it('commit creates a git commit with structured message', async () => {
-    const projectDir = path.join(sandbox.outputDir, projectSlug);
+    const projectDir = path.join(sandbox.projectsDir, projectSlug);
     const assetDir = path.join(projectDir, 'vid-test');
     await fs.mkdir(assetDir, { recursive: true });
     await fs.writeFile(path.join(assetDir, 'original.mp4'), 'data');
@@ -31,7 +31,7 @@ describe('git operations', () => {
   });
 
   it('getHistory returns commit log', async () => {
-    const projectDir = path.join(sandbox.outputDir, projectSlug);
+    const projectDir = path.join(sandbox.projectsDir, projectSlug);
     const assetDir = path.join(projectDir, 'vid-test');
     await fs.mkdir(assetDir, { recursive: true });
     await fs.writeFile(path.join(assetDir, 'original.mp4'), 'data1');
@@ -46,7 +46,7 @@ describe('git operations', () => {
   });
 
   it('getAssetHistory scopes to single asset', async () => {
-    const projectDir = path.join(sandbox.outputDir, projectSlug);
+    const projectDir = path.join(sandbox.projectsDir, projectSlug);
 
     // Create two assets
     const dir1 = path.join(projectDir, 'vid-a');
@@ -66,7 +66,7 @@ describe('git operations', () => {
   });
 
   it('restoreAsset restores files from a previous commit', async () => {
-    const projectDir = path.join(sandbox.outputDir, projectSlug);
+    const projectDir = path.join(sandbox.projectsDir, projectSlug);
     const assetDir = path.join(projectDir, 'vid-test');
     await fs.mkdir(assetDir, { recursive: true });
 

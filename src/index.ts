@@ -189,10 +189,10 @@ export interface ClipfirstFs {
 }
 
 export function createFs(config: FsConfig): ClipfirstFs {
-  const { outputDir, gitPath } = config;
+  const { projectsDir, gitPath } = config;
 
   async function resolve(projectSlug: string): Promise<string | null> {
-    return resolveProjectDir(outputDir, projectSlug, gitPath);
+    return resolveProjectDir(projectsDir, projectSlug, gitPath);
   }
 
   async function withProject<T>(
@@ -206,10 +206,10 @@ export function createFs(config: FsConfig): ClipfirstFs {
 
   return {
     // Project
-    createProject: (slug) => createProject(outputDir, slug, gitPath),
-    listProjects: () => listProjects(outputDir, gitPath),
-    getProject: (slug) => getProject(outputDir, slug, gitPath),
-    switchProject: (slug) => switchProject(outputDir, slug),
+    createProject: (slug) => createProject(projectsDir, slug, gitPath),
+    listProjects: () => listProjects(projectsDir, gitPath),
+    getProject: (slug) => getProject(projectsDir, slug, gitPath),
+    switchProject: (slug) => switchProject(projectsDir, slug),
 
     // Asset
     createAsset: (prefix, name, projectSlug) =>

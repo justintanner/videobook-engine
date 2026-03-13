@@ -6,11 +6,11 @@ import { DEFAULT_PROJECT_FILE } from "../constants.js";
 import { isProjectSlug } from "./slug.js";
 
 export async function getDefaultProject(
-  outputDir: string,
+  projectsDir: string,
 ): Promise<string | null> {
   try {
     const content = await fs.readFile(
-      path.join(outputDir, DEFAULT_PROJECT_FILE),
+      path.join(projectsDir, DEFAULT_PROJECT_FILE),
       "utf-8",
     );
     return content.trim() || null;
@@ -20,7 +20,7 @@ export async function getDefaultProject(
 }
 
 export async function switchProject(
-  outputDir: string,
+  projectsDir: string,
   slug: string,
 ): Promise<Result<string, FsError>> {
   if (!isProjectSlug(slug)) {
@@ -29,14 +29,14 @@ export async function switchProject(
       message: `Invalid project slug: ${slug}`,
     });
   }
-  const projectDir = path.join(outputDir, slug);
+  const projectDir = path.join(projectsDir, slug);
   try {
     await fs.access(projectDir);
   } catch {
     return err({ code: "NOT_FOUND", message: `Project not found: ${slug}` });
   }
 
-  await fs.mkdir(outputDir, { recursive: true });
-  await fs.writeFile(path.join(outputDir, DEFAULT_PROJECT_FILE), slug);
+  await fs.mkdir(projectsDir, { recursive: true });
+  await fs.writeFile(path.join(projectsDir, DEFAULT_PROJECT_FILE), slug);
   return ok(slug);
 }

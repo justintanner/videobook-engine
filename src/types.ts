@@ -73,7 +73,7 @@ export interface ActionLogEntry {
 
 // Config for createFs
 export interface FsConfig {
-  outputDir: string;
+  projectsDir: string;
   gitPath?: string;
 }
 

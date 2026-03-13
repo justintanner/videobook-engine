@@ -17,7 +17,7 @@ npm install clipfirst-fs
 ```typescript
 import { createFs } from 'clipfirst-fs';
 
-const fs = createFs({ outputDir: '/path/to/projects' });
+const fs = createFs({ projectsDir: '/path/to/projects' });
 
 // Create a project
 const project = await fs.createProject();
@@ -138,7 +138,7 @@ The combination of lock files, error files, and generated output files feeds int
 
 ```typescript
 interface FsConfig {
-  outputDir: string;  // Root directory for all projects
+  projectsDir: string;  // Root directory for all projects
   gitPath?: string;   // Custom git binary path (default: "git")
 }
 ```

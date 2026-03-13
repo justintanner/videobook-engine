@@ -12,11 +12,11 @@ import { getProjectTimestamps } from "../git/timestamps.js";
 import { getDefaultProject } from "./switch.js";
 
 export async function getProject(
-  outputDir: string,
+  projectsDir: string,
   slug?: string,
   gitPath?: string,
 ): Promise<Result<{ metadata: ProjectMetadata; path: string }, FsError>> {
-  const projectSlug = slug ?? (await getDefaultProject(outputDir));
+  const projectSlug = slug ?? (await getDefaultProject(projectsDir));
   if (!projectSlug) {
     return err({ code: "NOT_FOUND", message: "No default project set" });
   }
@@ -24,7 +24,7 @@ export async function getProject(
   const normalizedSlug = projectSlug.includes("/")
     ? path.basename(projectSlug)
     : projectSlug;
-  const projectDir = path.join(outputDir, normalizedSlug);
+  const projectDir = path.join(projectsDir, normalizedSlug);
 
   // Check for .git dir instead of .project file
   try {
@@ -48,10 +48,10 @@ export async function getProject(
 }
 
 export async function resolveProjectDir(
-  outputDir: string,
+  projectsDir: string,
   slug?: string,
   gitPath?: string,
 ): Promise<string | null> {
-  const result = await getProject(outputDir, slug, gitPath);
+  const result = await getProject(projectsDir, slug, gitPath);
   return result.ok ? result.value.path : null;
 }

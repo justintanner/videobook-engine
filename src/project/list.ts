@@ -7,11 +7,11 @@ import { isProjectSlug } from "./slug.js";
 import { getProjectTimestamps } from "../git/timestamps.js";
 
 export async function listProjects(
-  outputDir: string,
+  projectsDir: string,
   gitPath?: string,
 ): Promise<ProjectMetadata[]> {
   try {
-    await fs.access(outputDir);
+    await fs.access(projectsDir);
   } catch {
     return [];
   }
@@ -19,18 +19,18 @@ export async function listProjects(
   let defaultSlug: string | null = null;
   try {
     defaultSlug = (
-      await fs.readFile(path.join(outputDir, DEFAULT_PROJECT_FILE), "utf-8")
+      await fs.readFile(path.join(projectsDir, DEFAULT_PROJECT_FILE), "utf-8")
     ).trim();
   } catch {
     // No default file
   }
 
-  const entries = await fs.readdir(outputDir, { withFileTypes: true });
+  const entries = await fs.readdir(projectsDir, { withFileTypes: true });
   const candidates: { name: string; dir: string }[] = [];
 
   for (const entry of entries) {
     if (!entry.isDirectory() || !isProjectSlug(entry.name)) continue;
-    const dir = path.join(outputDir, entry.name);
+    const dir = path.join(projectsDir, entry.name);
     try {
       await fs.access(path.join(dir, ".git"));
       candidates.push({ name: entry.name, dir });

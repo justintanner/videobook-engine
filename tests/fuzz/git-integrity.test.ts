@@ -70,7 +70,7 @@ describe("git-integrity fuzz tests", () => {
     // The write might fail due to filename validation; if so, write a normal file
     // and commit with a pipe-containing operation name instead
     if (!writeResult.ok) {
-      const projectDir = path.join(sandbox.outputDir, projectSlug);
+      const projectDir = path.join(sandbox.projectsDir, projectSlug);
       const assetDir = path.join(projectDir, assetId);
       await fs.writeFile(path.join(assetDir, "data.txt"), "content");
       await sandbox.fs.commitOperation(
@@ -113,7 +113,7 @@ describe("git-integrity fuzz tests", () => {
           const assetId = assetResult.value.assetId;
 
           // Write a file so there are changes to commit
-          const projectDir = path.join(propSandbox.outputDir, slug);
+          const projectDir = path.join(propSandbox.projectsDir, slug);
           const assetDir = path.join(projectDir, assetId);
           await fs.writeFile(path.join(assetDir, "fuzz.txt"), "data");
 
@@ -168,7 +168,7 @@ describe("git-integrity fuzz tests", () => {
     if (!asset2Result.ok) throw new Error("Failed to create asset 2");
     const asset2Id = asset2Result.value.assetId;
 
-    const projectDir = path.join(sandbox.outputDir, projectSlug);
+    const projectDir = path.join(sandbox.projectsDir, projectSlug);
 
     // Write a file to asset-1 but DON'T commit
     const asset1Dir = path.join(projectDir, asset1Id);
