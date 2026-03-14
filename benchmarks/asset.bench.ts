@@ -19,8 +19,19 @@ if (!proj.ok) throw new Error("Failed to create project");
 const projectSlug = proj.value.slug;
 
 await populateProject(sandbox.fs, projectSlug, 20);
-
 const projectDir = path.join(sandbox.outputDir, projectSlug);
+
+const proj100 = await sandbox.fs.createProject("asset-bench-100");
+if (!proj100.ok) throw new Error("Failed to create project 100");
+const projectSlug100 = proj100.value.slug;
+await populateProject(sandbox.fs, projectSlug100, 100);
+const projectDir100 = path.join(sandbox.outputDir, projectSlug100);
+
+const proj1000 = await sandbox.fs.createProject("asset-bench-1000");
+if (!proj1000.ok) throw new Error("Failed to create project 1000");
+const projectSlug1000 = proj1000.value.slug;
+await populateProject(sandbox.fs, projectSlug1000, 1000);
+const projectDir1000 = path.join(sandbox.outputDir, projectSlug1000);
 
 const manifestResult = await sandbox.fs.createAsset(
   "vid",
@@ -105,6 +116,38 @@ describe("asset benchmarks", () => {
     "getAssetCreationTimestamps (20+)",
     async () => {
       await getAssetCreationTimestamps(projectDir);
+    },
+    BENCH_OPTS,
+  );
+
+  bench(
+    "listAssets (100)",
+    async () => {
+      await sandbox.fs.listAssets(projectSlug100);
+    },
+    BENCH_OPTS,
+  );
+
+  bench(
+    "getAssetCreationTimestamps (100)",
+    async () => {
+      await getAssetCreationTimestamps(projectDir100);
+    },
+    BENCH_OPTS,
+  );
+
+  bench(
+    "listAssets (1000)",
+    async () => {
+      await sandbox.fs.listAssets(projectSlug1000);
+    },
+    BENCH_OPTS,
+  );
+
+  bench(
+    "getAssetCreationTimestamps (1000)",
+    async () => {
+      await getAssetCreationTimestamps(projectDir1000);
     },
     BENCH_OPTS,
   );

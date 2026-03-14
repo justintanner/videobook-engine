@@ -3,11 +3,11 @@ import { describe, bench } from "vitest";
 import { createBenchSandbox } from "./helpers/setup.js";
 import { seedHistory } from "./helpers/seed-history.js";
 
-const TIER = 1_000_000;
+const TIER = 100_000;
 const TARGET_ASSET = "vid-target";
 
 const sandbox = await createBenchSandbox();
-const proj = await sandbox.fs.createProject("scale-1m");
+const proj = await sandbox.fs.createProject("scale-100k");
 if (!proj.ok) throw new Error("Failed to create project");
 const projectSlug = proj.value.slug;
 const projectDir = path.join(sandbox.outputDir, projectSlug);
@@ -21,7 +21,7 @@ const SCALE_BENCH_OPTS = {
   throws: true,
 } as const;
 
-describe(`git-scale-1m (${TIER.toLocaleString()} commits)`, () => {
+describe(`git-scale-100k (${TIER.toLocaleString()} commits)`, () => {
   bench(
     "getHistory (limit 20)",
     async () => {
