@@ -4,11 +4,12 @@ import * as path from "node:path";
 import type { ProjectMetadata } from "../types.js";
 import { DEFAULT_PROJECT_FILE } from "../constants.js";
 import { isProjectSlug } from "./slug.js";
-import { getProjectTimestamps } from "../git/timestamps.js";
+import { readCreatedAt } from "../timestamps.js";
 
 export async function listProjects(
   projectsDir: string,
   gitPath?: string,
+  options?: { sort?: "newest" | "oldest" },
 ): Promise<ProjectMetadata[]> {
   try {
     await fs.access(projectsDir);
@@ -41,17 +42,17 @@ export async function listProjects(
 
   const projects = await Promise.all(
     candidates.map(async ({ name, dir }): Promise<ProjectMetadata> => {
-      const timestamps = await getProjectTimestamps(dir, gitPath);
+      const created = await readCreatedAt(dir);
       return {
         slug: name,
-        created: timestamps?.created ?? Date.now() / 1000,
+        created,
         path: dir,
         is_default: name === defaultSlug,
-        last_activity: timestamps?.lastActivity,
       };
     }),
   );
 
-  projects.sort((a, b) => a.slug.localeCompare(b.slug));
+  const sortDir = options?.sort === "oldest" ? 1 : -1;
+  projects.sort((a, b) => (a.created - b.created) * sortDir);
   return projects;
 }

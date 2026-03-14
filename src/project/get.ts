@@ -8,7 +8,8 @@ import {
   ok,
   err,
 } from "../types.js";
-import { getProjectTimestamps } from "../git/timestamps.js";
+import { readCreatedAt } from "../timestamps.js";
+import { gitExecSafe } from "../git/exec.js";
 import { getDefaultProject } from "./switch.js";
 
 export async function getProject(
@@ -36,12 +37,24 @@ export async function getProject(
     });
   }
 
-  const timestamps = await getProjectTimestamps(projectDir, gitPath);
+  const created = await readCreatedAt(projectDir);
+
+  // O(1) last_activity: just read the most recent commit timestamp
+  let lastActivity: number | undefined;
+  const logResult = await gitExecSafe(["log", "-1", "--format=%at"], {
+    cwd: projectDir,
+    gitPath,
+  });
+  if (logResult.exitCode === 0 && logResult.stdout.trim()) {
+    const ts = parseInt(logResult.stdout.trim(), 10);
+    if (!isNaN(ts)) lastActivity = ts;
+  }
+
   const metadata: ProjectMetadata = {
     slug: normalizedSlug,
-    created: timestamps?.created ?? Date.now() / 1000,
+    created,
     path: projectDir,
-    last_activity: timestamps?.lastActivity,
+    last_activity: lastActivity,
   };
 
   return ok({ metadata, path: projectDir });

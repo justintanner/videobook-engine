@@ -32,6 +32,7 @@ export async function getManifest(
 
   for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
     if (entry.isFile()) {
+      if (entry.name.startsWith(".")) continue;
       try {
         const stat = await fs.stat(path.join(assetDir, entry.name));
         const ext = path.extname(entry.name);

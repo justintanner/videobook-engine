@@ -95,6 +95,28 @@ describe("asset operations", () => {
     expect(renameResult.value.old_asset_id).toBe(createResult.value.assetId);
   });
 
+  it("lists assets sorted newest-first by default", async () => {
+    await sandbox.fs.createAsset("vid", "first video", projectSlug);
+    await new Promise((r) => setTimeout(r, 1100));
+    await sandbox.fs.createAsset("img", "second image", projectSlug);
+
+    const assets = await sandbox.fs.listAssets(projectSlug);
+    expect(assets.length).toBe(2);
+    expect(assets[0]!.id).toMatch(/^img-second-image/);
+    expect(assets[1]!.id).toMatch(/^vid-first-video/);
+  });
+
+  it("lists assets sorted oldest-first with sort option", async () => {
+    await sandbox.fs.createAsset("vid", "first video", projectSlug);
+    await new Promise((r) => setTimeout(r, 1100));
+    await sandbox.fs.createAsset("img", "second image", projectSlug);
+
+    const assets = await sandbox.fs.listAssets(projectSlug, { sort: "oldest" });
+    expect(assets.length).toBe(2);
+    expect(assets[0]!.id).toMatch(/^vid-first-video/);
+    expect(assets[1]!.id).toMatch(/^img-second-image/);
+  });
+
   it("gets asset manifest", async () => {
     const createResult = await sandbox.fs.createAsset(
       "vid",

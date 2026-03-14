@@ -2,6 +2,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
 import { type FsError, type Result, ok, err } from "../types.js";
+import { CREATED_AT_FILE } from "../constants.js";
 import { commitOperation } from "../git/commit.js";
 import { withGitLock } from "../git/mutex.js";
 import { getHistoricalSlugs } from "../git/slugs.js";
@@ -27,6 +28,10 @@ export async function createAsset(
   }
   const assetDir = path.join(projectDir, assetId);
   await fs.mkdir(assetDir, { recursive: true });
+  await fs.writeFile(
+    path.join(assetDir, CREATED_AT_FILE),
+    String(Math.floor(Date.now() / 1000)),
+  );
 
   // Commit under mutex (allow-empty since dir has no tracked files yet)
   await withGitLock(projectDir, async () => {

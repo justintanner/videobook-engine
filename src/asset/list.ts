@@ -3,7 +3,7 @@ import * as path from "node:path";
 
 import type { AssetEntry, AssetType } from "../types.js";
 import { isValidAssetId } from "../validation.js";
-import { getAssetCreationTimestamps } from "../git/timestamps.js";
+import { readCreatedAt } from "../timestamps.js";
 
 function getAssetType(name: string): AssetType {
   if (name.startsWith("vid-")) return "video";
@@ -17,6 +17,7 @@ function getAssetType(name: string): AssetType {
 export async function listAssets(
   projectDir: string,
   gitPath?: string,
+  options?: { sort?: "newest" | "oldest" },
 ): Promise<AssetEntry[]> {
   try {
     await fs.access(projectDir);
@@ -25,7 +26,6 @@ export async function listAssets(
   }
 
   const entries = await fs.readdir(projectDir, { withFileTypes: true });
-  const timestampMap = await getAssetCreationTimestamps(projectDir, gitPath);
   const assets: AssetEntry[] = [];
 
   for (const entry of entries) {
@@ -38,16 +38,8 @@ export async function listAssets(
 
     try {
       const assetType = getAssetType(name);
-
-      // Timestamp from git commit, fallback to directory birthtime
-      const gitTs = timestampMap.get(name);
-      let createdAt: string;
-      if (gitTs !== undefined) {
-        createdAt = new Date(gitTs * 1000).toISOString();
-      } else {
-        const stat = await fs.stat(assetDir);
-        createdAt = new Date(stat.birthtimeMs).toISOString();
-      }
+      const created = await readCreatedAt(assetDir);
+      const createdAt = new Date(created * 1000).toISOString();
 
       assets.push({
         id: name,
@@ -62,6 +54,11 @@ export async function listAssets(
     }
   }
 
-  assets.sort((a, b) => a.id.localeCompare(b.id));
+  const sortDir = options?.sort === "oldest" ? 1 : -1;
+  assets.sort((a, b) => {
+    const ta = new Date(a.created_at).getTime();
+    const tb = new Date(b.created_at).getTime();
+    return (ta - tb) * sortDir;
+  });
   return assets;
 }

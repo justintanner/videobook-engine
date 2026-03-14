@@ -2,6 +2,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
 import { gitExec, gitExecSafe } from "./exec.js";
+import { CREATED_AT_FILE } from "../constants.js";
 
 const LFS_PATTERNS: string[] = [
   "*.mp4",
@@ -64,6 +65,10 @@ export async function initProjectRepo(
   await gitExec(["init"], { cwd: projectDir, gitPath });
   await setupLfs(projectDir, gitPath);
   await createGitignore(projectDir);
+  await fs.writeFile(
+    path.join(projectDir, CREATED_AT_FILE),
+    String(Math.floor(Date.now() / 1000)),
+  );
   await gitExecSafe(["add", "-A"], { cwd: projectDir, gitPath });
   await gitExecSafe(["commit", "-m", "Initialize project"], {
     cwd: projectDir,

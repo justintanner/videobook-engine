@@ -58,7 +58,9 @@ export interface ClipfirstFs {
   ): Promise<
     Result<{ slug: string; path: string; is_default: boolean }, FsError>
   >;
-  listProjects(): Promise<ProjectMetadata[]>;
+  listProjects(options?: {
+    sort?: "newest" | "oldest";
+  }): Promise<ProjectMetadata[]>;
   getProject(
     slug?: string,
   ): Promise<Result<{ metadata: ProjectMetadata; path: string }, FsError>>;
@@ -76,7 +78,10 @@ export interface ClipfirstFs {
     name: string,
     projectSlug: string,
   ): Promise<Result<{ assetId: string; path: string }, FsError>>;
-  listAssets(projectSlug: string): Promise<AssetEntry[]>;
+  listAssets(
+    projectSlug: string,
+    options?: { sort?: "newest" | "oldest" },
+  ): Promise<AssetEntry[]>;
   deleteAsset(
     assetId: string,
     projectSlug: string,
@@ -214,7 +219,7 @@ export function createFs(config: FsConfig): ClipfirstFs {
   return {
     // Project
     createProject: (slug) => createProject(projectsDir, slug, gitPath),
-    listProjects: () => listProjects(projectsDir, gitPath),
+    listProjects: (options) => listProjects(projectsDir, gitPath, options),
     getProject: (slug) => getProject(projectsDir, slug, gitPath),
     switchProject: (slug) => switchProject(projectsDir, slug),
     renameProject: (oldSlug, newSlug) =>
@@ -225,10 +230,10 @@ export function createFs(config: FsConfig): ClipfirstFs {
       withProject(projectSlug, (dir) =>
         createAsset(dir, prefix, name, gitPath),
       ),
-    listAssets: async (projectSlug) => {
+    listAssets: async (projectSlug, options) => {
       const dir = await resolve(projectSlug);
       if (!dir) return [];
-      return listAssets(dir, gitPath);
+      return listAssets(dir, gitPath, options);
     },
     deleteAsset: (assetId, projectSlug) =>
       withProject(projectSlug, (dir) => deleteAsset(dir, assetId, gitPath)),

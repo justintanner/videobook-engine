@@ -35,7 +35,7 @@ describe("project operations", () => {
     expect(result.value.slug).toBe("my-project");
   });
 
-  it("lists projects sorted by last activity", async () => {
+  it("lists projects sorted newest-first by default", async () => {
     await sandbox.fs.createProject("project-a");
     // Git timestamps have second-level resolution — need >1s gap
     await new Promise((r) => setTimeout(r, 1100));
@@ -45,6 +45,17 @@ describe("project operations", () => {
     expect(projects.length).toBe(2);
     expect(projects[0]!.slug).toBe("project-b"); // most recent first
     expect(projects[1]!.slug).toBe("project-a");
+  });
+
+  it("lists projects sorted oldest-first with sort option", async () => {
+    await sandbox.fs.createProject("project-a");
+    await new Promise((r) => setTimeout(r, 1100));
+    await sandbox.fs.createProject("project-b");
+
+    const projects = await sandbox.fs.listProjects({ sort: "oldest" });
+    expect(projects.length).toBe(2);
+    expect(projects[0]!.slug).toBe("project-a");
+    expect(projects[1]!.slug).toBe("project-b");
   });
 
   it("gets project by slug", async () => {
