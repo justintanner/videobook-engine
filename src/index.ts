@@ -51,6 +51,9 @@ import { isLocked, getLockData } from "./lock/query.js";
 import { cleanStaleLock } from "./lock/clean.js";
 import type { LockOptions } from "./lock/data.js";
 
+import { appendLog } from "./log.js";
+import { readLog } from "./log.js";
+
 export interface ClipfirstFs {
   // Project
   createProject(
@@ -196,6 +199,18 @@ export interface ClipfirstFs {
     projectSlug: string,
   ): Promise<ActionLogEntry[]>;
 
+  // Generic log (append-only JSONL, gitignored)
+  appendLog(
+    name: string,
+    line: Record<string, unknown>,
+    projectSlug: string,
+  ): Promise<Result<string, FsError>>;
+  readLog(
+    name: string,
+    projectSlug: string,
+    options?: { limit?: number },
+  ): Promise<Record<string, unknown>[]>;
+
   // Query
   slugTaken(slug: string, projectSlug: string): Promise<boolean>;
 }
@@ -315,6 +330,15 @@ export function createFs(config: FsConfig): ClipfirstFs {
       const dir = await resolve(projectSlug);
       if (!dir) return [];
       return readActionLog(dir, options, gitPath);
+    },
+
+    // Generic log
+    appendLog: (name, line, projectSlug) =>
+      withProject(projectSlug, (dir) => appendLog(dir, name, line)),
+    readLog: async (name, projectSlug, options) => {
+      const dir = await resolve(projectSlug);
+      if (!dir) return [];
+      return readLog(dir, name, options);
     },
 
     // Lock

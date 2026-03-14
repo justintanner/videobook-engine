@@ -29,6 +29,7 @@ const PROJECT_GITIGNORE = `*.lock
 .DS_Store
 Thumbs.db
 .logs/
+logs/
 `;
 
 export async function isGitRepo(projectDir: string): Promise<boolean> {
