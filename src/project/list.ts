@@ -52,6 +52,6 @@ export async function listProjects(
     }),
   );
 
-  projects.sort((a, b) => (b.last_activity ?? 0) - (a.last_activity ?? 0));
+  projects.sort((a, b) => a.slug.localeCompare(b.slug));
   return projects;
 }

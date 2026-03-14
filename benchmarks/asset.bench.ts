@@ -1,4 +1,6 @@
 import { describe, bench } from "vitest";
+import * as path from "node:path";
+
 import {
   createBenchSandbox,
   uniqueName,
@@ -8,6 +10,7 @@ import {
   CONSUMING_BENCH_OPTS,
   FAST_BENCH_OPTS,
 } from "./helpers/setup.js";
+import { getAssetCreationTimestamps } from "../src/git/timestamps.js";
 
 const sandbox = await createBenchSandbox();
 
@@ -16,6 +19,8 @@ if (!proj.ok) throw new Error("Failed to create project");
 const projectSlug = proj.value.slug;
 
 await populateProject(sandbox.fs, projectSlug, 20);
+
+const projectDir = path.join(sandbox.outputDir, projectSlug);
 
 const manifestResult = await sandbox.fs.createAsset(
   "vid",
@@ -94,5 +99,13 @@ describe("asset benchmarks", () => {
       await sandbox.fs.getManifest(manifestAssetId, projectSlug);
     },
     FAST_BENCH_OPTS,
+  );
+
+  bench(
+    "getAssetCreationTimestamps (20+)",
+    async () => {
+      await getAssetCreationTimestamps(projectDir);
+    },
+    BENCH_OPTS,
   );
 });

@@ -36,7 +36,7 @@ export async function createBenchSandbox(): Promise<BenchSandbox> {
     },
   ).catch(() => {});
 
-  const instance = createFs({ outputDir });
+  const instance = createFs({ projectsDir: outputDir });
 
   return {
     dir,
