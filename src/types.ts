@@ -31,6 +31,7 @@ export interface GitCommit {
   message: string;
   date: string;
   author?: string;
+  files?: string[];
 }
 
 // Lock data stored in lock files

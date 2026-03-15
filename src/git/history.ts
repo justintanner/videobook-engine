@@ -34,7 +34,7 @@ export async function getAssetHistory(
   }
 
   const result = await gitExecSafe(
-    ['log', `--max-count=${limit}`, '--format=%H\x1f%s\x1f%ai', '--', assetId],
+    ['log', `--max-count=${limit}`, '--format=%H\x1f%s\x1f%ai', '--name-only', '--', assetId],
     { cwd: projectDir, gitPath },
   );
 
@@ -42,7 +42,27 @@ export async function getAssetHistory(
     return [];
   }
 
-  return parseHistoryLines(result.stdout, false);
+  return parseAssetHistoryOutput(result.stdout, assetId);
+}
+
+function parseAssetHistoryOutput(stdout: string, assetId: string): GitCommit[] {
+  const history: GitCommit[] = [];
+  const prefix = assetId + '/';
+  let current: GitCommit | null = null;
+
+  for (const line of stdout.trim().split('\n')) {
+    if (!line) continue;
+    if (line.includes('\x1f')) {
+      const parts = line.split('\x1f');
+      if (parts.length < 3) continue;
+      current = { hash: parts[0]!, message: parts[1]!, date: parts[2]!, files: [] };
+      history.push(current);
+    } else if (current) {
+      const file = line.startsWith(prefix) ? line.slice(prefix.length) : line;
+      current.files!.push(file);
+    }
+  }
+  return history;
 }
 
 function parseHistoryLines(stdout: string, includeAuthor: boolean): GitCommit[] {
