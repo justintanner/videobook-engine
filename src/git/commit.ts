@@ -22,44 +22,54 @@ export async function commitOperation(
   details?: Record<string, unknown>,
   gitPath?: string,
   allowEmpty?: boolean,
+  paths?: string[],
 ): Promise<string | null> {
   if (!(await isGitRepo(projectDir))) {
     return null;
   }
 
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
-    // Stage changes scoped to asset directory when possible
-    const assetDirName = assetId?.split("/")[0];
-    const scopedDir = assetDirName ? path.join(projectDir, assetDirName) : null;
-
     let addResult;
-    if (scopedDir) {
-      try {
-        await fs.access(scopedDir);
-        addResult = await gitExecSafe(["add", "--", assetDirName!], {
-          cwd: projectDir,
-          gitPath,
-        });
-      } catch {
-        // For delete operations, the directory is gone — use -u scoped to asset dir
-        // to stage only deletions of tracked files, preventing bystander staging
-        if (operation === "delete") {
-          addResult = await gitExecSafe(["add", "-u", "--", assetDirName!], {
-            cwd: projectDir,
-            gitPath,
-          });
-        } else {
+
+    if (paths && paths.length > 0) {
+      // Stage only the specific paths provided (relative to projectDir)
+      addResult = await gitExecSafe(["add", "--", ...paths], {
+        cwd: projectDir,
+        gitPath,
+      });
+    } else {
+      // Fall back to staging the whole asset directory
+      const assetDirName = assetId?.split("/")[0];
+      const scopedDir = assetDirName ? path.join(projectDir, assetDirName) : null;
+
+      if (scopedDir) {
+        try {
+          await fs.access(scopedDir);
           addResult = await gitExecSafe(["add", "--", assetDirName!], {
             cwd: projectDir,
             gitPath,
           });
+        } catch {
+          // For delete operations, the directory is gone — use -u scoped to asset dir
+          // to stage only deletions of tracked files, preventing bystander staging
+          if (operation === "delete") {
+            addResult = await gitExecSafe(["add", "-u", "--", assetDirName!], {
+              cwd: projectDir,
+              gitPath,
+            });
+          } else {
+            addResult = await gitExecSafe(["add", "--", assetDirName!], {
+              cwd: projectDir,
+              gitPath,
+            });
+          }
         }
+      } else {
+        addResult = await gitExecSafe(["add", "-A"], {
+          cwd: projectDir,
+          gitPath,
+        });
       }
-    } else {
-      addResult = await gitExecSafe(["add", "-A"], {
-        cwd: projectDir,
-        gitPath,
-      });
     }
 
     if (addResult.exitCode !== 0) {

@@ -4,7 +4,6 @@ import * as path from "node:path";
 import { type FsError, type Result, ok, err } from "../types.js";
 import { commitOperation } from "../git/commit.js";
 import { withGitLock } from "../git/mutex.js";
-import { withCleanWorktree } from "../git/stash.js";
 import {
   isSafeFilename,
   isSafePath,
@@ -37,19 +36,15 @@ export async function writeFile(
 
   // Write + commit together under mutex so each write gets its own scoped commit
   await withGitLock(projectDir, async () => {
-    return withCleanWorktree(
+    await fs.writeFile(filePath, data);
+    await commitOperation(
       projectDir,
-      async () => {
-        await fs.writeFile(filePath, data);
-        await commitOperation(
-          projectDir,
-          "write",
-          assetId,
-          { file: filename },
-          gitPath,
-        );
-      },
+      "write",
+      assetId,
+      { file: filename },
       gitPath,
+      false,
+      [path.join(assetId, filename)],
     );
   });
 
