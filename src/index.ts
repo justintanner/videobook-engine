@@ -97,6 +97,7 @@ export interface ClipfirstFs {
   getManifest(
     assetId: string,
     projectSlug: string,
+    options?: { includeDotfiles?: boolean },
   ): Promise<Result<AssetManifest, FsError>>;
 
   // File
@@ -256,8 +257,8 @@ export function createFs(config: FsConfig): ClipfirstFs {
       withProject(projectSlug, (dir) =>
         renameAsset(dir, assetId, newName, gitPath),
       ),
-    getManifest: (assetId, projectSlug) =>
-      withProject(projectSlug, (dir) => getManifest(dir, assetId)),
+    getManifest: (assetId, projectSlug, options) =>
+      withProject(projectSlug, (dir) => getManifest(dir, assetId, options)),
 
     // File
     writeFile: (assetId, filename, data, projectSlug) =>

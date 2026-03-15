@@ -14,6 +14,7 @@ import { isSafePath, isValidAssetId, invalidInput } from "../validation.js";
 export async function getManifest(
   projectDir: string,
   assetId: string,
+  options?: { includeDotfiles?: boolean },
 ): Promise<Result<AssetManifest, FsError>> {
   if (!isSafePath(assetId)) return invalidInput(`Invalid asset ID: ${assetId}`);
   if (!isValidAssetId(assetId))
@@ -32,7 +33,7 @@ export async function getManifest(
 
   for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
     if (entry.isFile()) {
-      if (entry.name.startsWith(".")) continue;
+      if (!options?.includeDotfiles && entry.name.startsWith(".")) continue;
       try {
         const stat = await fs.stat(path.join(assetDir, entry.name));
         const ext = path.extname(entry.name);
@@ -48,12 +49,21 @@ export async function getManifest(
       try {
         const dirEntries = await fs.readdir(path.join(assetDir, entry.name));
         directories[entry.name] = dirEntries
-          .filter((f) => !f.startsWith("."))
+          .filter((f) => options?.includeDotfiles || !f.startsWith("."))
           .sort();
       } catch {
         // Directory vanished — skip it
       }
     }
+  }
+
+  if (options?.includeDotfiles) {
+    files.sort((a, b) => {
+      const aDot = a.name.startsWith(".");
+      const bDot = b.name.startsWith(".");
+      if (aDot !== bDot) return aDot ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
   }
 
   const manifest: AssetManifest = {
