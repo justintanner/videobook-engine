@@ -1,27 +1,109 @@
-import * as fs from 'node:fs/promises';
-import * as path from 'node:path';
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
 
 const STOP_WORDS = new Set([
-  'a', 'an', 'the', 'and', 'or', 'but', 'in', 'on', 'at', 'to', 'for', 'of',
-  'with', 'by', 'from', 'as', 'is', 'was', 'are', 'were', 'been', 'be',
-  'have', 'has', 'had', 'do', 'does', 'did', 'will', 'would', 'could',
-  'should', 'may', 'might', 'must', 'shall', 'can', 'need', 'this', 'that',
-  'these', 'those', 'it', 'its', 'my', 'your', 'his', 'her', 'our', 'their',
-  'what', 'which', 'who', 'whom', 'whose', 'where', 'when', 'why', 'how',
-  'all', 'each', 'every', 'both', 'few', 'more', 'most', 'other', 'some',
-  'such', 'no', 'nor', 'not', 'only', 'own', 'same', 'so', 'than', 'too',
-  'very', 'just', 'also',
+  "a",
+  "an",
+  "the",
+  "and",
+  "or",
+  "but",
+  "in",
+  "on",
+  "at",
+  "to",
+  "for",
+  "of",
+  "with",
+  "by",
+  "from",
+  "as",
+  "is",
+  "was",
+  "are",
+  "were",
+  "been",
+  "be",
+  "have",
+  "has",
+  "had",
+  "do",
+  "does",
+  "did",
+  "will",
+  "would",
+  "could",
+  "should",
+  "may",
+  "might",
+  "must",
+  "shall",
+  "can",
+  "need",
+  "this",
+  "that",
+  "these",
+  "those",
+  "it",
+  "its",
+  "my",
+  "your",
+  "his",
+  "her",
+  "our",
+  "their",
+  "what",
+  "which",
+  "who",
+  "whom",
+  "whose",
+  "where",
+  "when",
+  "why",
+  "how",
+  "all",
+  "each",
+  "every",
+  "both",
+  "few",
+  "more",
+  "most",
+  "other",
+  "some",
+  "such",
+  "no",
+  "nor",
+  "not",
+  "only",
+  "own",
+  "same",
+  "so",
+  "than",
+  "too",
+  "very",
+  "just",
+  "also",
 ]);
 
 export function slugifyName(name: string, prefix: string): string {
   // Lowercase, strip non-alnum, collapse
+  const prefixLower = prefix.toLowerCase().replace(/-$/, "");
   const words = name
     .toLowerCase()
-    .replace(/[^a-z0-9\s-]/g, '')
+    .replace(/[^a-z0-9\s-]/g, "")
     .split(/[\s-]+/)
-    .filter((w) => w.length > 0 && !STOP_WORDS.has(w));
+    .filter((w) => w.length > 0 && !STOP_WORDS.has(w))
+    .filter((w) => w !== prefixLower);
 
-  const slug = words.slice(0, 4).join('-');
+  // Deduplicate consecutive words (e.g. ["alx", "alx"] → ["alx"])
+  const deduped: string[] = [];
+  for (const w of words) {
+    if (deduped.length === 0 || deduped[deduped.length - 1] !== w) {
+      deduped.push(w);
+    }
+  }
+
+  const slug = deduped.slice(0, 4).join("-");
   return slug ? `${prefix}-${slug}` : `${prefix}-untitled`;
 }
 
@@ -46,7 +128,7 @@ export async function uniqueSlug(
       return candidate;
     } catch (error: unknown) {
       const e = error as NodeJS.ErrnoException;
-      if (e.code === 'EEXIST') {
+      if (e.code === "EEXIST") {
         candidate = `${baseSlug}-${counter}`;
         counter++;
         continue;
@@ -55,5 +137,7 @@ export async function uniqueSlug(
     }
   }
 
-  throw new Error(`Could not find unique slug after ${MAX_ATTEMPTS} attempts for: ${baseSlug}`);
+  throw new Error(
+    `Could not find unique slug after ${MAX_ATTEMPTS} attempts for: ${baseSlug}`,
+  );
 }
