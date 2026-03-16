@@ -34,9 +34,12 @@ export async function renameAsset(
     return err({ code: "LOCKED", message: `Asset is locked: ${cleanId}` });
   }
 
-  // Extract prefix and build base slug
+  // Extract prefix and build base slug — skip slugification if already a valid slug with correct prefix
   const prefix = cleanId.split("-")[0]!;
-  const baseSlug = slugifyName(newName, prefix);
+  const expectedPrefix = `${prefix}-`;
+  const baseSlug = (isValidAssetId(newName) && newName.startsWith(expectedPrefix))
+    ? newName
+    : slugifyName(newName, prefix);
   const historicalSlugs = await getHistoricalSlugs(projectDir, gitPath);
 
   // Try git mv in a loop — git mv fails if destination exists, so increment suffix and retry

@@ -3,7 +3,7 @@ import { invalidInput } from "../validation.js";
 import { writeFile } from "./write.js";
 import { readFile } from "./read.js";
 
-const KEY_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
+const KEY_PATTERN = /^[a-z0-9][a-z0-9.-]*$/;
 const KEY_MAX_LENGTH = 100;
 
 function validateKey(key: string): Result<never, FsError> | null {
