@@ -30,9 +30,11 @@ export async function deleteAsset(
     return err({ code: "LOCKED", message: `Asset is locked: ${assetId}` });
   }
 
-  // Delete + commit under mutex — lock files are deleted with the directory
+  // Delete + commit under mutex — lock files are deleted with the directory.
+  // After withCleanWorktree, stash pop may resurrect untracked files from the
+  // deleted directory, so we remove any leftover directory after the lock.
   const commitHash = await withGitLock(projectDir, async () => {
-    return withCleanWorktree(
+    const hash = await withCleanWorktree(
       projectDir,
       async () => {
         await fs.rm(assetDir, { recursive: true, force: true });
@@ -47,6 +49,13 @@ export async function deleteAsset(
       },
       gitPath,
     );
+
+    // Stash pop may restore untracked files that recreate the deleted directory
+    try {
+      await fs.rm(assetDir, { recursive: true, force: true });
+    } catch {}
+
+    return hash;
   });
 
   const deletedAt = new Date().toISOString();
