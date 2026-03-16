@@ -233,7 +233,7 @@ describe("stash isolation", () => {
     expect(stdout.trim()).toBe("");
   });
 
-  it("stash pop conflict leaves stash recoverable", async () => {
+  it("writeFile overwrites dirty file without leaving stash", async () => {
     const asset = await sandbox.fs.createAsset("vid", "conflict", projectSlug);
     if (!asset.ok) throw new Error("Failed to create asset");
     const assetId = asset.value.assetId;
@@ -241,11 +241,11 @@ describe("stash isolation", () => {
     // Write initial content through the library
     await sandbox.fs.writeFile(assetId, "target.txt", "version-1", projectSlug);
 
-    // Modify the same file on disk (will be stashed, then conflict on pop)
+    // Modify the same file on disk (simulating user edit)
     const targetPath = path.join(projectDir, assetId, "target.txt");
     await fs.writeFile(targetPath, "user-modified");
 
-    // Write to the SAME file through the library — this creates a conflict scenario
+    // Write to the SAME file through the library — overwrites user edit
     const result = await sandbox.fs.writeFile(
       assetId,
       "target.txt",
@@ -259,8 +259,12 @@ describe("stash isolation", () => {
     const files = await commitFiles(projectDir, headHash.trim());
     expect(files).toContain(`${assetId}/target.txt`);
 
-    // Stash should still be on the stack (pop failed due to conflict)
+    // File on disk should have the library's content
+    const content = await fs.readFile(targetPath, "utf-8");
+    expect(content).toBe("version-2");
+
+    // No stash entries should exist (path-based staging, no stash used)
     const { stdout: stashList } = await git(projectDir, "stash", "list");
-    expect(stashList).toContain("clipfirst-fs: auto-stash");
+    expect(stashList.trim()).toBe("");
   });
 });

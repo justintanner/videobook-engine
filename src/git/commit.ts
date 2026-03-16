@@ -40,7 +40,9 @@ export async function commitOperation(
     } else {
       // Fall back to staging the whole asset directory
       const assetDirName = assetId?.split("/")[0];
-      const scopedDir = assetDirName ? path.join(projectDir, assetDirName) : null;
+      const scopedDir = assetDirName
+        ? path.join(projectDir, assetDirName)
+        : null;
 
       if (scopedDir) {
         try {
@@ -109,6 +111,7 @@ export async function commitOperation(
 
     const commitArgs = ["commit", "-m", message];
     if (allowEmpty) commitArgs.push("--allow-empty");
+    if (paths && paths.length > 0) commitArgs.push("--", ...paths);
     const commitResult = await gitExecSafe(commitArgs, {
       cwd: projectDir,
       gitPath,
