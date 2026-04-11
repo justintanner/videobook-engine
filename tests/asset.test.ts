@@ -95,6 +95,17 @@ describe("asset operations", () => {
     expect(renameResult.value.old_asset_id).toBe(createResult.value.assetId);
   });
 
+  it("returns NOT_FOUND when renaming a nonexistent asset", async () => {
+    const result = await sandbox.fs.renameAsset(
+      "vid-does-not-exist",
+      "new name",
+      projectSlug,
+    );
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.error.code).toBe("NOT_FOUND");
+  });
+
   it("lists assets sorted newest-first by default", async () => {
     await sandbox.fs.createAsset("vid", "first video", projectSlug);
     await new Promise((r) => setTimeout(r, 1100));

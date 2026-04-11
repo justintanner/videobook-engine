@@ -1,3 +1,4 @@
+import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
 import { type FsError, type Result, ok, err } from "../types.js";
@@ -30,6 +31,12 @@ export async function renameAsset(
 
   const assetDir = path.join(projectDir, cleanId);
 
+  try {
+    await fs.access(assetDir);
+  } catch {
+    return err({ code: "NOT_FOUND", message: `Asset not found: ${cleanId}` });
+  }
+
   if (await isLocked(assetDir)) {
     return err({ code: "LOCKED", message: `Asset is locked: ${cleanId}` });
   }
@@ -37,9 +44,10 @@ export async function renameAsset(
   // Extract prefix and build base slug — skip slugification if already a valid slug with correct prefix
   const prefix = cleanId.split("-")[0]!;
   const expectedPrefix = `${prefix}-`;
-  const baseSlug = (isValidAssetId(newName) && newName.startsWith(expectedPrefix))
-    ? newName
-    : slugifyName(newName, prefix);
+  const baseSlug =
+    isValidAssetId(newName) && newName.startsWith(expectedPrefix)
+      ? newName
+      : slugifyName(newName, prefix);
   const historicalSlugs = await getHistoricalSlugs(projectDir, gitPath);
 
   // Try git mv in a loop — git mv fails if destination exists, so increment suffix and retry
