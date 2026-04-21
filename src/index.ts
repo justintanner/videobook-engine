@@ -39,6 +39,7 @@ import { writeProjectMeta, readProjectMeta } from "./project/metadata.js";
 import { commitOperation } from "./git/commit.js";
 import { getHistory, getAssetHistory } from "./git/history.js";
 import { restoreAsset } from "./git/restore.js";
+import { readFileAtCommit } from "./git/show.js";
 import { rewindProject } from "./git/rewind.js";
 import { getHistoricalSlugs } from "./git/slugs.js";
 import { logAction } from "./action/log.js";
@@ -175,6 +176,12 @@ export interface ClipfirstFs {
     commitHash: string,
     projectSlug: string,
   ): Promise<string | null>;
+  readFileAtCommit(
+    assetId: string,
+    filename: string,
+    commitHash: string,
+    projectSlug: string,
+  ): Promise<Result<string, FsError>>;
   rewindProject(
     commitHash: string,
     projectSlug: string,
@@ -317,6 +324,10 @@ export function createFs(config: FsConfig): ClipfirstFs {
       if (!dir) return null;
       return restoreAsset(dir, assetId, commitHash, gitPath);
     },
+    readFileAtCommit: (assetId, filename, commitHash, projectSlug) =>
+      withProject(projectSlug, (dir) =>
+        readFileAtCommit(dir, assetId, filename, commitHash, gitPath),
+      ),
     rewindProject: async (commitHash, projectSlug) => {
       const dir = await resolve(projectSlug);
       if (!dir) return null;
