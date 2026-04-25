@@ -1,5 +1,5 @@
 // Asset type discriminator
-export type AssetType = "video" | "image" | "script" | "final" | "audio";
+export type AssetType = "video" | "image" | "script" | "final" | "audio" | "character";
 
 // Asset manifest types
 export interface AssetManifestFile {

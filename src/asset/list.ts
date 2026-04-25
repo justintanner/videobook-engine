@@ -10,6 +10,7 @@ function getAssetType(name: string): AssetType {
   if (name.startsWith("img-")) return "image";
   if (name.startsWith("aud-")) return "audio";
   if (name.startsWith("script-")) return "script";
+  if (name.startsWith("char-")) return "character";
   if (name === "final") return "final";
   throw new Error(`Unknown asset prefix: ${name}`);
 }
