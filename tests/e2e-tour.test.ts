@@ -170,15 +170,21 @@ describe("e2e full API tour", () => {
     const lockedAfter = await cfs.isLocked(assetDir);
     expect(lockedAfter).toBe(false);
 
-    // 16. cleanStaleLock — write a stale lock with dead PID
-    const staleLockPath = path.join(assetDir, ".lock");
-    const staleLockData = JSON.stringify({
-      created_at: Date.now() / 1000,
-      timeout_at: Date.now() / 1000 + 3600,
-      pid: 999999,
-      task_id: "stale",
-    });
-    await fs.writeFile(staleLockPath, staleLockData);
+    // 16. cleanStaleLock — insert a stale lock with dead PID directly into state DB
+    const { getStateDb } = await import("../src/db/client.js");
+    const stateDb = getStateDb(path.join(sandbox.projectsDir, alphaSlug));
+    stateDb
+      .prepare(
+        `INSERT INTO locks (asset_id, pid, created_at, timeout_at, data)
+         VALUES (?, ?, ?, ?, ?)`,
+      )
+      .run(
+        assetId,
+        999999,
+        Date.now() / 1000,
+        Date.now() / 1000 + 3600,
+        JSON.stringify({ task_id: "stale" }),
+      );
     const cleaned = await cfs.cleanStaleLock(assetDir);
     expect(cleaned).toBe(true);
 

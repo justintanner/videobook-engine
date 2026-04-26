@@ -37,7 +37,7 @@ export async function renameAsset(
     return err({ code: "NOT_FOUND", message: `Asset not found: ${cleanId}` });
   }
 
-  if (await isLocked(assetDir)) {
+  if (await isLocked(path.dirname(projectDir), assetDir)) {
     return err({ code: "LOCKED", message: `Asset is locked: ${cleanId}` });
   }
 

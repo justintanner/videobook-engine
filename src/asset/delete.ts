@@ -8,6 +8,10 @@ import { withCleanWorktree } from "../git/stash.js";
 import { isValidAssetId, isWithinDir, invalidInput } from "../validation.js";
 import { isLocked } from "../lock/query.js";
 
+function projectsDirOf(projectDir: string): string {
+  return path.dirname(projectDir);
+}
+
 export async function deleteAsset(
   projectDir: string,
   assetId: string,
@@ -26,7 +30,7 @@ export async function deleteAsset(
     return err({ code: "NOT_FOUND", message: `Asset not found: ${assetId}` });
   }
 
-  if (await isLocked(assetDir)) {
+  if (await isLocked(projectsDirOf(projectDir), assetDir)) {
     return err({ code: "LOCKED", message: `Asset is locked: ${assetId}` });
   }
 

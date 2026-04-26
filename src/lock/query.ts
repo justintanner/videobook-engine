@@ -1,21 +1,35 @@
-import * as fs from "node:fs/promises";
-import * as path from "node:path";
-
 import type { LockData } from "../types.js";
-import { LOCK_FILE } from "../constants.js";
-import { parseLockContent, isExpired } from "./data.js";
+import { getStateDb } from "../db/client.js";
+import { resolveLockKey } from "./key.js";
+import { type LockRow, isExpired, rowToLockData } from "./data.js";
 
-export async function getLockData(assetDir: string): Promise<LockData | null> {
-  try {
-    const content = await fs.readFile(path.join(assetDir, LOCK_FILE), "utf-8");
-    return parseLockContent(content);
-  } catch {
-    return null;
-  }
+function readRow(projectDir: string, assetKey: string): LockRow | undefined {
+  const db = getStateDb(projectDir);
+  return db
+    .prepare(
+      `SELECT pid, state, created_at, timeout_at, data
+       FROM locks WHERE asset_id = ?`,
+    )
+    .get(assetKey) as LockRow | undefined;
 }
 
-export async function isLocked(assetDir: string): Promise<boolean> {
-  const data = await getLockData(assetDir);
+export async function getLockData(
+  projectsDir: string,
+  assetDir: string,
+): Promise<LockData | null> {
+  const resolved = await resolveLockKey(projectsDir, assetDir);
+  if (!resolved.ok) return null;
+  const { projectDir, assetKey } = resolved.value;
+  const row = readRow(projectDir, assetKey);
+  if (!row) return null;
+  return rowToLockData(row);
+}
+
+export async function isLocked(
+  projectsDir: string,
+  assetDir: string,
+): Promise<boolean> {
+  const data = await getLockData(projectsDir, assetDir);
   if (!data) return false;
   return !isExpired(data);
 }

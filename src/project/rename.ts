@@ -7,9 +7,10 @@ import { isProjectSlug } from "./slug.js";
 import { getDefaultProject } from "./switch.js";
 import { withGitLock, migrateGitLockKey } from "../git/mutex.js";
 import { isLocked } from "../lock/query.js";
+import { closeStateDb } from "../db/client.js";
 import { isValidAssetId } from "../validation.js";
 
-async function findLockedAsset(projectDir: string): Promise<string | null> {
+async function findLockedAsset(projectsDir: string, projectDir: string): Promise<string | null> {
   let entries: string[];
   try {
     entries = await fs.readdir(projectDir);
@@ -19,7 +20,7 @@ async function findLockedAsset(projectDir: string): Promise<string | null> {
   for (const name of entries) {
     if (!isValidAssetId(name)) continue;
     const assetDir = path.join(projectDir, name);
-    if (await isLocked(assetDir)) return name;
+    if (await isLocked(projectsDir, assetDir)) return name;
   }
   return null;
 }
@@ -68,7 +69,7 @@ export async function renameProject(
   }
 
   // Check for active locks (early, before acquiring mutex)
-  const lockedAsset = await findLockedAsset(oldDir);
+  const lockedAsset = await findLockedAsset(projectsDir, oldDir);
   if (lockedAsset) {
     return err({ code: "LOCKED", message: `Asset is locked: ${lockedAsset}` });
   }
@@ -97,10 +98,14 @@ export async function renameProject(
     }
 
     // TOCTOU re-check: locks
-    const lockedNow = await findLockedAsset(oldDir);
+    const lockedNow = await findLockedAsset(projectsDir, oldDir);
     if (lockedNow) {
       return err({ code: "LOCKED", message: `Asset is locked: ${lockedNow}` });
     }
+
+    // Close any open state.sqlite handle so the rename can succeed on
+    // platforms where renaming a dir with open WAL files is rejected.
+    closeStateDb(oldDir);
 
     // Atomic rename
     await fs.rename(oldDir, newDir);

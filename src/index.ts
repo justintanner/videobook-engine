@@ -55,6 +55,16 @@ import type { LockOptions } from "./lock/data.js";
 import { appendLog } from "./log.js";
 import { readLog } from "./log.js";
 
+import { queueApi, type QueueApi } from "./queue/index.js";
+import { ensureGitignorePatterns } from "./db/gitignore.js";
+import { getStateDb, closeAllStateDbs } from "./db/client.js";
+import { recoverOnStartup } from "./db/recover.js";
+import {
+  checkProjectSchemaVersion,
+  type VersionCheckResult,
+} from "./db/version-guard.js";
+import { highestMigrationVersion as highestStateVersion } from "./db/migrate.js";
+
 export interface ClipfirstFs {
   // Project
   createProject(
@@ -221,6 +231,80 @@ export interface ClipfirstFs {
 
   // Query
   slugTaken(slug: string, projectSlug: string): Promise<boolean>;
+
+  // Persistent queue (state.sqlite) — see src/queue/index.ts
+  queue: ProjectScopedQueue;
+
+  // Resolve a project slug to a directory; null if not present.
+  resolveProjectDir(slug?: string): Promise<string | null>;
+
+  // Lazy bootstrap of .clipfirst/ for legacy projects (idempotent).
+  ensureClipfirstSetup(slug: string): Promise<void>;
+
+  // Abort any orphan recovery_journal rows from a prior process generation.
+  // Returns the number of rows aborted.
+  recoverIncompleteOperations(slug: string): Promise<number>;
+
+  // Refuse to open if a SQLite file in this project records a higher schema
+  // version than this build supports (downgrade guard). Returns the check result.
+  checkSchemaVersion(slug: string): Promise<VersionCheckResult>;
+
+  // Close all open SQLite handles (call before process exit).
+  close(): void;
+}
+
+export interface ProjectScopedQueue {
+  enqueue(
+    projectSlug: string,
+    opts: import("./queue/index.js").EnqueueOptions,
+  ): Promise<import("./queue/index.js").EnqueueResult | null>;
+  enqueueAndWait<T = unknown>(
+    projectSlug: string,
+    opts: import("./queue/index.js").EnqueueOptions,
+    timeoutMs?: number,
+  ): Promise<T>;
+  getJob(
+    projectSlug: string,
+    id: number,
+  ): Promise<import("./queue/index.js").Job | null>;
+  findByExternal(
+    projectSlug: string,
+    type: string,
+    externalTaskId: string,
+  ): Promise<import("./queue/index.js").Job | null>;
+  list(
+    projectSlug: string,
+    opts?: import("./queue/index.js").ListOptions,
+  ): Promise<import("./queue/index.js").Job[]>;
+  count(
+    projectSlug: string,
+    opts?: import("./queue/index.js").ListOptions,
+  ): Promise<number>;
+  complete(
+    projectSlug: string,
+    id: number,
+    opts?: import("./queue/index.js").CompleteOptions,
+  ): Promise<void>;
+  fail(
+    projectSlug: string,
+    id: number,
+    opts: import("./queue/index.js").FailOptions,
+  ): Promise<void>;
+  abort(projectSlug: string, id: number, reason: string): Promise<void>;
+  markCompleting(projectSlug: string, id: number): Promise<void>;
+  reap(projectSlug: string): Promise<ReturnType<QueueApi["reap"]>>;
+  reapOnStartup(
+    projectSlug: string,
+  ): Promise<ReturnType<QueueApi["reapOnStartup"]>>;
+  listLeased(projectSlug: string): Promise<ReturnType<QueueApi["listLeased"]>>;
+  reconcileFromSidecars(
+    projectSlug: string,
+    opts?: import("./queue/index.js").ReconcileOptions,
+  ): Promise<Awaited<ReturnType<QueueApi["reconcileFromSidecars"]>>>;
+  createRunner(
+    projectSlug: string,
+    config: import("./queue/index.js").RunnerConfig,
+  ): Promise<import("./queue/index.js").QueueRunner | null>;
 }
 
 export function createFs(config: FsConfig): ClipfirstFs {
@@ -353,12 +437,13 @@ export function createFs(config: FsConfig): ClipfirstFs {
       return readLog(dir, name, options);
     },
 
-    // Lock
-    acquireLock,
-    releaseLock,
-    isLocked,
-    getLockData,
-    cleanStaleLock,
+    // Lock — bound to projectsDir so callers can keep the (assetDir, options) shape
+    acquireLock: (assetDir, options) =>
+      acquireLock(projectsDir, assetDir, options),
+    releaseLock: (assetDir) => releaseLock(projectsDir, assetDir),
+    isLocked: (assetDir) => isLocked(projectsDir, assetDir),
+    getLockData: (assetDir) => getLockData(projectsDir, assetDir),
+    cleanStaleLock: (assetDir) => cleanStaleLock(projectsDir, assetDir),
 
     // Query
     slugTaken: async (slug, projectSlug) => {
@@ -370,6 +455,140 @@ export function createFs(config: FsConfig): ClipfirstFs {
       } catch {}
       const historical = await getHistoricalSlugs(dir, gitPath);
       return historical.has(slug);
+    },
+
+    queue: makeQueue(resolve),
+
+    resolveProjectDir: (slug) => resolve(slug ?? ""),
+
+    ensureClipfirstSetup: async (slug) => {
+      const dir = await resolve(slug);
+      if (!dir) return;
+      // Opening the state DB is idempotent and creates .clipfirst/ as a side-effect.
+      getStateDb(dir);
+      await ensureGitignorePatterns(dir);
+    },
+
+    recoverIncompleteOperations: async (slug) => {
+      const dir = await resolve(slug);
+      if (!dir) return 0;
+      const result = await recoverOnStartup(dir);
+      return result.aborted;
+    },
+
+    checkSchemaVersion: async (slug) => {
+      const dir = await resolve(slug);
+      if (!dir) {
+        return {
+          ok: true,
+          recordedStateVersion: 0,
+          recordedMetadataVersion: 0,
+          buildStateVersion: highestStateVersion(),
+          buildMetadataVersion: BUILD_METADATA_VERSION,
+        };
+      }
+      return checkProjectSchemaVersion(
+        dir,
+        highestStateVersion(),
+        BUILD_METADATA_VERSION,
+      );
+    },
+
+    close: () => closeAllStateDbs(),
+  };
+}
+
+// The metadata.sqlite migration count baked into this build. Bumped whenever
+// a new metadata migration ships in src/db/migrations/metadata_*.ts.
+const BUILD_METADATA_VERSION = 1;
+
+function makeQueue(
+  resolve: (slug: string) => Promise<string | null>,
+): ProjectScopedQueue {
+  async function dirOrThrow(slug: string): Promise<string> {
+    const dir = await resolve(slug);
+    if (!dir) throw new Error(`Project not found: ${slug}`);
+    return dir;
+  }
+  return {
+    enqueue: async (slug, opts) => {
+      const dir = await resolve(slug);
+      if (!dir) return null;
+      return queueApi.enqueue(dir, opts);
+    },
+    enqueueAndWait: async <T = unknown>(
+      slug: string,
+      opts: import("./queue/index.js").EnqueueOptions,
+      timeoutMs = 300_000,
+    ): Promise<T> => {
+      const dir = await dirOrThrow(slug);
+      const enq = queueApi.enqueue(dir, opts);
+      const start = Date.now();
+      while (Date.now() - start < timeoutMs) {
+        const job = queueApi.getJob(dir, enq.job.id);
+        if (!job) throw new Error(`Job ${enq.job.id} disappeared`);
+        if (job.state === "done") return job.result as T;
+        if (job.state === "failed" || job.state === "aborted") {
+          throw new Error(
+            `Job ${job.id} ${job.state}: ${job.error?.message ?? "unknown"}`,
+          );
+        }
+        await new Promise((r) => setTimeout(r, 50));
+      }
+      throw new Error(`Job ${enq.job.id} timed out after ${timeoutMs}ms`);
+    },
+    getJob: async (slug, id) => {
+      const dir = await resolve(slug);
+      return dir ? queueApi.getJob(dir, id) : null;
+    },
+    findByExternal: async (slug, type, externalTaskId) => {
+      const dir = await resolve(slug);
+      return dir ? queueApi.findByExternal(dir, type, externalTaskId) : null;
+    },
+    list: async (slug, opts) => {
+      const dir = await resolve(slug);
+      return dir ? queueApi.list(dir, opts) : [];
+    },
+    count: async (slug, opts) => {
+      const dir = await resolve(slug);
+      return dir ? queueApi.count(dir, opts) : 0;
+    },
+    complete: async (slug, id, opts) => {
+      const dir = await dirOrThrow(slug);
+      queueApi.complete(dir, id, opts);
+    },
+    fail: async (slug, id, opts) => {
+      const dir = await dirOrThrow(slug);
+      queueApi.fail(dir, id, opts);
+    },
+    abort: async (slug, id, reason) => {
+      const dir = await dirOrThrow(slug);
+      queueApi.abort(dir, id, reason);
+    },
+    markCompleting: async (slug, id) => {
+      const dir = await dirOrThrow(slug);
+      queueApi.markCompleting(dir, id);
+    },
+    reap: async (slug) => {
+      const dir = await dirOrThrow(slug);
+      return queueApi.reap(dir);
+    },
+    reapOnStartup: async (slug) => {
+      const dir = await dirOrThrow(slug);
+      return queueApi.reapOnStartup(dir);
+    },
+    listLeased: async (slug) => {
+      const dir = await dirOrThrow(slug);
+      return queueApi.listLeased(dir);
+    },
+    reconcileFromSidecars: async (slug, opts) => {
+      const dir = await dirOrThrow(slug);
+      return queueApi.reconcileFromSidecars(dir, opts);
+    },
+    createRunner: async (slug, config) => {
+      const dir = await resolve(slug);
+      if (!dir) return null;
+      return queueApi.createRunner(dir, config);
     },
   };
 }
@@ -394,3 +613,27 @@ export type { ActionLogOptions } from "./action/read.js";
 export type { LockOptions } from "./lock/data.js";
 export type { Result } from "./types.js";
 export { ok, err } from "./types.js";
+
+export type {
+  EnqueueOptions,
+  EnqueueResult,
+  CompleteOptions,
+  FailOptions,
+  Job,
+  JobHandler,
+  JobState,
+} from "./queue/types.js";
+export type {
+  ListOptions,
+  ReconcileOptions,
+  RunnerConfig,
+  QueueApi,
+} from "./queue/index.js";
+export type { VersionCheckResult } from "./db/version-guard.js";
+export {
+  canonicalize,
+  dedupeKey,
+  QueueRunner,
+  queueApi,
+} from "./queue/index.js";
+export { closeAllStateDbs, closeStateDb, getStateDb } from "./db/client.js";

@@ -5,6 +5,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
 import { createFs, type ClipfirstFs } from '../../src/index.js';
+import { closeAllStateDbs } from '../../src/db/client.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -35,6 +36,7 @@ export async function createSandbox(): Promise<Sandbox> {
     projectsDir,
     fs: instance,
     cleanup: async () => {
+      closeAllStateDbs();
       await fs.rm(dir, { recursive: true, force: true });
     },
   };
