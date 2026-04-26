@@ -2,7 +2,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
 import { type FsError, type Result, ok, err } from "../types.js";
-import { invalidInput } from "../validation.js";
+import { invalidInput, isValidAssetId } from "../validation.js";
 import { resolveAssetDir } from "./resolve.js";
 import {
   audioWaveformExportPath,
@@ -48,6 +48,9 @@ export async function writeAudioWaveform(
   peaks: number[],
   gitPath?: string,
 ): Promise<Result<string, FsError>> {
+  if (!isValidAssetId(assetId)) {
+    return invalidInput(`Invalid asset id: ${assetId}`);
+  }
   const peaksErr = validatePeaks(peaks);
   if (peaksErr) return peaksErr;
 
@@ -99,6 +102,9 @@ export async function readAudioWaveformRecord(
   projectDir: string,
   assetId: string,
 ): Promise<Result<AudioWaveformRecord, FsError>> {
+  if (!isValidAssetId(assetId)) {
+    return invalidInput(`Invalid asset id: ${assetId}`);
+  }
   const assetDirResult = await resolveAssetDir(projectDir, assetId);
   if (!assetDirResult.ok) return assetDirResult;
 
