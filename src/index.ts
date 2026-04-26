@@ -34,6 +34,12 @@ import { renameFile } from "./file/rename.js";
 import { copyFile } from "./file/copy.js";
 import { resolveAssetDir } from "./file/resolve.js";
 import { writeMetadata, readMetadata } from "./file/metadata.js";
+import {
+  writeAudioWaveform,
+  readAudioWaveformRecord,
+} from "./file/audio-waveform.js";
+import type { AudioWaveformRecord } from "./db/audio-waveforms.js";
+import { listAssetSubdir } from "./asset/list-subdir.js";
 import { writeProjectMeta, readProjectMeta } from "./project/metadata.js";
 
 import { commitOperation } from "./git/commit.js";
@@ -156,6 +162,20 @@ export interface ClipfirstFs {
     key: string,
     projectSlug: string,
   ): Promise<Result<T, FsError>>;
+  writeAudioWaveform(
+    assetId: string,
+    peaks: number[],
+    projectSlug: string,
+  ): Promise<Result<string, FsError>>;
+  readAudioWaveform(
+    assetId: string,
+    projectSlug: string,
+  ): Promise<Result<AudioWaveformRecord, FsError>>;
+  listAssetSubdir(
+    assetId: string,
+    subdirName: string,
+    projectSlug: string,
+  ): Promise<Result<string[], FsError>>;
 
   // Project metadata
   writeProjectMeta(
@@ -378,6 +398,16 @@ export function createFs(config: FsConfig): ClipfirstFs {
       ),
     readMetadata: <T>(assetId: string, key: string, projectSlug: string) =>
       withProject(projectSlug, (dir) => readMetadata<T>(dir, assetId, key)),
+    writeAudioWaveform: (assetId, peaks, projectSlug) =>
+      withProject(projectSlug, (dir) =>
+        writeAudioWaveform(dir, assetId, peaks, gitPath),
+      ),
+    readAudioWaveform: (assetId, projectSlug) =>
+      withProject(projectSlug, (dir) => readAudioWaveformRecord(dir, assetId)),
+    listAssetSubdir: (assetId, subdirName, projectSlug) =>
+      withProject(projectSlug, (dir) =>
+        listAssetSubdir(dir, assetId, subdirName),
+      ),
 
     // Project metadata
     writeProjectMeta: (key, data, projectSlug) =>
@@ -500,7 +530,7 @@ export function createFs(config: FsConfig): ClipfirstFs {
 
 // The metadata.sqlite migration count baked into this build. Bumped whenever
 // a new metadata migration ships in src/db/migrations/metadata_*.ts.
-const BUILD_METADATA_VERSION = 1;
+const BUILD_METADATA_VERSION = 2;
 
 function makeQueue(
   resolve: (slug: string) => Promise<string | null>,
@@ -637,3 +667,5 @@ export {
   queueApi,
 } from "./queue/index.js";
 export { closeAllStateDbs, closeStateDb, getStateDb } from "./db/client.js";
+export { isValidProjectSlug } from "./project/slug.js";
+export type { AudioWaveformRecord } from "./db/audio-waveforms.js";

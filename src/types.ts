@@ -6,6 +6,7 @@ export interface AssetManifestFile {
   name: string;
   size_bytes: number;
   extension: string | null;
+  mtimeMs: number;
 }
 
 export interface AssetManifest {

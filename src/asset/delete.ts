@@ -7,9 +7,50 @@ import { withGitLock } from "../git/mutex.js";
 import { withCleanWorktree } from "../git/stash.js";
 import { isValidAssetId, isWithinDir, invalidInput } from "../validation.js";
 import { isLocked } from "../lock/query.js";
+import { CLIPFIRST_DIR } from "../db/client.js";
+import { getMetadataDb } from "../db/metadata-client.js";
+import {
+  audioWaveformExportPath,
+  deleteAudioWaveformRow,
+} from "../db/audio-waveforms.js";
 
 function projectsDirOf(projectDir: string): string {
   return path.dirname(projectDir);
+}
+
+/**
+ * Remove SQLite metadata rows tied to this asset, plus their canonical export
+ * files. Returns the list of repo-relative paths that should be staged in the
+ * delete commit alongside the asset directory.
+ */
+async function cleanupAssetSqliteState(
+  projectDir: string,
+  assetId: string,
+): Promise<string[]> {
+  const metadataPath = path.join(
+    projectDir,
+    CLIPFIRST_DIR,
+    "metadata.sqlite",
+  );
+  try {
+    const stat = await fs.stat(metadataPath);
+    if (!stat.isFile()) return [];
+  } catch {
+    return [];
+  }
+  const db = getMetadataDb(projectDir);
+  const before = db
+    .prepare("SELECT 1 FROM audio_waveforms WHERE asset_id = ?")
+    .get(assetId);
+  if (!before) return [];
+  deleteAudioWaveformRow(db, assetId);
+  const exportRel = path.join(CLIPFIRST_DIR, "export", audioWaveformExportPath(assetId));
+  try {
+    await fs.unlink(path.join(projectDir, exportRel));
+  } catch {
+    // Already gone — fine.
+  }
+  return [path.join(CLIPFIRST_DIR, "metadata.sqlite"), exportRel];
 }
 
 export async function deleteAsset(
@@ -42,6 +83,9 @@ export async function deleteAsset(
       projectDir,
       async () => {
         await fs.rm(assetDir, { recursive: true, force: true });
+        const extraPaths = await cleanupAssetSqliteState(projectDir, assetId);
+        const paths =
+          extraPaths.length > 0 ? [assetId, ...extraPaths] : undefined;
         return commitOperation(
           projectDir,
           "delete",
@@ -49,6 +93,7 @@ export async function deleteAsset(
           undefined,
           gitPath,
           true,
+          paths,
         );
       },
       gitPath,

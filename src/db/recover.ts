@@ -9,6 +9,11 @@ import { withGitLock } from "../git/mutex.js";
 import { exportAssetMetadata, readAssetMetadata } from "./asset-metadata.js";
 import { exportAssetEvents } from "./asset-events.js";
 import {
+  audioWaveformExportPath,
+  exportAudioWaveform,
+  listAudioWaveformAssetIds,
+} from "./audio-waveforms.js";
+import {
   exportCharacterPins,
   exportCharacters,
   readCharacter,
@@ -132,13 +137,19 @@ function operationCommitted(
 async function rebuildKnownExports(projectDir: string): Promise<string[]> {
   const db = getMetadataDb(projectDir);
   const exportRoot = path.join(projectDir, CLIPFIRST_DIR, "export");
-  const exports = [
+  const exports: Array<{ rel: string; body: string }> = [
     { rel: "asset_events.json", body: exportAssetEvents(db) },
     { rel: "asset_metadata.json", body: exportAssetMetadata(db) },
     { rel: "characters.json", body: exportCharacters(db) },
     { rel: "character_pins.json", body: exportCharacterPins(db) },
     { rel: "timeline.json", body: exportTimeline(db) },
   ];
+  for (const assetId of listAudioWaveformAssetIds(db)) {
+    exports.push({
+      rel: audioWaveformExportPath(assetId),
+      body: exportAudioWaveform(db, assetId),
+    });
+  }
   const written: string[] = [];
   await fs.mkdir(exportRoot, { recursive: true });
   for (const e of exports) {

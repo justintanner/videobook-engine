@@ -41,3 +41,14 @@ export function isProjectSlug(name: string): boolean {
   if (!name || name.startsWith('.')) return false;
   return /^[a-z0-9][a-z0-9-]*[a-z0-9]$|^[a-z0-9]$/.test(name);
 }
+
+/**
+ * Public alias for `isProjectSlug` — the strict validator used by project
+ * creation. Lowercase letters, digits, and internal hyphens only.
+ *
+ * Use this to validate untrusted project slugs at API boundaries (e.g. before
+ * routing a queue payload to a per-project SQLite file).
+ */
+export function isValidProjectSlug(slug: string): boolean {
+  return isProjectSlug(slug);
+}

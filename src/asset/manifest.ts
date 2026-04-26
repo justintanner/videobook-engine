@@ -41,6 +41,7 @@ export async function getManifest(
           name: entry.name,
           size_bytes: stat.size,
           extension: ext ? ext.slice(1) : null,
+          mtimeMs: stat.mtimeMs,
         });
       } catch {
         // File vanished between readdir and stat — skip it
