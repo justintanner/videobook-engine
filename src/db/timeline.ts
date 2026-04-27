@@ -12,8 +12,19 @@ export interface TimelineSlot {
   audioFadeOut?: number;
 }
 
+export interface TimelineAudioClip {
+  id: string;
+  slug: string;
+  startFrame: number;
+  durationFrames: number;
+  volume?: number;
+  fadeIn?: number;
+  fadeOut?: number;
+}
+
 export interface TimelineConfig {
   slots: TimelineSlot[];
+  audio?: TimelineAudioClip[];
   render: Orientation;
   currentOrientation?: ViewerOrientation;
 }
@@ -33,12 +44,33 @@ interface SlotRow {
   audio_fade_out: number | null;
 }
 
+interface AudioRow {
+  id: string;
+  asset_id: string;
+  start_frame: number;
+  duration_frames: number;
+  volume: number | null;
+  fade_in: number | null;
+  fade_out: number | null;
+  ordinal: number;
+}
+
 function isOrientation(value: unknown): value is Orientation {
   return value === "landscape" || value === "portrait" || value === "square";
 }
 
 function isViewerOrientation(value: unknown): value is ViewerOrientation {
   return isOrientation(value) || value === "original";
+}
+
+function timelineAudioTableExists(db: DatabaseType): boolean {
+  return Boolean(
+    db
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name='timeline_audio'",
+      )
+      .get(),
+  );
 }
 
 export function readTimeline(db: DatabaseType): TimelineConfig | null {
@@ -52,12 +84,23 @@ export function readTimeline(db: DatabaseType): TimelineConfig | null {
        FROM timeline_slots ORDER BY position`,
     )
     .all() as SlotRow[]).map(slotRowToObject);
+
+  const audio = timelineAudioTableExists(db)
+    ? (db
+        .prepare(
+          `SELECT id, asset_id, start_frame, duration_frames, volume, fade_in, fade_out, ordinal
+           FROM timeline_audio ORDER BY ordinal`,
+        )
+        .all() as AudioRow[]).map(audioRowToObject)
+    : [];
+
   return {
     render: row.render,
     ...(row.current_orientation
       ? { currentOrientation: row.current_orientation }
       : {}),
     slots,
+    ...(audio.length > 0 ? { audio } : {}),
   };
 }
 
@@ -66,6 +109,19 @@ function slotRowToObject(row: SlotRow): TimelineSlot {
   if (row.volume != null) out.volume = row.volume;
   if (row.audio_fade_in != null) out.audioFadeIn = row.audio_fade_in;
   if (row.audio_fade_out != null) out.audioFadeOut = row.audio_fade_out;
+  return out;
+}
+
+function audioRowToObject(row: AudioRow): TimelineAudioClip {
+  const out: TimelineAudioClip = {
+    id: row.id,
+    slug: row.asset_id,
+    startFrame: row.start_frame,
+    durationFrames: row.duration_frames,
+  };
+  if (row.volume != null) out.volume = row.volume;
+  if (row.fade_in != null) out.fadeIn = row.fade_in;
+  if (row.fade_out != null) out.fadeOut = row.fade_out;
   return out;
 }
 
@@ -98,6 +154,29 @@ export function writeTimeline(db: DatabaseType, config: TimelineConfig): void {
       typeof slot.audioFadeIn === "number" ? slot.audioFadeIn : null,
       typeof slot.audioFadeOut === "number" ? slot.audioFadeOut : null,
     );
+  }
+
+  if (timelineAudioTableExists(db)) {
+    db.prepare("DELETE FROM timeline_audio").run();
+    const insertAudio = db.prepare(
+      `INSERT INTO timeline_audio
+       (id, asset_id, start_frame, duration_frames, volume, fade_in, fade_out, ordinal)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    );
+    const clips = config.audio ?? [];
+    for (let i = 0; i < clips.length; i++) {
+      const clip = clips[i]!;
+      insertAudio.run(
+        clip.id,
+        clip.slug,
+        clip.startFrame,
+        clip.durationFrames,
+        typeof clip.volume === "number" ? clip.volume : null,
+        typeof clip.fadeIn === "number" ? clip.fadeIn : null,
+        typeof clip.fadeOut === "number" ? clip.fadeOut : null,
+        i,
+      );
+    }
   }
 }
 

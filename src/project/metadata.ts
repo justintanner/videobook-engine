@@ -50,6 +50,43 @@ function slotsAreValid(slots: unknown[]): boolean {
   return true;
 }
 
+function coerceAudioClips(value: unknown): TimelineConfig["audio"] | null {
+  if (value === undefined) return undefined;
+  if (!Array.isArray(value)) return null;
+  const out: NonNullable<TimelineConfig["audio"]> = [];
+  for (const raw of value) {
+    if (typeof raw !== "object" || raw === null) return null;
+    const clip = raw as {
+      id?: unknown;
+      slug?: unknown;
+      startFrame?: unknown;
+      durationFrames?: unknown;
+      volume?: unknown;
+      fadeIn?: unknown;
+      fadeOut?: unknown;
+    };
+    if (
+      typeof clip.id !== "string" ||
+      typeof clip.slug !== "string" ||
+      typeof clip.startFrame !== "number" ||
+      typeof clip.durationFrames !== "number"
+    ) {
+      return null;
+    }
+    const next: NonNullable<TimelineConfig["audio"]>[number] = {
+      id: clip.id,
+      slug: clip.slug,
+      startFrame: clip.startFrame,
+      durationFrames: clip.durationFrames,
+    };
+    if (typeof clip.volume === "number") next.volume = clip.volume;
+    if (typeof clip.fadeIn === "number") next.fadeIn = clip.fadeIn;
+    if (typeof clip.fadeOut === "number") next.fadeOut = clip.fadeOut;
+    out.push(next);
+  }
+  return out;
+}
+
 /**
  * Coerce both legacy shapes into a canonical TimelineConfig:
  *   - bare array of slots                → { slots: data, render: 'landscape' }
@@ -88,6 +125,14 @@ function coerceTimelineConfig(value: unknown): TimelineConfig | null {
     obj.currentOrientation === "original"
   ) {
     config.currentOrientation = obj.currentOrientation;
+  }
+  const rawAudio = (obj as { audio?: unknown }).audio;
+  if (rawAudio !== undefined) {
+    const coercedAudio = coerceAudioClips(rawAudio);
+    if (coercedAudio === null) return null;
+    if (coercedAudio !== undefined && coercedAudio.length > 0) {
+      config.audio = coercedAudio;
+    }
   }
   return config;
 }
@@ -177,6 +222,11 @@ export async function writeProjectMeta(
       const db = getMetadataDb(projectDir);
       db.prepare("DELETE FROM timeline").run();
       db.prepare("DELETE FROM timeline_slots").run();
+      try {
+        db.prepare("DELETE FROM timeline_audio").run();
+      } catch {
+        // table missing on legacy projects pre-migration 3
+      }
     } catch {
       // ignore — DB not initialized yet
     }

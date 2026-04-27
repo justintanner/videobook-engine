@@ -7,6 +7,7 @@ import Database, { type Database as DatabaseType } from "better-sqlite3";
 import { CLIPFIRST_DIR } from "./client.js";
 import * as m0001 from "./migrations/metadata_0001_init.js";
 import * as m0002 from "./migrations/metadata_0002_audio_waveforms.js";
+import * as m0003 from "./migrations/metadata_0003_timeline_audio.js";
 
 export const METADATA_DB_FILENAME = "metadata.sqlite";
 
@@ -16,7 +17,7 @@ interface MetadataMigration {
   up: (db: DatabaseType) => void;
 }
 
-const METADATA_MIGRATIONS: ReadonlyArray<MetadataMigration> = [m0001, m0002];
+const METADATA_MIGRATIONS: ReadonlyArray<MetadataMigration> = [m0001, m0002, m0003];
 
 const cache = new Map<string, DatabaseType>();
 
