@@ -94,6 +94,7 @@ All methods are available on the object returned by `createFs(config)`. Unless n
 | `deleteAsset(assetId, projectSlug)` | `Promise<Result<{ deleted_at }, FsError>>` |
 | `renameAsset(assetId, newName, projectSlug)` | `Promise<Result<{ old_asset_id, new_asset_id }, FsError>>` |
 | `getManifest(assetId, projectSlug, options?)` | `Promise<Result<AssetManifest, FsError>>` |
+| `getAssetStatus(assetId, projectSlug, options?)` | `Promise<Result<AssetStatus, FsError>>` |
 | `listAssetSubdir(assetId, subdirName, projectSlug)` | `Promise<Result<string[], FsError>>` |
 | `slugTaken(slug, projectSlug)` | `Promise<boolean>` |
 
@@ -111,6 +112,8 @@ All methods are available on the object returned by `createFs(config)`. Unless n
 ### Metadata
 
 `writeMetadata(assetId, 'character', record, ...)` is special-cased: the record is stored in the typed `characters` table in `metadata.sqlite`. Other keys are stored in the generic `asset_metadata` table. In both cases a `.{key}.json` sidecar is also written next to the asset and the operation produces a single git commit covering the SQLite file, the canonical export, and the sidecar.
+
+`writeProjectMeta(key, data, ...)` with `key === 'timeline'` is also special-cased and **strict**: `data` must be `{ slots: [{ slug, ... }, ...], render: 'landscape' | 'portrait' | 'square' }` (an optional `currentOrientation` and an optional `audio` array are accepted). Non-conforming payloads return `INVALID_INPUT`. Reads come from SQLite only — there is no sidecar fallback. Other project-meta keys are written as plain `.{key}.json` sidecars.
 
 | Method | Return Type |
 |--------|------------|
@@ -181,11 +184,52 @@ const result = await fs.queue.enqueueAndWait<RenderResult>(slug, {
 });
 ```
 
+### Pending tasks
+
+Tracks external long-running provider jobs (transcription, generation, etc.) in the `pending_tasks` table of `state.sqlite`. Each row is keyed by `assetId`; `taskId` is the provider's task identifier (or `QUEUED_TASK_ID` for jobs that haven't been submitted yet). `createdAt` is **epoch seconds**.
+
+```typescript
+import { QUEUED_TASK_ID } from 'clipfirst-engine';
+
+await fs.pendingTasks.write(slug, {
+  assetId: 'vid-clip-1',
+  taskId: QUEUED_TASK_ID,
+  taskType: 'fal_seedance2_t2v',
+  assetDir: '/path/to/projects/proj-x/vid-clip-1',
+  meta: { prompt: 'sunset over ocean' },
+});
+
+// Atomic: write a generation_errors row + delete the pending_tasks row.
+await fs.pendingTasks.fail(slug, 'vid-clip-1', { message: 'provider rejected', failCode: 'NSFW' });
+```
+
+| Method | Return Type |
+|--------|------------|
+| `pendingTasks.write(projectSlug, input)` | `Promise<Result<PendingTask, FsError>>` |
+| `pendingTasks.read(projectSlug, assetId)` | `Promise<Result<PendingTask \| null, FsError>>` |
+| `pendingTasks.delete(projectSlug, assetId)` | `Promise<Result<boolean, FsError>>` |
+| `pendingTasks.markCompleting(projectSlug, assetId)` | `Promise<Result<boolean, FsError>>` |
+| `pendingTasks.clearCompleting(projectSlug, assetId)` | `Promise<Result<boolean, FsError>>` |
+| `pendingTasks.findAll(projectSlug)` | `Promise<Result<PendingTask[], FsError>>` |
+| `pendingTasks.findByExternalId(projectSlug, taskId)` | `Promise<Result<PendingTask \| null, FsError>>` |
+| `pendingTasks.fail(projectSlug, assetId, info)` | `Promise<Result<GenerationError, FsError>>` |
+
+### Generation errors
+
+Sibling table to `pending_tasks` for terminal failures. `failedAt` is **epoch seconds**.
+
+| Method | Return Type |
+|--------|------------|
+| `generationErrors.write(projectSlug, assetId, info)` | `Promise<Result<GenerationError, FsError>>` |
+| `generationErrors.read(projectSlug, assetId)` | `Promise<Result<GenerationError \| null, FsError>>` |
+| `generationErrors.clear(projectSlug, assetId)` | `Promise<Result<boolean, FsError>>` |
+| `generationErrors.findAll(projectSlug)` | `Promise<Result<GenerationError[], FsError>>` |
+
 ### Lifecycle
 
 | Method | Return Type |
 |--------|------------|
-| `ensureClipfirstSetup(slug)` | `Promise<void>` — idempotently bootstrap `.clipfirst/` for a legacy project |
+| `ensureProjectInitialized(slug)` | `Promise<void>` — idempotently create `.clipfirst/`, open the state DB, apply gitignore patterns. Safe to call on every boot or enqueue. |
 | `recoverIncompleteOperations(slug)` | `Promise<number>` — drain the recovery journal at startup |
 | `checkSchemaVersion(slug)` | `Promise<VersionCheckResult>` — refuse to open a project written by a newer build |
 | `close()` | `void` — close all SQLite handles before process exit |
