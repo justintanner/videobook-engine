@@ -1,12 +1,12 @@
 /**
- * Basic usage of clipfirst-fs: create a project, add assets, write/read files.
+ * Basic usage of clipfirst-engine: create a project, add assets, write/read files.
  *
  * Run: npx tsx examples/basic-usage.ts
  */
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { createFs } from 'clipfirst-fs';
+import { createFs } from 'clipfirst-engine';
 
 const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'clipfirst-basic-'));
 const projectsDir = path.join(tmpDir, 'projects');

@@ -77,7 +77,6 @@ import {
   type GenerationError,
   type FailureInfo,
   type WritePendingTaskInput,
-  type BackfillReport,
   writePendingTask,
   markPendingTaskCompleting,
   clearPendingTaskCompleting,
@@ -90,7 +89,6 @@ import {
   readGenerationError,
   clearGenerationError,
   failPendingTask,
-  backfillPendingTaskSidecars,
 } from "./pending-task/index.js";
 import {
   checkProjectSchemaVersion,
@@ -296,16 +294,13 @@ export interface ClipfirstFs {
   // Resolve a project slug to a directory; null if not present.
   resolveProjectDir(slug?: string): Promise<string | null>;
 
-  // Lazy bootstrap of .clipfirst/ for legacy projects (idempotent).
-  ensureClipfirstSetup(slug: string): Promise<void>;
+  // Idempotent initialization: ensures .clipfirst/ exists, opens state DB,
+  // applies gitignore patterns. Safe to call on every boot or enqueue.
+  ensureProjectInitialized(slug: string): Promise<void>;
 
   // Abort any orphan recovery_journal rows from a prior process generation.
   // Returns the number of rows aborted.
   recoverIncompleteOperations(slug: string): Promise<number>;
-
-  // Migrate any leftover .kie-task.json / .generation-error.json sidecars in
-  // this project into the sqlite tables. Idempotent — safe to run on every boot.
-  backfillPendingTaskSidecars(slug: string): Promise<BackfillReport>;
 
   // Refuse to open if a SQLite file in this project records a higher schema
   // version than this build supports (downgrade guard). Returns the check result.
@@ -591,7 +586,7 @@ export function createFs(config: FsConfig): ClipfirstFs {
 
     resolveProjectDir: (slug) => resolve(slug ?? ""),
 
-    ensureClipfirstSetup: async (slug) => {
+    ensureProjectInitialized: async (slug) => {
       const dir = await resolve(slug);
       if (!dir) return;
       // Opening the state DB is idempotent and creates .clipfirst/ as a side-effect.
@@ -604,15 +599,6 @@ export function createFs(config: FsConfig): ClipfirstFs {
       if (!dir) return 0;
       const result = await recoverOnStartup(dir);
       return result.aborted;
-    },
-
-    backfillPendingTaskSidecars: async (slug) => {
-      const dir = await resolve(slug);
-      if (!dir) return { pendingTasksMigrated: 0, generationErrorsMigrated: 0 };
-      // Ensure .clipfirst/state.sqlite exists and is migrated before we touch
-      // pending_tasks / generation_errors.
-      getStateDb(dir);
-      return backfillPendingTaskSidecars(dir, gitPath);
     },
 
     checkSchemaVersion: async (slug) => {
@@ -837,7 +823,6 @@ export type {
   FailureInfo,
   TaskType,
   WritePendingTaskInput,
-  BackfillReport,
 } from "./pending-task/index.js";
 export { QUEUED_TASK_ID } from "./pending-task/index.js";
 

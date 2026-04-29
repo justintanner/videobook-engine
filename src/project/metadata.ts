@@ -87,20 +87,9 @@ function coerceAudioClips(value: unknown): TimelineConfig["audio"] | null {
   return out;
 }
 
-/**
- * Coerce both legacy shapes into a canonical TimelineConfig:
- *   - bare array of slots                → { slots: data, render: 'landscape' }
- *   - { slots, render }                  → as-is
- *   - anything else (test fixtures etc.) → null (caller falls through to
- *     the plain sidecar write path, AND we clear the SQLite row so reads
- *     do not return a stale default).
- */
+/** Validate a `{slots, render}` timeline payload. Returns null on shape mismatch. */
 function coerceTimelineConfig(value: unknown): TimelineConfig | null {
-  if (Array.isArray(value)) {
-    if (!slotsAreValid(value)) return null;
-    return { slots: value as TimelineConfig["slots"], render: "landscape" };
-  }
-  if (typeof value !== "object" || value === null) return null;
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
   const obj = value as {
     slots?: unknown;
     render?: unknown;
@@ -199,37 +188,26 @@ export async function writeProjectMeta(
 
   if (key === TIMELINE_KEY) {
     const coerced = coerceTimelineConfig(data);
-    if (coerced) {
-      try {
-        await writeTimelineToSqlite(
-          projectDir,
-          coerced,
-          json,
-          filePath,
-          gitPath,
-        );
-      } catch (error: unknown) {
-        return err({
-          code: "IO_ERROR",
-          message: error instanceof Error ? error.message : String(error),
-        });
-      }
-      return ok(filePath);
+    if (!coerced) {
+      return invalidInput(
+        "timeline payload must be { slots: [{slug, ...}], render: 'landscape'|'portrait'|'square' }",
+      );
     }
-    // Non-conforming payload — drop any SQLite timeline row so reads fall
-    // back to the sidecar, and continue to the legacy sidecar write below.
     try {
-      const db = getMetadataDb(projectDir);
-      db.prepare("DELETE FROM timeline").run();
-      db.prepare("DELETE FROM timeline_slots").run();
-      try {
-        db.prepare("DELETE FROM timeline_audio").run();
-      } catch {
-        // table missing on legacy projects pre-migration 3
-      }
-    } catch {
-      // ignore — DB not initialized yet
+      await writeTimelineToSqlite(
+        projectDir,
+        coerced,
+        json,
+        filePath,
+        gitPath,
+      );
+    } catch (error: unknown) {
+      return err({
+        code: "IO_ERROR",
+        message: error instanceof Error ? error.message : String(error),
+      });
     }
+    return ok(filePath);
   }
 
   await withGitLock(projectDir, async () => {
@@ -259,23 +237,14 @@ export async function readProjectMeta<T>(
   const keyErr = validateKey(key);
   if (keyErr) return keyErr;
 
-  // Timeline reads from SQLite when present; falls back to sidecar otherwise
-  // so unmigrated projects keep working. We check that .clipfirst/ exists
-  // on disk first to avoid resurrecting a stale cached connection for a
-  // project whose metadata DB was deleted (legacy fallback or rollback).
   if (key === TIMELINE_KEY) {
-    try {
-      const probe = await fs.stat(
-        path.join(projectDir, ".clipfirst", "metadata.sqlite"),
-      );
-      if (probe.isFile()) {
-        const db = getMetadataDb(projectDir);
-        const timeline = readTimeline(db);
-        if (timeline) return ok(timeline as unknown as T);
-      }
-    } catch {
-      // fall through to sidecar
-    }
+    const db = getMetadataDb(projectDir);
+    const timeline = readTimeline(db);
+    if (timeline) return ok(timeline as unknown as T);
+    return err({
+      code: "NOT_FOUND",
+      message: `Project metadata not found: ${key}`,
+    });
   }
 
   const filePath = path.join(projectDir, metadataFilename(key));

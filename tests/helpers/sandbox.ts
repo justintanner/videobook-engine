@@ -17,7 +17,7 @@ export interface Sandbox {
 }
 
 export async function createSandbox(): Promise<Sandbox> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'clipfirst-fs-test-'));
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'clipfirst-engine-test-'));
   const projectsDir = path.join(dir, 'projects');
   await fs.mkdir(projectsDir, { recursive: true });
 

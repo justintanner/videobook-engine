@@ -29,8 +29,3 @@ export {
 } from "./errors.js";
 
 export { failPendingTask } from "./fail.js";
-
-export {
-  type BackfillReport,
-  backfillPendingTaskSidecars,
-} from "./backfill.js";

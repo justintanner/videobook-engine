@@ -102,26 +102,6 @@ describe("timeline metadata.sqlite migration", () => {
     expect(parsed.slots[0].slug).toBe("vid-z");
   });
 
-  it("falls back to sidecar when SQLite has no timeline (legacy project)", async () => {
-    // Write a sidecar directly without going through writeProjectMeta
-    const sidecarPath = path.join(projectDir, ".timeline.json");
-    await fs.writeFile(
-      sidecarPath,
-      JSON.stringify({
-        slots: [{ slug: "legacy-vid" }],
-        render: "landscape",
-      }),
-    );
-
-    const read = await cfs.readProjectMeta<{ slots: Array<{ slug: string }>; render: string }>(
-      "timeline",
-      "p",
-    );
-    expect(read.ok).toBe(true);
-    if (!read.ok) return;
-    expect(read.value.slots[0].slug).toBe("legacy-vid");
-  });
-
   it("two concurrent timeline writes do not interleave", async () => {
     const writes = [
       cfs.writeProjectMeta(

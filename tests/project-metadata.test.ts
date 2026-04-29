@@ -24,16 +24,16 @@ describe("project metadata", () => {
   });
 
   it("roundtrips write + read", async () => {
-    const data = { slots: [{ id: 1, label: "intro" }], version: 2 };
+    const data = { foo: "bar", version: 2 };
     const writeResult = await sandbox.fs.writeProjectMeta(
-      "timeline",
+      "scratch",
       data,
       projectSlug,
     );
     expect(writeResult.ok).toBe(true);
 
     const readResult = await sandbox.fs.readProjectMeta<typeof data>(
-      "timeline",
+      "scratch",
       projectSlug,
     );
     expect(readResult.ok).toBe(true);
@@ -59,7 +59,7 @@ describe("project metadata", () => {
   });
 
   it("write produces git commit with key in message", async () => {
-    await sandbox.fs.writeProjectMeta("timeline", { a: 1 }, projectSlug);
+    await sandbox.fs.writeProjectMeta("scratch", { a: 1 }, projectSlug);
 
     const projectResult = await sandbox.fs.getProject(projectSlug);
     if (!projectResult.ok) throw new Error("Failed to get project");
@@ -68,7 +68,7 @@ describe("project metadata", () => {
     const { stdout } = await execFileAsync("git", ["log", "--oneline", "-1"], {
       cwd: projectDir,
     });
-    expect(stdout).toContain(".timeline.json");
+    expect(stdout).toContain(".scratch.json");
     expect(stdout).toContain("write");
   });
 

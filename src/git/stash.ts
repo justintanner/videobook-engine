@@ -1,6 +1,6 @@
 import { gitExec, gitExecSafe } from "./exec.js";
 
-const STASH_MESSAGE = "clipfirst-fs: auto-stash";
+const STASH_MESSAGE = "clipfirst-engine: auto-stash";
 
 export async function withCleanWorktree<T>(
   projectDir: string,

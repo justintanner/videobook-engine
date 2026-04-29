@@ -29,8 +29,10 @@ interface PinRow {
 }
 
 export interface CharacterRecord {
-  // Free-form: callers store whatever shape they have. Pins are also embedded
-  // here so legacy callers see the same JSON they always have.
+  // Free-form metadata blob plus pin slots. Pin arrays are sourced from the
+  // canonical `character_pins` table on read; there is no separate pin-read
+  // API. Writes strip pins from raw_json before storing so the table is the
+  // single source of truth.
   [key: string]: unknown;
   wardrobe?: string[];
   poses?: string[];

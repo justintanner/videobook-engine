@@ -6,7 +6,7 @@
 import * as fs from 'node:fs/promises';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { createFs } from 'clipfirst-fs';
+import { createFs } from 'clipfirst-engine';
 
 const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'clipfirst-projects-'));
 const outputDir = path.join(tmpDir, 'output');

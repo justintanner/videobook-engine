@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-clipfirst-fs is a TypeScript/Node.js filesystem abstraction library for managing video, image, audio, script, and character asset projects. Each project is a git repo with a `.clipfirst/` sidecar that holds two SQLite databases: `state.sqlite` for ephemeral coordination (locks, job queue, recovery journal, process locks) and `metadata.sqlite` for content metadata (timeline, characters, asset/project metadata, audio waveforms). It is an ESM package targeting Node.js >= 20.
+clipfirst-engine is a TypeScript/Node.js filesystem abstraction library for managing video, image, audio, script, and character asset projects. Each project is a git repo with a `.clipfirst/` sidecar that holds two SQLite databases: `state.sqlite` for ephemeral coordination (locks, job queue, recovery journal, process locks) and `metadata.sqlite` for content metadata (timeline, characters, asset/project metadata, audio waveforms). It is an ESM package targeting Node.js >= 20.
 
 ## Commands
 

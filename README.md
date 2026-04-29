@@ -1,6 +1,6 @@
-# clipfirst-fs
+# clipfirst-engine
 
-[![CI](https://github.com/justintanner/clipfirst-fs/actions/workflows/ci.yml/badge.svg)](https://github.com/justintanner/clipfirst-fs/actions/workflows/ci.yml)
+[![CI](https://github.com/justintanner/clipfirst-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/justintanner/clipfirst-engine/actions/workflows/ci.yml)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D20-brightgreen)](https://nodejs.org)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.5-blue)](https://www.typescriptlang.org)
 
@@ -9,13 +9,13 @@ TypeScript/Node.js filesystem abstraction for managing video, image, audio, scri
 ## Install
 
 ```bash
-npm install clipfirst-fs
+npm install clipfirst-engine
 ```
 
 ## Quick Start
 
 ```typescript
-import { createFs } from 'clipfirst-fs';
+import { createFs } from 'clipfirst-engine';
 
 const fs = createFs({ projectsDir: '/path/to/projects' });
 
