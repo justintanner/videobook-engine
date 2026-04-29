@@ -832,3 +832,26 @@ export type {
   GetAssetStatusOptions,
 } from "./asset/status.js";
 export { computeAssetStatus } from "./asset/status.js";
+
+export {
+  findAudioFile,
+  findVideoFile,
+  findPrimaryMediaFile,
+  RENDER_ORIENTATIONS,
+} from "./asset/media-files.js";
+export type { RenderOrientation } from "./asset/media-files.js";
+
+export {
+  parseAssetTags,
+  resolveAllAssets,
+  expandSlotRefs,
+} from "./asset/resolver.js";
+export type { ResolvedAsset } from "./asset/resolver.js";
+
+export {
+  logUserTurn,
+  logAssistantTurn,
+  getRecentHistory,
+  formatHistoryForPrompt,
+} from "./chat-log.js";
+export type { ChatLogEntry } from "./chat-log.js";
