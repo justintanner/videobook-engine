@@ -26,6 +26,13 @@ import { listAssets } from "./asset/list.js";
 import { deleteAsset } from "./asset/delete.js";
 import { renameAsset } from "./asset/rename.js";
 import { getManifest } from "./asset/manifest.js";
+import {
+  type AssetStatus,
+  type AssetStatusInput,
+  type GetAssetStatusOptions,
+  computeAssetStatus,
+  getAssetStatus,
+} from "./asset/status.js";
 
 import { writeFile } from "./file/write.js";
 import { readFile } from "./file/read.js";
@@ -65,6 +72,26 @@ import { queueApi, type QueueApi } from "./queue/index.js";
 import { ensureGitignorePatterns } from "./db/gitignore.js";
 import { getStateDb, closeAllStateDbs } from "./db/client.js";
 import { recoverOnStartup } from "./db/recover.js";
+import {
+  type PendingTask,
+  type GenerationError,
+  type FailureInfo,
+  type WritePendingTaskInput,
+  type BackfillReport,
+  writePendingTask,
+  markPendingTaskCompleting,
+  clearPendingTaskCompleting,
+  readPendingTask,
+  deletePendingTask,
+  findAllPendingTasks,
+  findPendingTaskByExternalId,
+  findAllGenerationErrors,
+  writeGenerationError,
+  readGenerationError,
+  clearGenerationError,
+  failPendingTask,
+  backfillPendingTaskSidecars,
+} from "./pending-task/index.js";
 import {
   checkProjectSchemaVersion,
   type VersionCheckResult,
@@ -116,6 +143,11 @@ export interface ClipfirstFs {
     projectSlug: string,
     options?: { includeDotfiles?: boolean },
   ): Promise<Result<AssetManifest, FsError>>;
+  getAssetStatus(
+    assetId: string,
+    projectSlug: string,
+    options?: GetAssetStatusOptions,
+  ): Promise<Result<AssetStatus, FsError>>;
 
   // File
   writeFile(
@@ -252,6 +284,12 @@ export interface ClipfirstFs {
   // Query
   slugTaken(slug: string, projectSlug: string): Promise<boolean>;
 
+  // Pending tasks (external long-running provider jobs tracked in state.sqlite)
+  pendingTasks: ProjectScopedPendingTasks;
+
+  // Generation errors (terminal failure markers, sibling table to pending_tasks)
+  generationErrors: ProjectScopedGenerationErrors;
+
   // Persistent queue (state.sqlite) — see src/queue/index.ts
   queue: ProjectScopedQueue;
 
@@ -265,12 +303,67 @@ export interface ClipfirstFs {
   // Returns the number of rows aborted.
   recoverIncompleteOperations(slug: string): Promise<number>;
 
+  // Migrate any leftover .kie-task.json / .generation-error.json sidecars in
+  // this project into the sqlite tables. Idempotent — safe to run on every boot.
+  backfillPendingTaskSidecars(slug: string): Promise<BackfillReport>;
+
   // Refuse to open if a SQLite file in this project records a higher schema
   // version than this build supports (downgrade guard). Returns the check result.
   checkSchemaVersion(slug: string): Promise<VersionCheckResult>;
 
   // Close all open SQLite handles (call before process exit).
   close(): void;
+}
+
+export interface ProjectScopedPendingTasks {
+  write(
+    projectSlug: string,
+    input: WritePendingTaskInput,
+  ): Promise<Result<PendingTask, FsError>>;
+  read(
+    projectSlug: string,
+    assetId: string,
+  ): Promise<Result<PendingTask | null, FsError>>;
+  delete(
+    projectSlug: string,
+    assetId: string,
+  ): Promise<Result<boolean, FsError>>;
+  markCompleting(
+    projectSlug: string,
+    assetId: string,
+  ): Promise<Result<boolean, FsError>>;
+  clearCompleting(
+    projectSlug: string,
+    assetId: string,
+  ): Promise<Result<boolean, FsError>>;
+  findAll(projectSlug: string): Promise<Result<PendingTask[], FsError>>;
+  findByExternalId(
+    projectSlug: string,
+    taskId: string,
+  ): Promise<Result<PendingTask | null, FsError>>;
+  /** Atomic: write generation_errors row + delete pending_tasks row in one tx. */
+  fail(
+    projectSlug: string,
+    assetId: string,
+    info: FailureInfo,
+  ): Promise<Result<GenerationError, FsError>>;
+}
+
+export interface ProjectScopedGenerationErrors {
+  write(
+    projectSlug: string,
+    assetId: string,
+    info: FailureInfo,
+  ): Promise<Result<GenerationError, FsError>>;
+  read(
+    projectSlug: string,
+    assetId: string,
+  ): Promise<Result<GenerationError | null, FsError>>;
+  clear(
+    projectSlug: string,
+    assetId: string,
+  ): Promise<Result<boolean, FsError>>;
+  findAll(projectSlug: string): Promise<Result<GenerationError[], FsError>>;
 }
 
 export interface ProjectScopedQueue {
@@ -370,6 +463,10 @@ export function createFs(config: FsConfig): ClipfirstFs {
       ),
     getManifest: (assetId, projectSlug, options) =>
       withProject(projectSlug, (dir) => getManifest(dir, assetId, options)),
+    getAssetStatus: (assetId, projectSlug, options) =>
+      withProject(projectSlug, (dir) =>
+        getAssetStatus(dir, projectsDir, assetId, options),
+      ),
 
     // File
     writeFile: (assetId, filename, data, projectSlug) =>
@@ -487,6 +584,9 @@ export function createFs(config: FsConfig): ClipfirstFs {
       return historical.has(slug);
     },
 
+    pendingTasks: makePendingTasks(resolve),
+    generationErrors: makeGenerationErrors(resolve),
+
     queue: makeQueue(resolve),
 
     resolveProjectDir: (slug) => resolve(slug ?? ""),
@@ -504,6 +604,15 @@ export function createFs(config: FsConfig): ClipfirstFs {
       if (!dir) return 0;
       const result = await recoverOnStartup(dir);
       return result.aborted;
+    },
+
+    backfillPendingTaskSidecars: async (slug) => {
+      const dir = await resolve(slug);
+      if (!dir) return { pendingTasksMigrated: 0, generationErrorsMigrated: 0 };
+      // Ensure .clipfirst/state.sqlite exists and is migrated before we touch
+      // pending_tasks / generation_errors.
+      getStateDb(dir);
+      return backfillPendingTaskSidecars(dir, gitPath);
     },
 
     checkSchemaVersion: async (slug) => {
@@ -531,6 +640,58 @@ export function createFs(config: FsConfig): ClipfirstFs {
 // The metadata.sqlite migration count baked into this build. Bumped whenever
 // a new metadata migration ships in src/db/migrations/metadata_*.ts.
 const BUILD_METADATA_VERSION = 3;
+
+function makePendingTasks(
+  resolve: (slug: string) => Promise<string | null>,
+): ProjectScopedPendingTasks {
+  async function dirOrNotFound<T>(
+    slug: string,
+    fn: (dir: string) => Result<T, FsError>,
+  ): Promise<Result<T, FsError>> {
+    const dir = await resolve(slug);
+    if (!dir) return err({ code: "NOT_FOUND", message: "Project not found" });
+    return fn(dir);
+  }
+  return {
+    write: (slug, input) =>
+      dirOrNotFound(slug, (dir) => writePendingTask(dir, input)),
+    read: (slug, assetId) =>
+      dirOrNotFound(slug, (dir) => readPendingTask(dir, assetId)),
+    delete: (slug, assetId) =>
+      dirOrNotFound(slug, (dir) => deletePendingTask(dir, assetId)),
+    markCompleting: (slug, assetId) =>
+      dirOrNotFound(slug, (dir) => markPendingTaskCompleting(dir, assetId)),
+    clearCompleting: (slug, assetId) =>
+      dirOrNotFound(slug, (dir) => clearPendingTaskCompleting(dir, assetId)),
+    findAll: (slug) => dirOrNotFound(slug, (dir) => findAllPendingTasks(dir)),
+    findByExternalId: (slug, taskId) =>
+      dirOrNotFound(slug, (dir) => findPendingTaskByExternalId(dir, taskId)),
+    fail: (slug, assetId, info) =>
+      dirOrNotFound(slug, (dir) => failPendingTask(dir, assetId, info)),
+  };
+}
+
+function makeGenerationErrors(
+  resolve: (slug: string) => Promise<string | null>,
+): ProjectScopedGenerationErrors {
+  async function dirOrNotFound<T>(
+    slug: string,
+    fn: (dir: string) => Result<T, FsError>,
+  ): Promise<Result<T, FsError>> {
+    const dir = await resolve(slug);
+    if (!dir) return err({ code: "NOT_FOUND", message: "Project not found" });
+    return fn(dir);
+  }
+  return {
+    write: (slug, assetId, info) =>
+      dirOrNotFound(slug, (dir) => writeGenerationError(dir, assetId, info)),
+    read: (slug, assetId) =>
+      dirOrNotFound(slug, (dir) => readGenerationError(dir, assetId)),
+    clear: (slug, assetId) =>
+      dirOrNotFound(slug, (dir) => clearGenerationError(dir, assetId)),
+    findAll: (slug) => dirOrNotFound(slug, (dir) => findAllGenerationErrors(dir)),
+  };
+}
 
 function makeQueue(
   resolve: (slug: string) => Promise<string | null>,
@@ -669,3 +830,20 @@ export {
 export { closeAllStateDbs, closeStateDb, getStateDb } from "./db/client.js";
 export { isValidProjectSlug } from "./project/slug.js";
 export type { AudioWaveformRecord } from "./db/audio-waveforms.js";
+
+export type {
+  PendingTask,
+  GenerationError,
+  FailureInfo,
+  TaskType,
+  WritePendingTaskInput,
+  BackfillReport,
+} from "./pending-task/index.js";
+export { QUEUED_TASK_ID } from "./pending-task/index.js";
+
+export type {
+  AssetStatus,
+  AssetStatusInput,
+  GetAssetStatusOptions,
+} from "./asset/status.js";
+export { computeAssetStatus } from "./asset/status.js";

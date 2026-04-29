@@ -2,6 +2,7 @@ import type { Database } from "better-sqlite3";
 import { createHash } from "node:crypto";
 
 import * as m0001 from "./migrations/0001_init.js";
+import * as m0002 from "./migrations/0002_pending_tasks.js";
 
 interface Migration {
   version: number;
@@ -9,7 +10,7 @@ interface Migration {
   up: (db: Database) => void;
 }
 
-const STATE_MIGRATIONS: ReadonlyArray<Migration> = [m0001];
+const STATE_MIGRATIONS: ReadonlyArray<Migration> = [m0001, m0002];
 
 interface SchemaMigrationRow {
   version: number;
