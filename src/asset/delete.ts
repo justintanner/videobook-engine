@@ -7,7 +7,7 @@ import { withGitLock } from "../git/mutex.js";
 import { withCleanWorktree } from "../git/stash.js";
 import { isValidAssetId, isWithinDir, invalidInput } from "../validation.js";
 import { isLocked } from "../lock/query.js";
-import { CLIPFIRST_DIR } from "../db/client.js";
+import { CLIPFIRST_DIR, getStateDb } from "../db/client.js";
 import { getMetadataDb } from "../db/metadata-client.js";
 import {
   audioWaveformExportPath,
@@ -114,6 +114,21 @@ export async function deleteAsset(
       code: "GIT_ERROR",
       message: `Git commit failed for asset deletion: ${assetId}`,
     });
+  }
+
+  // Drop state.sqlite rows for the asset (assets/pending_tasks/generation_errors).
+  try {
+    const db = getStateDb(projectDir);
+    const tx = db.transaction(() => {
+      db.prepare("DELETE FROM assets WHERE asset_id = ?").run(assetId);
+      db.prepare("DELETE FROM pending_tasks WHERE asset_id = ?").run(assetId);
+      db.prepare("DELETE FROM generation_errors WHERE asset_id = ?").run(
+        assetId,
+      );
+    });
+    tx();
+  } catch {
+    // Tolerate; recovery sweeps strays on next boot.
   }
 
   return ok({ deleted_at: deletedAt });

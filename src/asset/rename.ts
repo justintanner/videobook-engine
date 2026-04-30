@@ -8,8 +8,9 @@ import { withGitLock } from "../git/mutex.js";
 import { withCleanWorktree } from "../git/stash.js";
 import { getHistoricalSlugs } from "../git/slugs.js";
 import { slugifyName } from "./slug.js";
-import { isValidAssetId, invalidInput, VALID_PREFIXES } from "../validation.js";
+import { isValidAssetId, invalidInput } from "../validation.js";
 import { isLocked } from "../lock/query.js";
+import { getStateDb } from "../db/client.js";
 
 const MAX_SLUG_ATTEMPTS = 1000;
 
@@ -39,6 +40,24 @@ export async function renameAsset(
 
   if (await isLocked(path.dirname(projectDir), assetDir)) {
     return err({ code: "LOCKED", message: `Asset is locked: ${cleanId}` });
+  }
+
+  // Status gate: only block while an owner actively holds the asset (status='working').
+  // 'pending' is just queued/idle and is safe to rename; lock-based gate above
+  // already covers held-mutex races.
+  try {
+    const db = getStateDb(projectDir);
+    const row = db
+      .prepare("SELECT status FROM assets WHERE asset_id = ?")
+      .get(cleanId) as { status: string } | undefined;
+    if (row && row.status === "working") {
+      return err({
+        code: "LOCKED",
+        message: `Asset is in-flight (status=working); rename blocked: ${cleanId}`,
+      });
+    }
+  } catch {
+    // Tolerate missing state DB; recovery sweeps strays.
   }
 
   // Extract prefix and build base slug — skip slugification if already a valid slug with correct prefix
@@ -109,6 +128,28 @@ export async function renameAsset(
       gitPath,
     );
   });
+
+  // Move the assets-row PK to the new slug.
+  if (result.ok) {
+    try {
+      const db = getStateDb(projectDir);
+      const tx = db.transaction(() => {
+        db.prepare("UPDATE assets SET asset_id = ? WHERE asset_id = ?").run(
+          result.value.new_asset_id,
+          result.value.old_asset_id,
+        );
+        db.prepare(
+          "UPDATE pending_tasks SET asset_id = ? WHERE asset_id = ?",
+        ).run(result.value.new_asset_id, result.value.old_asset_id);
+        db.prepare(
+          "UPDATE generation_errors SET asset_id = ? WHERE asset_id = ?",
+        ).run(result.value.new_asset_id, result.value.old_asset_id);
+      });
+      tx();
+    } catch {
+      // Tolerate; recovery sweeps strays on next boot.
+    }
+  }
 
   return result;
 }

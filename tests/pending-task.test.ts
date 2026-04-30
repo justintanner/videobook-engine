@@ -3,11 +3,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as os from "node:os";
 
-import {
-  createFs,
-  type ClipfirstFs,
-  QUEUED_TASK_ID,
-} from "../src/index.js";
+import { createFs, type ClipfirstFs } from "../src/index.js";
 import { closeAllStateDbs, getStateDb } from "../src/db/client.js";
 
 describe("pending tasks (sqlite-backed)", () => {
@@ -32,26 +28,44 @@ describe("pending tasks (sqlite-backed)", () => {
     return path.join(projectsDir, "p", "vid-demo");
   }
 
-  it("write/read/delete round-trip", async () => {
-    const written = await cfs.pendingTasks.write("p", {
-      assetId: "vid-demo",
-      taskId: "queued",
-      taskType: "fal_seedance2_t2v",
-      assetDir: assetDir(),
-      meta: { prompt: "a cat" },
+  async function beginLocalLease(assetId = "vid-demo"): Promise<string> {
+    const begin = await cfs.assetWork.begin("p", assetId, {
+      kind: "generate",
+      ownerKind: "job",
+      durationMs: 15 * 60_000,
     });
+    if (!begin) throw new Error(`failed to begin local lease for ${assetId}`);
+    return begin.ownerId;
+  }
+
+  it("write/read/delete round-trip", async () => {
+    const ownerId = await beginLocalLease();
+    const written = await cfs.pendingTasks.write(
+      "p",
+      {
+        assetId: "vid-demo",
+        taskId: "task-A",
+        taskType: "fal_seedance2_t2v",
+        assetDir: assetDir(),
+        meta: { prompt: "a cat" },
+      },
+      ownerId,
+    );
     expect(written.ok).toBe(true);
     if (!written.ok) return;
-    expect(written.value.completing).toBe(false);
-    expect(written.value.meta.prompt).toBe("a cat");
+    expect(written.value).not.toBeNull();
+    if (!written.value) return;
+    expect(written.value.pendingTask.completing).toBe(false);
+    expect(written.value.pendingTask.meta.prompt).toBe("a cat");
 
     const read = await cfs.pendingTasks.read("p", "vid-demo");
     expect(read.ok).toBe(true);
     if (!read.ok) return;
-    expect(read.value?.taskId).toBe("queued");
+    expect(read.value?.taskId).toBe("task-A");
     expect(read.value?.taskType).toBe("fal_seedance2_t2v");
+    expect(read.value?.ownerId).toBe(written.value.providerOwnerId);
 
-    const del = await cfs.pendingTasks.delete("p", "vid-demo");
+    const del = await cfs.pendingTasks.delete("p", "vid-demo", "task-A");
     expect(del.ok).toBe(true);
     if (!del.ok) return;
     expect(del.value).toBe(true);
@@ -62,23 +76,44 @@ describe("pending tasks (sqlite-backed)", () => {
     expect(after.value).toBeNull();
   });
 
-  it("write upserts existing rows (real task id replaces sentinel)", async () => {
-    await cfs.pendingTasks.write("p", {
-      assetId: "vid-demo",
-      taskId: QUEUED_TASK_ID,
-      taskType: "fal_nano_banana",
-      assetDir: assetDir(),
-    });
-    await cfs.pendingTasks.write("p", {
-      assetId: "vid-demo",
-      taskId: "fal-real-id-42",
-      taskType: "fal_nano_banana",
-      assetDir: assetDir(),
-    });
+  it("write CAS-refuses when expectedOwnerId no longer matches", async () => {
+    await beginLocalLease();
+    // Stale owner id from a prior session.
+    const written = await cfs.pendingTasks.write(
+      "p",
+      {
+        assetId: "vid-demo",
+        taskId: "task-stale",
+        taskType: "fal_nano_banana",
+        assetDir: assetDir(),
+      },
+      "stale-owner-id",
+    );
+    expect(written.ok).toBe(true);
+    if (!written.ok) return;
+    expect(written.value).toBeNull();
+
     const read = await cfs.pendingTasks.read("p", "vid-demo");
-    expect(read.ok).toBe(true);
-    if (!read.ok) return;
-    expect(read.value?.taskId).toBe("fal-real-id-42");
+    expect(read.ok && read.value).toBeNull();
+  });
+
+  it("delete CAS-refuses when task_id no longer matches", async () => {
+    const ownerId = await beginLocalLease();
+    await cfs.pendingTasks.write(
+      "p",
+      {
+        assetId: "vid-demo",
+        taskId: "task-real",
+        taskType: "fal_nano_banana",
+        assetDir: assetDir(),
+      },
+      ownerId,
+    );
+    const del = await cfs.pendingTasks.delete("p", "vid-demo", "task-stale");
+    expect(del.ok && del.value).toBe(false);
+
+    const read = await cfs.pendingTasks.read("p", "vid-demo");
+    expect(read.ok && read.value?.taskId).toBe("task-real");
   });
 
   it("write clears any prior generation error for the same asset", async () => {
@@ -86,12 +121,17 @@ describe("pending tasks (sqlite-backed)", () => {
     const before = await cfs.generationErrors.read("p", "vid-demo");
     expect(before.ok && before.value?.message).toBe("prior fail");
 
-    await cfs.pendingTasks.write("p", {
-      assetId: "vid-demo",
-      taskId: "queued",
-      taskType: "fal_nano_banana",
-      assetDir: assetDir(),
-    });
+    const ownerId = await beginLocalLease();
+    await cfs.pendingTasks.write(
+      "p",
+      {
+        assetId: "vid-demo",
+        taskId: "fresh",
+        taskType: "fal_nano_banana",
+        assetDir: assetDir(),
+      },
+      ownerId,
+    );
     const after = await cfs.generationErrors.read("p", "vid-demo");
     expect(after.ok).toBe(true);
     if (!after.ok) return;
@@ -99,13 +139,18 @@ describe("pending tasks (sqlite-backed)", () => {
   });
 
   it("markCompleting flips the dedup flag without losing other fields", async () => {
-    await cfs.pendingTasks.write("p", {
-      assetId: "vid-demo",
-      taskId: "task-7",
-      taskType: "fal_seedance2_t2v",
-      assetDir: assetDir(),
-      meta: { hint: "keep me" },
-    });
+    const ownerId = await beginLocalLease();
+    await cfs.pendingTasks.write(
+      "p",
+      {
+        assetId: "vid-demo",
+        taskId: "task-7",
+        taskType: "fal_seedance2_t2v",
+        assetDir: assetDir(),
+        meta: { hint: "keep me" },
+      },
+      ownerId,
+    );
     const m = await cfs.pendingTasks.markCompleting("p", "vid-demo");
     expect(m.ok && m.value).toBe(true);
     const read = await cfs.pendingTasks.read("p", "vid-demo");
@@ -121,12 +166,17 @@ describe("pending tasks (sqlite-backed)", () => {
   });
 
   it("findByExternalId looks up by provider task id", async () => {
-    await cfs.pendingTasks.write("p", {
-      assetId: "vid-demo",
-      taskId: "ext-99",
-      taskType: "fal_nano_banana",
-      assetDir: assetDir(),
-    });
+    const ownerId = await beginLocalLease();
+    await cfs.pendingTasks.write(
+      "p",
+      {
+        assetId: "vid-demo",
+        taskId: "ext-99",
+        taskType: "fal_nano_banana",
+        assetDir: assetDir(),
+      },
+      ownerId,
+    );
     const found = await cfs.pendingTasks.findByExternalId("p", "ext-99");
     expect(found.ok).toBe(true);
     if (!found.ok) return;
@@ -140,18 +190,28 @@ describe("pending tasks (sqlite-backed)", () => {
 
   it("findAll returns every pending task in the project", async () => {
     await cfs.createAsset("vid", "second", "p");
-    await cfs.pendingTasks.write("p", {
-      assetId: "vid-demo",
-      taskId: "queued",
-      taskType: "fal_nano_banana",
-      assetDir: assetDir(),
-    });
-    await cfs.pendingTasks.write("p", {
-      assetId: "vid-second",
-      taskId: "queued",
-      taskType: "fal_seedance2_t2v",
-      assetDir: path.join(projectsDir, "p", "vid-second"),
-    });
+    const ownerA = await beginLocalLease("vid-demo");
+    const ownerB = await beginLocalLease("vid-second");
+    await cfs.pendingTasks.write(
+      "p",
+      {
+        assetId: "vid-demo",
+        taskId: "tA",
+        taskType: "fal_nano_banana",
+        assetDir: assetDir(),
+      },
+      ownerA,
+    );
+    await cfs.pendingTasks.write(
+      "p",
+      {
+        assetId: "vid-second",
+        taskId: "tB",
+        taskType: "fal_seedance2_t2v",
+        assetDir: path.join(projectsDir, "p", "vid-second"),
+      },
+      ownerB,
+    );
     const all = await cfs.pendingTasks.findAll("p");
     expect(all.ok).toBe(true);
     if (!all.ok) return;
@@ -160,20 +220,26 @@ describe("pending tasks (sqlite-backed)", () => {
   });
 
   it("fail() atomically deletes pending_task and writes generation_error", async () => {
-    await cfs.pendingTasks.write("p", {
-      assetId: "vid-demo",
-      taskId: "queued",
-      taskType: "fal_nano_banana",
-      assetDir: assetDir(),
-    });
-    const failed = await cfs.pendingTasks.fail("p", "vid-demo", {
+    const ownerId = await beginLocalLease();
+    await cfs.pendingTasks.write(
+      "p",
+      {
+        assetId: "vid-demo",
+        taskId: "task-Z",
+        taskType: "fal_nano_banana",
+        assetDir: assetDir(),
+      },
+      ownerId,
+    );
+    const failed = await cfs.pendingTasks.fail("p", "vid-demo", "task-Z", {
       message: "provider rejected prompt",
       failCode: "policy_violation",
       prompt: "naughty",
     });
     expect(failed.ok).toBe(true);
     if (!failed.ok) return;
-    expect(failed.value.message).toBe("provider rejected prompt");
+    expect(failed.value).not.toBeNull();
+    expect(failed.value?.message).toBe("provider rejected prompt");
 
     const pending = await cfs.pendingTasks.read("p", "vid-demo");
     expect(pending.ok && pending.value).toBeNull();
@@ -183,6 +249,31 @@ describe("pending tasks (sqlite-backed)", () => {
     if (!stored.ok) return;
     expect(stored.value?.failCode).toBe("policy_violation");
     expect(stored.value?.prompt).toBe("naughty");
+  });
+
+  it("getOwner returns the per-row token", async () => {
+    const ownerId = await beginLocalLease();
+    const written = await cfs.pendingTasks.write(
+      "p",
+      {
+        assetId: "vid-demo",
+        taskId: "task-owner",
+        taskType: "fal_nano_banana",
+        assetDir: assetDir(),
+      },
+      ownerId,
+    );
+    expect(written.ok && written.value).not.toBeNull();
+    if (!written.ok || !written.value) return;
+    const owner = await cfs.pendingTasks.getOwner("p", "vid-demo", "task-owner");
+    expect(owner).toBe(written.value.providerOwnerId);
+
+    const missingOwner = await cfs.pendingTasks.getOwner(
+      "p",
+      "vid-demo",
+      "no-such-task",
+    );
+    expect(missingOwner).toBeNull();
   });
 
   it("generationErrors.clear removes the row", async () => {
@@ -219,12 +310,17 @@ describe("pending tasks (sqlite-backed)", () => {
   it("isolates state from other projects", async () => {
     await cfs.createProject("q");
     await cfs.createAsset("vid", "demo", "q");
-    await cfs.pendingTasks.write("p", {
-      assetId: "vid-demo",
-      taskId: "p-task",
-      taskType: "fal_nano_banana",
-      assetDir: assetDir(),
-    });
+    const ownerP = await beginLocalLease("vid-demo");
+    await cfs.pendingTasks.write(
+      "p",
+      {
+        assetId: "vid-demo",
+        taskId: "p-task",
+        taskType: "fal_nano_banana",
+        assetDir: assetDir(),
+      },
+      ownerP,
+    );
     const inQ = await cfs.pendingTasks.read("q", "vid-demo");
     expect(inQ.ok).toBe(true);
     if (!inQ.ok) return;

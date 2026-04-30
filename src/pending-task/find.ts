@@ -10,7 +10,7 @@ import {
 } from "./types.js";
 
 const PENDING_COLS =
-  "asset_id, task_id, task_type, asset_dir, created_at, meta, completing";
+  "asset_id, task_id, task_type, asset_dir, created_at, meta, completing, owner_id";
 
 const ERROR_COLS = "asset_id, message, fail_code, prompt, failed_at";
 

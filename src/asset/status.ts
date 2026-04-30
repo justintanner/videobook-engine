@@ -35,8 +35,6 @@ export type AssetStatus =
   | "render-queued-square"
   | "downloading"
   | "transcribing"
-  | "untranscribed"
-  | "corrupt"
   | "error"
   | "deleting"
   | "ready";

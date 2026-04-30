@@ -14,7 +14,7 @@ export function readPendingTask(
   try {
     const row = db
       .prepare(
-        `SELECT asset_id, task_id, task_type, asset_dir, created_at, meta, completing
+        `SELECT asset_id, task_id, task_type, asset_dir, created_at, meta, completing, owner_id
          FROM pending_tasks WHERE asset_id = ?`,
       )
       .get(assetId) as PendingTaskRow | undefined;

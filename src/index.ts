@@ -77,6 +77,7 @@ import {
   type GenerationError,
   type FailureInfo,
   type WritePendingTaskInput,
+  type WritePendingTaskResult,
   writePendingTask,
   markPendingTaskCompleting,
   clearPendingTaskCompleting,
@@ -89,7 +90,24 @@ import {
   readGenerationError,
   clearGenerationError,
   failPendingTask,
+  forceFailPendingTask,
+  getPendingTaskOwner,
 } from "./pending-task/index.js";
+import {
+  type AssetMeta,
+  type AssetOwnerKind,
+  type AssetView,
+  type AssetWorkKind,
+  type BeginAssetWorkInput,
+  beginAssetWork,
+  completeAssetWork,
+  failAssetWork,
+  renewAssetWork,
+  readAssetRow,
+  listAssetRows,
+} from "./asset/work.js";
+import { recoverAssetsTable, recoverAssetRow } from "./asset/recover.js";
+import { startAssetReaper, runReaperPass } from "./asset/reaper.js";
 import {
   checkProjectSchemaVersion,
   type VersionCheckResult,
@@ -288,6 +306,29 @@ export interface ClipfirstFs {
   // Generation errors (terminal failure markers, sibling table to pending_tasks)
   generationErrors: ProjectScopedGenerationErrors;
 
+  // Asset work APIs: durable status leases for asset-mutating handlers.
+  // beginAssetWork/completeAssetWork/failAssetWork/renewAssetWork all CAS on
+  // owner_id; readAssetRow/listAssetRows are O(1) reads of the materialized state.
+  assetWork: ProjectScopedAssetWork;
+
+  // Re-derive a single asset row from disk + tables. Called by restoreAsset
+  // and clearGenerationError.
+  recoverAssetRow(
+    projectSlug: string,
+    assetId: string,
+  ): Promise<Result<void, FsError>>;
+
+  // Walk every asset directory and rebuild assets-table rows. Called at boot.
+  recoverAssetsTable(
+    projectSlug: string,
+  ): Promise<Result<{ recovered: number }, FsError>>;
+
+  // Start the deadline-driven reaper for this project. Returns a stop handle.
+  startAssetReaper(
+    projectSlug: string,
+    opts: { intervalMs: number },
+  ): Promise<{ stop: () => void } | null>;
+
   // Persistent queue (state.sqlite) — see src/queue/index.ts
   queue: ProjectScopedQueue;
 
@@ -311,17 +352,25 @@ export interface ClipfirstFs {
 }
 
 export interface ProjectScopedPendingTasks {
+  /**
+   * Provider hand-off. When `expectedOwnerId` is provided, this call CAS-checks
+   * the assets row's owner_id; on mismatch the call is a no-op (returns ok(null)).
+   * Without it, the call is unconditional (legacy callers).
+   */
   write(
     projectSlug: string,
     input: WritePendingTaskInput,
-  ): Promise<Result<PendingTask, FsError>>;
+    expectedOwnerId?: string,
+  ): Promise<Result<WritePendingTaskResult | null, FsError>>;
   read(
     projectSlug: string,
     assetId: string,
   ): Promise<Result<PendingTask | null, FsError>>;
+  /** CAS by (asset_id, task_id). When expectedTaskId is omitted, deletes by asset_id alone. */
   delete(
     projectSlug: string,
     assetId: string,
+    expectedTaskId?: string,
   ): Promise<Result<boolean, FsError>>;
   markCompleting(
     projectSlug: string,
@@ -336,12 +385,61 @@ export interface ProjectScopedPendingTasks {
     projectSlug: string,
     taskId: string,
   ): Promise<Result<PendingTask | null, FsError>>;
-  /** Atomic: write generation_errors row + delete pending_tasks row in one tx. */
+  /** Legacy: fail by asset_id alone (no CAS). */
   fail(
     projectSlug: string,
     assetId: string,
     info: FailureInfo,
-  ): Promise<Result<GenerationError, FsError>>;
+  ): Promise<Result<GenerationError | null, FsError>>;
+  /** CAS by (asset_id, task_id). Writes generation_errors + fails assets row in one txn. */
+  fail(
+    projectSlug: string,
+    assetId: string,
+    expectedTaskId: string,
+    info: FailureInfo,
+  ): Promise<Result<GenerationError | null, FsError>>;
+  /** Force-fail by asset_id alone. Used by queue wrapper for jobs that died before registering a lease. */
+  forceFail(
+    projectSlug: string,
+    assetId: string,
+    info: FailureInfo,
+  ): Promise<Result<GenerationError | null, FsError>>;
+  /** Returns owner_id stored on (asset_id, task_id) row, or null if no match. */
+  getOwner(
+    projectSlug: string,
+    assetId: string,
+    taskId: string,
+  ): Promise<string | null>;
+}
+
+export interface ProjectScopedAssetWork {
+  begin(
+    projectSlug: string,
+    assetId: string,
+    input: BeginAssetWorkInput,
+  ): Promise<{ ownerId: string } | null>;
+  complete(
+    projectSlug: string,
+    assetId: string,
+    ownerId: string,
+  ): Promise<boolean>;
+  fail(
+    projectSlug: string,
+    assetId: string,
+    ownerId: string,
+    failure: { message: string; code?: string },
+  ): Promise<boolean>;
+  renew(
+    projectSlug: string,
+    assetId: string,
+    ownerId: string,
+    extendMs: number,
+  ): Promise<boolean>;
+  read(
+    projectSlug: string,
+    assetId: string,
+  ): Promise<Result<AssetView | null, FsError>>;
+  list(projectSlug: string): Promise<Result<AssetView[], FsError>>;
 }
 
 export interface ProjectScopedGenerationErrors {
@@ -581,6 +679,23 @@ export function createFs(config: FsConfig): ClipfirstFs {
 
     pendingTasks: makePendingTasks(resolve),
     generationErrors: makeGenerationErrors(resolve),
+    assetWork: makeAssetWork(resolve),
+
+    recoverAssetRow: async (slug, assetId) => {
+      const dir = await resolve(slug);
+      if (!dir) return err({ code: "NOT_FOUND", message: "Project not found" });
+      return recoverAssetRow(dir, projectsDir, assetId);
+    },
+    recoverAssetsTable: async (slug) => {
+      const dir = await resolve(slug);
+      if (!dir) return err({ code: "NOT_FOUND", message: "Project not found" });
+      return recoverAssetsTable(dir, projectsDir);
+    },
+    startAssetReaper: async (slug, opts) => {
+      const dir = await resolve(slug);
+      if (!dir) return null;
+      return startAssetReaper(dir, opts);
+    },
 
     queue: makeQueue(resolve),
 
@@ -639,12 +754,16 @@ function makePendingTasks(
     return fn(dir);
   }
   return {
-    write: (slug, input) =>
-      dirOrNotFound(slug, (dir) => writePendingTask(dir, input)),
+    write: (slug, input, expectedOwnerId) =>
+      dirOrNotFound(slug, (dir) =>
+        writePendingTask(dir, input, expectedOwnerId),
+      ),
     read: (slug, assetId) =>
       dirOrNotFound(slug, (dir) => readPendingTask(dir, assetId)),
-    delete: (slug, assetId) =>
-      dirOrNotFound(slug, (dir) => deletePendingTask(dir, assetId)),
+    delete: (slug, assetId, expectedTaskId) =>
+      dirOrNotFound(slug, (dir) =>
+        deletePendingTask(dir, assetId, expectedTaskId),
+      ),
     markCompleting: (slug, assetId) =>
       dirOrNotFound(slug, (dir) => markPendingTaskCompleting(dir, assetId)),
     clearCompleting: (slug, assetId) =>
@@ -652,15 +771,75 @@ function makePendingTasks(
     findAll: (slug) => dirOrNotFound(slug, (dir) => findAllPendingTasks(dir)),
     findByExternalId: (slug, taskId) =>
       dirOrNotFound(slug, (dir) => findPendingTaskByExternalId(dir, taskId)),
-    fail: (slug, assetId, info) =>
-      dirOrNotFound(slug, (dir) => failPendingTask(dir, assetId, info)),
+    fail: ((
+      slug: string,
+      assetId: string,
+      expectedTaskIdOrInfo: string | FailureInfo,
+      maybeInfo?: FailureInfo,
+    ): Promise<Result<GenerationError | null, FsError>> => {
+      const expectedTaskId =
+        typeof expectedTaskIdOrInfo === "string"
+          ? expectedTaskIdOrInfo
+          : undefined;
+      const info: FailureInfo =
+        typeof expectedTaskIdOrInfo === "string"
+          ? (maybeInfo as FailureInfo)
+          : expectedTaskIdOrInfo;
+      return dirOrNotFound(slug, (dir) =>
+        failPendingTask(dir, assetId, expectedTaskId, info),
+      );
+    }) as ProjectScopedPendingTasks["fail"],
+    forceFail: (slug, assetId, info) =>
+      dirOrNotFound(slug, (dir) => forceFailPendingTask(dir, assetId, info)),
+    getOwner: async (slug, assetId, taskId) => {
+      const dir = await resolve(slug);
+      if (!dir) return null;
+      return getPendingTaskOwner(dir, assetId, taskId);
+    },
+  };
+}
+
+function makeAssetWork(
+  resolve: (slug: string) => Promise<string | null>,
+): ProjectScopedAssetWork {
+  return {
+    begin: async (slug, assetId, input) => {
+      const dir = await resolve(slug);
+      if (!dir) return null;
+      return beginAssetWork(dir, assetId, input);
+    },
+    complete: async (slug, assetId, ownerId) => {
+      const dir = await resolve(slug);
+      if (!dir) return false;
+      return completeAssetWork(dir, assetId, ownerId);
+    },
+    fail: async (slug, assetId, ownerId, failure) => {
+      const dir = await resolve(slug);
+      if (!dir) return false;
+      return failAssetWork(dir, assetId, ownerId, failure);
+    },
+    renew: async (slug, assetId, ownerId, extendMs) => {
+      const dir = await resolve(slug);
+      if (!dir) return false;
+      return renewAssetWork(dir, assetId, ownerId, extendMs);
+    },
+    read: async (slug, assetId) => {
+      const dir = await resolve(slug);
+      if (!dir) return err({ code: "NOT_FOUND", message: "Project not found" });
+      return readAssetRow(dir, assetId);
+    },
+    list: async (slug) => {
+      const dir = await resolve(slug);
+      if (!dir) return err({ code: "NOT_FOUND", message: "Project not found" });
+      return listAssetRows(dir);
+    },
   };
 }
 
 function makeGenerationErrors(
   resolve: (slug: string) => Promise<string | null>,
 ): ProjectScopedGenerationErrors {
-  async function dirOrNotFound<T>(
+  async function dirOrNotFoundSync<T>(
     slug: string,
     fn: (dir: string) => Result<T, FsError>,
   ): Promise<Result<T, FsError>> {
@@ -668,14 +847,23 @@ function makeGenerationErrors(
     if (!dir) return err({ code: "NOT_FOUND", message: "Project not found" });
     return fn(dir);
   }
+  async function dirOrNotFoundAsync<T>(
+    slug: string,
+    fn: (dir: string) => Promise<Result<T, FsError>>,
+  ): Promise<Result<T, FsError>> {
+    const dir = await resolve(slug);
+    if (!dir) return err({ code: "NOT_FOUND", message: "Project not found" });
+    return fn(dir);
+  }
   return {
     write: (slug, assetId, info) =>
-      dirOrNotFound(slug, (dir) => writeGenerationError(dir, assetId, info)),
+      dirOrNotFoundSync(slug, (dir) => writeGenerationError(dir, assetId, info)),
     read: (slug, assetId) =>
-      dirOrNotFound(slug, (dir) => readGenerationError(dir, assetId)),
+      dirOrNotFoundSync(slug, (dir) => readGenerationError(dir, assetId)),
     clear: (slug, assetId) =>
-      dirOrNotFound(slug, (dir) => clearGenerationError(dir, assetId)),
-    findAll: (slug) => dirOrNotFound(slug, (dir) => findAllGenerationErrors(dir)),
+      dirOrNotFoundAsync(slug, (dir) => clearGenerationError(dir, assetId)),
+    findAll: (slug) =>
+      dirOrNotFoundSync(slug, (dir) => findAllGenerationErrors(dir)),
   };
 }
 
@@ -823,8 +1011,29 @@ export type {
   FailureInfo,
   TaskType,
   WritePendingTaskInput,
+  WritePendingTaskResult,
 } from "./pending-task/index.js";
 export { QUEUED_TASK_ID } from "./pending-task/index.js";
+
+export type {
+  AssetWorkKind,
+  AssetOwnerKind,
+  AssetMeta,
+  AssetView,
+  BeginAssetWorkInput,
+} from "./asset/work.js";
+
+export {
+  beginAssetWork,
+  completeAssetWork,
+  failAssetWork,
+  renewAssetWork,
+  readAssetRow,
+  listAssetRows,
+} from "./asset/work.js";
+
+export { recoverAssetRow, recoverAssetsTable } from "./asset/recover.js";
+export { startAssetReaper, runReaperPass } from "./asset/reaper.js";
 
 export type {
   AssetStatus,

@@ -1,3 +1,5 @@
+import * as path from "node:path";
+
 import { type FsError, type Result, ok, err } from "../types.js";
 import { getStateDb } from "../db/client.js";
 import {
@@ -6,6 +8,7 @@ import {
   type GenerationErrorRow,
   rowToGenerationError,
 } from "./types.js";
+import { recoverAssetRow } from "../asset/recover.js";
 
 export function writeGenerationError(
   projectDir: string,
@@ -68,16 +71,17 @@ export function readGenerationError(
   }
 }
 
-export function clearGenerationError(
+export async function clearGenerationError(
   projectDir: string,
   assetId: string,
-): Result<boolean, FsError> {
+): Promise<Result<boolean, FsError>> {
   const db = getStateDb(projectDir);
+  let cleared = 0;
   try {
     const result = db
       .prepare("DELETE FROM generation_errors WHERE asset_id = ?")
       .run(assetId);
-    return ok(result.changes > 0);
+    cleared = result.changes;
   } catch (error: unknown) {
     const e = error as { message?: string };
     return err({
@@ -85,4 +89,10 @@ export function clearGenerationError(
       message: e.message ?? "Failed to clear generation error",
     });
   }
+  if (cleared > 0) {
+    // Re-derive the assets row from disk + remaining tables. Cleared error
+    // on a media-less asset reverts to 'pending', not 'ready'.
+    await recoverAssetRow(projectDir, path.dirname(projectDir), assetId);
+  }
+  return ok(cleared > 0);
 }

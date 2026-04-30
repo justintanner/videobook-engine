@@ -77,14 +77,31 @@ describe("asset status derivation", () => {
     expect(r.ok && r.value).toBe("error");
   });
 
+  async function writePendingViaLease(
+    assetId: string,
+    assetDir: string,
+    taskId: string,
+    taskType: import("../src/index.js").TaskType,
+  ): Promise<void> {
+    const begin = await cfs.assetWork.begin("p", assetId, {
+      kind: "generate",
+      ownerKind: "job",
+      durationMs: 60_000,
+    });
+    if (!begin) throw new Error("beginAssetWork returned null");
+    const written = await cfs.pendingTasks.write(
+      "p",
+      { assetId, taskId, taskType, assetDir },
+      begin.ownerId,
+    );
+    if (!written.ok || !written.value) {
+      throw new Error("pendingTasks.write returned null");
+    }
+  }
+
   it("generating: pending task in sqlite drives status (no taskType-specific override)", async () => {
     const { assetId, assetDir } = await makeAsset("gen", {});
-    await cfs.pendingTasks.write("p", {
-      assetId,
-      taskId: "t1",
-      taskType: "fal_nano_banana",
-      assetDir,
-    });
+    await writePendingViaLease(assetId, assetDir, "t1", "fal_nano_banana");
     const r = await cfs.getAssetStatus(assetId, "p");
     expect(r.ok && r.value).toBe("generating");
   });
@@ -95,12 +112,7 @@ describe("asset status derivation", () => {
       ".original.json": "{}",
       ".original.analysis.json": "{}",
     });
-    await cfs.pendingTasks.write("p", {
-      assetId,
-      taskId: "t2",
-      taskType: "transcribe",
-      assetDir,
-    });
+    await writePendingViaLease(assetId, assetDir, "t2", "transcribe");
     const r = await cfs.getAssetStatus(assetId, "p");
     expect(r.ok && r.value).toBe("transcribing");
   });
@@ -111,12 +123,7 @@ describe("asset status derivation", () => {
       ".original.json": "{}",
       ".original.analysis.json": "{}",
     });
-    await cfs.pendingTasks.write("p", {
-      assetId,
-      taskId: "t3",
-      taskType: "isolate_vocals",
-      assetDir,
-    });
+    await writePendingViaLease(assetId, assetDir, "t3", "isolate_vocals");
     const r = await cfs.getAssetStatus(assetId, "p");
     expect(r.ok && r.value).toBe("isolating");
   });

@@ -1,8 +1,11 @@
+import * as path from "node:path";
+
 import { gitExec } from "./exec.js";
 import { isGitRepo } from "./init.js";
 import { commitOperation } from "./commit.js";
 import { withGitLock } from "./mutex.js";
 import { withCleanWorktree } from "./stash.js";
+import { recoverAssetRow } from "../asset/recover.js";
 
 export async function restoreAsset(
   projectDir: string,
@@ -14,7 +17,7 @@ export async function restoreAsset(
     return null;
   }
 
-  return withGitLock(projectDir, async () => {
+  const hash = await withGitLock(projectDir, async () => {
     return withCleanWorktree(
       projectDir,
       async () => {
@@ -38,4 +41,10 @@ export async function restoreAsset(
       gitPath,
     );
   });
+
+  if (hash !== null) {
+    // Re-derive the assets row from disk + remaining tables.
+    await recoverAssetRow(projectDir, path.dirname(projectDir), assetId);
+  }
+  return hash;
 }

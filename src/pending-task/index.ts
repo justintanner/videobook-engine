@@ -8,6 +8,7 @@ export {
 
 export {
   type WritePendingTaskInput,
+  type WritePendingTaskResult,
   writePendingTask,
   markPendingTaskCompleting,
   clearPendingTaskCompleting,
@@ -28,4 +29,5 @@ export {
   clearGenerationError,
 } from "./errors.js";
 
-export { failPendingTask } from "./fail.js";
+export { failPendingTask, forceFailPendingTask } from "./fail.js";
+export { getPendingTaskOwner } from "./query.js";

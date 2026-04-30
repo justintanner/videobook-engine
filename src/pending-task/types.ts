@@ -84,6 +84,8 @@ export interface PendingTask {
   meta: Record<string, unknown>;
   /** Set true when sync has enqueued a complete-task job; dedup guard. */
   completing: boolean;
+  /** Provider lease token. Mirrored on assets.owner_id; sync renews per-row. */
+  ownerId: string | null;
 }
 
 export interface FailureInfo {
@@ -109,6 +111,7 @@ export interface PendingTaskRow {
   created_at: number;
   meta: string;
   completing: number;
+  owner_id: string | null;
 }
 
 export interface GenerationErrorRow {
@@ -137,6 +140,7 @@ export function rowToPendingTask(row: PendingTaskRow): PendingTask {
     createdAt: row.created_at,
     meta,
     completing: row.completing === 1,
+    ownerId: row.owner_id,
   };
 }
 
