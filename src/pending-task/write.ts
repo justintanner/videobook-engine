@@ -57,15 +57,23 @@ export function writePendingTask(
 
   try {
     const tx = db.transaction((): WritePendingTaskResult | null => {
+      const existing = db
+        .prepare("SELECT owner_id, status FROM assets WHERE asset_id = ?")
+        .get(input.assetId) as
+        | { owner_id: string | null; status: string }
+        | undefined;
+
       // Strict CAS path: only proceed if assets row's owner matches the
       // expected local job lease that's handing off to the provider.
       if (expectedOwnerId !== undefined) {
-        const existing = db
-          .prepare("SELECT owner_id FROM assets WHERE asset_id = ?")
-          .get(input.assetId) as { owner_id: string | null } | undefined;
         if (!existing || existing.owner_id !== expectedOwnerId) {
           return null;
         }
+      } else if (existing?.status === "error") {
+        // Defense in depth: refuse to resurrect a row the reaper already
+        // declared dead. A late Pattern A handler that takes longer than the
+        // queue deadline would otherwise overwrite generation_errors.
+        return null;
       }
 
       db.prepare("DELETE FROM generation_errors WHERE asset_id = ?").run(
