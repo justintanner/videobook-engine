@@ -352,15 +352,10 @@ export interface ClipfirstFs {
 }
 
 export interface ProjectScopedPendingTasks {
-  /**
-   * Provider hand-off. When `expectedOwnerId` is provided, this call CAS-checks
-   * the assets row's owner_id; on mismatch the call is a no-op (returns ok(null)).
-   * Without it, the call is unconditional (legacy callers).
-   */
   write(
     projectSlug: string,
     input: WritePendingTaskInput,
-    expectedOwnerId?: string,
+    expectedOwnerId: string,
   ): Promise<Result<WritePendingTaskResult | null, FsError>>;
   read(
     projectSlug: string,
@@ -398,7 +393,6 @@ export interface ProjectScopedPendingTasks {
     expectedTaskId: string,
     info: FailureInfo,
   ): Promise<Result<GenerationError | null, FsError>>;
-  /** Force-fail by asset_id alone. Used by queue wrapper for jobs that died before registering a lease. */
   forceFail(
     projectSlug: string,
     assetId: string,

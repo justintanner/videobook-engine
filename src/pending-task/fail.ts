@@ -103,13 +103,6 @@ export function failPendingTask(
   }
 }
 
-/**
- * Force-fail a pending task by asset_id alone, ignoring task_id. Used by the
- * queue wrapper's catch path for jobs that died before registering a lease,
- * and for any async cleanup that doesn't know the task_id. Writes
- * generation_errors and CAS-fails the assets row using whatever owner_id is on
- * the pending_tasks row at the moment.
- */
 export function forceFailPendingTask(
   projectDir: string,
   assetId: string,
@@ -119,9 +112,28 @@ export function forceFailPendingTask(
   const failedAt = Date.now() / 1000;
   try {
     const tx = db.transaction((): GenerationError | null => {
-      const row = db
-        .prepare("SELECT owner_id FROM pending_tasks WHERE asset_id = ?")
-        .get(assetId) as { owner_id: string | null } | undefined;
+      const errorMeta = JSON.stringify({
+        message: info.message,
+        code: info.failCode ?? null,
+      });
+
+      const update = db
+        .prepare(
+          `UPDATE assets
+              SET status='error',
+                  meta=json_set(COALESCE(meta,'{}'), '$.error', json(?)),
+                  owner_id=NULL,
+                  owner_kind=NULL,
+                  pid=NULL,
+                  deadline_at=NULL,
+                  updated_at=?
+            WHERE asset_id=?
+              AND status='pending'
+              AND owner_id IS NULL`,
+        )
+        .run(errorMeta, failedAt, assetId);
+
+      if (update.changes === 0) return null;
 
       db.prepare(
         `INSERT INTO generation_errors (asset_id, message, fail_code, prompt, failed_at)
@@ -138,44 +150,6 @@ export function forceFailPendingTask(
         info.prompt ?? null,
         failedAt,
       );
-
-      db.prepare("DELETE FROM pending_tasks WHERE asset_id = ?").run(assetId);
-
-      if (row?.owner_id) {
-        const errorMeta = JSON.stringify({
-          message: info.message,
-          code: info.failCode ?? null,
-        });
-        db.prepare(
-          `UPDATE assets
-              SET status='error',
-                  meta=json_set(COALESCE(meta,'{}'), '$.error', json(?)),
-                  owner_id=NULL,
-                  owner_kind=NULL,
-                  pid=NULL,
-                  deadline_at=NULL,
-                  updated_at=?
-            WHERE asset_id=? AND owner_id=?`,
-        ).run(errorMeta, failedAt, assetId, row.owner_id);
-      } else {
-        // No active provider lease; flip any pending/working row to error
-        // without an owner CAS (best-effort cleanup).
-        const errorMeta = JSON.stringify({
-          message: info.message,
-          code: info.failCode ?? null,
-        });
-        db.prepare(
-          `UPDATE assets
-              SET status='error',
-                  meta=json_set(COALESCE(meta,'{}'), '$.error', json(?)),
-                  owner_id=NULL,
-                  owner_kind=NULL,
-                  pid=NULL,
-                  deadline_at=NULL,
-                  updated_at=?
-            WHERE asset_id=? AND status IN ('pending','working') AND owner_id IS NULL`,
-        ).run(errorMeta, failedAt, assetId);
-      }
 
       return {
         assetId,

@@ -16,7 +16,6 @@ export interface WritePendingTaskInput {
 
 export interface WritePendingTaskResult {
   pendingTask: PendingTask;
-  /** Newly minted provider owner_id; same value lives on both rows. */
   providerOwnerId: string;
 }
 
@@ -31,22 +30,10 @@ function kindFromTaskType(taskType: TaskType): AssetWorkKind {
 
 const PROVIDER_DEADLINE_MS = 30 * 60_000;
 
-/**
- * Provider hand-off. Caller must already hold a local job lease created by
- * `beginAssetWork` and pass its ownerId as `expectedOwnerId`. In one txn:
- *   1. Read assets.owner_id; if != expectedOwnerId → return ok(null)
- *      (lease lost — caller should abort and try to cancel any provider work
- *      it just submitted).
- *   2. Mint a fresh providerOwnerId and write it to BOTH pending_tasks and
- *      assets so sync's per-task renew finds the matching token.
- *   3. Update assets owner_kind='provider', meta.kind=<from task_type>,
- *      deadline_at=now+30m. Status stays 'working'.
- *   4. Delete any prior generation_errors row.
- */
 export function writePendingTask(
   projectDir: string,
   input: WritePendingTaskInput,
-  expectedOwnerId?: string,
+  expectedOwnerId: string,
 ): Result<WritePendingTaskResult | null, FsError> {
   const db = getStateDb(projectDir);
   const now = Date.now() / 1000;
@@ -63,16 +50,11 @@ export function writePendingTask(
         | { owner_id: string | null; status: string }
         | undefined;
 
-      // Strict CAS path: only proceed if assets row's owner matches the
-      // expected local job lease that's handing off to the provider.
-      if (expectedOwnerId !== undefined) {
-        if (!existing || existing.owner_id !== expectedOwnerId) {
-          return null;
-        }
-      } else if (existing?.status === "error") {
-        // Defense in depth: refuse to resurrect a row the reaper already
-        // declared dead. A late Pattern A handler that takes longer than the
-        // queue deadline would otherwise overwrite generation_errors.
+      if (
+        !existing ||
+        existing.owner_id !== expectedOwnerId ||
+        existing.status !== "working"
+      ) {
         return null;
       }
 
@@ -103,8 +85,6 @@ export function writePendingTask(
         providerOwnerId,
       );
 
-      // Ensure an assets row exists (legacy callers may not have one) and set
-      // it to working+provider with the same owner_id mirror.
       db.prepare(
         `INSERT INTO assets
            (asset_id, status, meta, owner_id, owner_kind, pid, deadline_at, updated_at)
