@@ -49,14 +49,20 @@ export async function isGitRepo(projectDir: string): Promise<boolean> {
   }
 }
 
+// `git lfs track <pattern>` only appends a line to .gitattributes; we can do
+// the same with one write instead of 17 sequential subprocess spawns. The
+// `git lfs install --local` is still needed (when git-lfs is present) to
+// install the clean/smudge filter hooks, but we run it in parallel with the
+// .gitattributes write — and a single failed spawn when git-lfs isn't
+// installed beats failing 18 times in a row.
 async function setupLfs(projectDir: string, gitPath?: string): Promise<void> {
-  await gitExecSafe(["lfs", "install", "--local"], {
-    cwd: projectDir,
-    gitPath,
-  });
-  for (const pattern of LFS_PATTERNS) {
-    await gitExecSafe(["lfs", "track", pattern], { cwd: projectDir, gitPath });
-  }
+  const gitattributes =
+    LFS_PATTERNS.map((p) => `${p} filter=lfs diff=lfs merge=lfs -text`).join("\n") +
+    "\n";
+  await Promise.all([
+    fs.writeFile(path.join(projectDir, ".gitattributes"), gitattributes),
+    gitExecSafe(["lfs", "install", "--local"], { cwd: projectDir, gitPath }),
+  ]);
 }
 
 async function createGitignore(projectDir: string): Promise<void> {
