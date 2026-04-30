@@ -28,33 +28,35 @@ export async function listAssets(
   }
 
   const entries = await fs.readdir(projectDir, { withFileTypes: true });
-  const assets: AssetEntry[] = [];
+  const candidates = entries.filter(
+    (e) => e.isDirectory() && isValidAssetId(e.name),
+  );
 
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-    const name = entry.name;
-
-    if (!isValidAssetId(name)) continue;
-
-    const assetDir = path.join(projectDir, name);
-
-    try {
-      const assetType = getAssetType(name);
-      const created = await readCreatedAt(assetDir);
-      const createdAt = new Date(created * 1000).toISOString();
-
-      assets.push({
-        id: name,
-        type: assetType,
-        created_at: createdAt,
-        path: assetDir,
-      });
-    } catch (error: unknown) {
-      const e = error as NodeJS.ErrnoException;
-      if (e.code === "ENOENT") continue;
-      throw error;
-    }
-  }
+  // Read all asset metadata in parallel — was a sequential readCreatedAt per
+  // asset, which scales linearly with project size on every listAssets call.
+  const results = await Promise.all(
+    candidates.map(async (entry) => {
+      const name = entry.name;
+      const assetDir = path.join(projectDir, name);
+      try {
+        const assetType = getAssetType(name);
+        const created = await readCreatedAt(assetDir);
+        return {
+          id: name,
+          type: assetType,
+          created_at: new Date(created * 1000).toISOString(),
+          path: assetDir,
+        } satisfies AssetEntry;
+      } catch (error: unknown) {
+        const e = error as NodeJS.ErrnoException;
+        if (e.code === "ENOENT") return null;
+        throw error;
+      }
+    }),
+  );
+  const assets: AssetEntry[] = results.filter(
+    (a): a is AssetEntry => a !== null,
+  );
 
   const sortDir = options?.sort === "oldest" ? 1 : -1;
   assets.sort((a, b) => {
