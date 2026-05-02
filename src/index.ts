@@ -71,6 +71,15 @@ import { readLog } from "./log.js";
 import { queueApi, type QueueApi } from "./queue/index.js";
 import { ensureGitignorePatterns } from "./db/gitignore.js";
 import { getStateDb, closeAllStateDbs } from "./db/client.js";
+import { getMetadataDb } from "./db/metadata-client.js";
+import {
+  recordPromptRow,
+  listPromptHistoryRows,
+  countPromptHistoryRows,
+  type PromptHistoryEntry,
+  type RecordPromptArgs,
+  type ListPromptHistoryArgs,
+} from "./db/prompt-history.js";
 import { recoverOnStartup } from "./db/recover.js";
 import {
   type PendingTask,
@@ -296,6 +305,20 @@ export interface ClipfirstFs {
     projectSlug: string,
     options?: { limit?: number },
   ): Promise<Record<string, unknown>[]>;
+
+  // Prompt history (per-surface, persisted in metadata.sqlite)
+  recordPrompt(
+    args: RecordPromptArgs,
+    projectSlug: string,
+  ): Promise<Result<{ id: number }, FsError>>;
+  listPromptHistory(
+    args: ListPromptHistoryArgs,
+    projectSlug: string,
+  ): Promise<PromptHistoryEntry[]>;
+  countPromptHistory(
+    surface: string,
+    projectSlug: string,
+  ): Promise<number>;
 
   // Query
   slugTaken(slug: string, projectSlug: string): Promise<boolean>;
@@ -651,6 +674,25 @@ export function createFs(config: FsConfig): ClipfirstFs {
       return readLog(dir, name, options);
     },
 
+    // Prompt history (metadata.sqlite)
+    recordPrompt: (args, projectSlug) =>
+      withProject(projectSlug, async (dir) => {
+        const db = getMetadataDb(dir);
+        return ok(recordPromptRow(db, args));
+      }),
+    listPromptHistory: async (args, projectSlug) => {
+      const dir = await resolve(projectSlug);
+      if (!dir) return [];
+      const db = getMetadataDb(dir);
+      return listPromptHistoryRows(db, args);
+    },
+    countPromptHistory: async (surface, projectSlug) => {
+      const dir = await resolve(projectSlug);
+      if (!dir) return 0;
+      const db = getMetadataDb(dir);
+      return countPromptHistoryRows(db, surface);
+    },
+
     // Lock — bound to projectsDir so callers can keep the (assetDir, options) shape
     acquireLock: (assetDir, options) =>
       acquireLock(projectsDir, assetDir, options),
@@ -998,6 +1040,11 @@ export {
 export { closeAllStateDbs, closeStateDb, getStateDb } from "./db/client.js";
 export { isValidProjectSlug } from "./project/slug.js";
 export type { AudioWaveformRecord } from "./db/audio-waveforms.js";
+export type {
+  PromptHistoryEntry,
+  RecordPromptArgs,
+  ListPromptHistoryArgs,
+} from "./db/prompt-history.js";
 
 export type {
   PendingTask,
