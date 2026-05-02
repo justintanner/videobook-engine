@@ -3,7 +3,6 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
 import { createSandbox, type Sandbox } from "./helpers/sandbox.js";
-import { LOCK_FILE } from "../src/constants.js";
 
 describe("renameProject", () => {
   let sandbox: Sandbox;
@@ -191,7 +190,7 @@ describe("renameProject", () => {
       pid: process.pid,
     };
     await fs.writeFile(
-      path.join(assetDir, LOCK_FILE),
+      path.join(assetDir, ".lock"),
       JSON.stringify(expiredLock),
     );
 

@@ -104,7 +104,7 @@ export function runReaperPass(projectDir: string): ReaperReport {
   return report;
 }
 
-export interface ReaperHandle {
+interface ReaperHandle {
   stop: () => void;
 }
 

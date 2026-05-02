@@ -315,10 +315,7 @@ export interface ClipfirstFs {
     args: ListPromptHistoryArgs,
     projectSlug: string,
   ): Promise<PromptHistoryEntry[]>;
-  countPromptHistory(
-    surface: string,
-    projectSlug: string,
-  ): Promise<number>;
+  countPromptHistory(surface: string, projectSlug: string): Promise<number>;
 
   // Query
   slugTaken(slug: string, projectSlug: string): Promise<boolean>;
@@ -776,7 +773,7 @@ export function createFs(config: FsConfig): ClipfirstFs {
 
 // The metadata.sqlite migration count baked into this build. Bumped whenever
 // a new metadata migration ships in src/db/migrations/metadata_*.ts.
-const BUILD_METADATA_VERSION = 4;
+const BUILD_METADATA_VERSION = 5;
 
 function makePendingTasks(
   resolve: (slug: string) => Promise<string | null>,
@@ -893,7 +890,9 @@ function makeGenerationErrors(
   }
   return {
     write: (slug, assetId, info) =>
-      dirOrNotFoundSync(slug, (dir) => writeGenerationError(dir, assetId, info)),
+      dirOrNotFoundSync(slug, (dir) =>
+        writeGenerationError(dir, assetId, info),
+      ),
     read: (slug, assetId) =>
       dirOrNotFoundSync(slug, (dir) => readGenerationError(dir, assetId)),
     clear: (slug, assetId) =>

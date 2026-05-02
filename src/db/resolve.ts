@@ -43,13 +43,3 @@ export async function resolveProjectFromAssetDir(
   }
   return ok({ projectDir: path.join(realRoot, slug), slug });
 }
-
-const projectsDirRef: { current: string | null } = { current: null };
-
-export function setProjectsDir(dir: string): void {
-  projectsDirRef.current = path.resolve(dir);
-}
-
-export function getProjectsDir(): string | null {
-  return projectsDirRef.current;
-}

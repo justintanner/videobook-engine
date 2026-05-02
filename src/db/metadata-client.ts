@@ -9,8 +9,9 @@ import * as m0001 from "./migrations/metadata_0001_init.js";
 import * as m0002 from "./migrations/metadata_0002_audio_waveforms.js";
 import * as m0003 from "./migrations/metadata_0003_timeline_audio.js";
 import * as m0004 from "./migrations/metadata_0004_prompt_history.js";
+import * as m0005 from "./migrations/metadata_0005_drop_unused.js";
 
-export const METADATA_DB_FILENAME = "metadata.sqlite";
+const METADATA_DB_FILENAME = "metadata.sqlite";
 
 interface MetadataMigration {
   version: number;
@@ -18,7 +19,13 @@ interface MetadataMigration {
   up: (db: DatabaseType) => void;
 }
 
-const METADATA_MIGRATIONS: ReadonlyArray<MetadataMigration> = [m0001, m0002, m0003, m0004];
+const METADATA_MIGRATIONS: ReadonlyArray<MetadataMigration> = [
+  m0001,
+  m0002,
+  m0003,
+  m0004,
+  m0005,
+];
 
 const cache = new Map<string, DatabaseType>();
 
@@ -26,7 +33,7 @@ function clipfirstDir(projectDir: string): string {
   return path.join(projectDir, CLIPFIRST_DIR);
 }
 
-export function metadataDbPath(projectDir: string): string {
+function metadataDbPath(projectDir: string): string {
   return path.join(clipfirstDir(projectDir), METADATA_DB_FILENAME);
 }
 
