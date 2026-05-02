@@ -5,6 +5,11 @@ import { getManifest } from "./manifest.js";
 import { getLockData } from "../lock/query.js";
 import { readPendingTask } from "../pending-task/read.js";
 import { readGenerationError } from "../pending-task/errors.js";
+import {
+  type AssetMeta,
+  type AssetStatus as AssetRowStatus,
+  readAssetRow,
+} from "./work.js";
 
 /**
  * Well-known terminal/lifecycle statuses surfaced to the UI. Lock-driven
@@ -50,6 +55,57 @@ export interface AssetStatusInput {
   lockData: LockData | null;
   pendingTask: PendingTask | null;
   generationError: GenerationError | null;
+  /** Materialized assets-table row, or null if no row exists. The row's
+   *  status='error' beats stale lock data (rule 1); status='pending'/'working'
+   *  with a meta.kind set drives the in-progress UI state (rule 4) so a
+   *  freshly-enqueued asset never falls through to the orphan "error". */
+  assetRow: { status: AssetRowStatus; meta: AssetMeta } | null;
+}
+
+/**
+ * Maps the assets-table (`meta.kind`, `meta.orientation`, queued/working) to
+ * a concrete UI AssetStatus. Returns null when no kind is set so the caller
+ * can fall through to file-based rules (e.g. rows created via createAsset
+ * before any worker claimed them carry no kind).
+ */
+function mapKindToStatus(meta: AssetMeta, queued: boolean): AssetStatus | null {
+  const kind = meta.kind ?? null;
+  if (kind === null) return null;
+  const o = meta.orientation;
+  switch (kind) {
+    case "render": {
+      const orient =
+        o === "portrait" || o === "landscape" || o === "square" ? o : null;
+      if (queued) {
+        return orient ? (`render-queued-${orient}` as AssetStatus) : "render-queued";
+      }
+      return orient ? (`rendering-${orient}` as AssetStatus) : "rendering";
+    }
+    case "generate":       return "generating";
+    case "transcribe":     return "transcribing";
+    case "isolate":        return "isolating";
+    case "download":       return "downloading";
+    case "upload":         return "uploading";
+    case "trim":           return "trimming";
+    case "splice":         return "splicing";
+    case "reverse":        return "reversing";
+    case "change_speed":   return "changing-speed";
+    case "replace_audio":  return "replacing-audio";
+    case "process":        return "processing";
+    case "analyze":        return "analyzing";
+    case "delete":         return "deleting";
+    case "describe":       return "analyzing";
+    case "rewrite_script": return "generating";
+    case "extract":        return "processing";
+    case "apply_cuts":     return "processing";
+    case "apply_sfx":      return "processing";
+    case "final":          return "rendering";
+    default: {
+      const _exhaustive: never = kind;
+      void _exhaustive;
+      return null;
+    }
+  }
 }
 
 /**
@@ -57,19 +113,25 @@ export interface AssetStatusInput {
  * single source of truth the UI displays for the asset.
  *
  * Rule order:
- *   1. Active lock (timeout in future)         → lock.state ?? "loading"
- *   2. Pending task (sqlite row)               → "transcribing" | "isolating" | "generating"
- *   3. Legacy `.processing.json` marker        → "processing"
- *   4. Legacy `.analyzing.json` marker         → "analyzing"
- *   5. vid- with .part file but no real video  → "error"
- *   6. Has primary media:
+ *   1. assetRow.status === 'error'             → "error"
+ *      (durable structured failure; beats stale lock data)
+ *   2. Active lock (timeout in future)         → lock.state ?? "loading"
+ *   3. Pending task (sqlite row)               → "transcribing" | "isolating" | "generating"
+ *   4. assetRow non-terminal with meta.kind:
+ *      a. status='pending'                     → mapKindToStatus(meta, queued=true)
+ *      b. status='working'                     → mapKindToStatus(meta, queued=false)
+ *      (status='ready' or no kind falls through)
+ *   5. Legacy `.processing.json` marker        → "processing"
+ *   6. Legacy `.analyzing.json` marker         → "analyzing"
+ *   7. vid- with .part file but no real video  → "error"
+ *   8. Has primary media:
  *      a. Generation error recorded            → "error"
  *      b. id === "final"                       → "ready"
  *      c. vid- without .original.json          → "processing"
  *      d. vid- without .original.analysis.json → "analyzing"
  *      e. otherwise                            → "ready"
- *   7. Has part file (any kind)                → "error"
- *   8. Otherwise                               → "error" (orphan)
+ *   9. Has part file (any kind)                → "error"
+ *  10. Otherwise                               → "error" (orphan)
  */
 export function computeAssetStatus(input: AssetStatusInput): AssetStatus {
   const {
@@ -80,7 +142,10 @@ export function computeAssetStatus(input: AssetStatusInput): AssetStatus {
     lockData,
     pendingTask,
     generationError,
+    assetRow,
   } = input;
+
+  if (assetRow !== null && assetRow.status === "error") return "error";
 
   const now = Date.now() / 1000;
   const isLockActive = lockData != null && now < lockData.timeout_at;
@@ -94,6 +159,16 @@ export function computeAssetStatus(input: AssetStatusInput): AssetStatus {
     if (pendingTask.taskType === "transcribe") return "transcribing";
     if (pendingTask.taskType === "isolate_vocals") return "isolating";
     return "generating";
+  }
+
+  if (assetRow !== null) {
+    if (assetRow.status === "pending") {
+      const mapped = mapKindToStatus(assetRow.meta, true);
+      if (mapped !== null) return mapped;
+    } else if (assetRow.status === "working") {
+      const mapped = mapKindToStatus(assetRow.meta, false);
+      if (mapped !== null) return mapped;
+    }
   }
 
   if (fileNames.has(".processing.json")) return "processing";
@@ -164,6 +239,11 @@ export async function getAssetStatus(
     ? generationErrorResult.value
     : null;
 
+  const assetRowResult = readAssetRow(projectDir, assetId);
+  const assetRow = assetRowResult.ok && assetRowResult.value
+    ? { status: assetRowResult.value.status, meta: assetRowResult.value.meta }
+    : null;
+
   const primaryMediaName =
     options?.primaryMediaName !== undefined
       ? options.primaryMediaName
@@ -177,6 +257,7 @@ export async function getAssetStatus(
     lockData,
     pendingTask,
     generationError,
+    assetRow,
   });
   return ok(status);
 }

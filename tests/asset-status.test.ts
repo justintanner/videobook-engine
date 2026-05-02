@@ -192,7 +192,127 @@ describe("asset status derivation", () => {
         lockData: null,
         pendingTask: null,
         generationError: null,
+        assetRow: null,
       }),
     ).toBe("analyzing");
+  });
+
+  describe("assets-row precedence", () => {
+    function pureCall(
+      partial: Partial<Parameters<typeof computeAssetStatus>[0]>,
+    ): ReturnType<typeof computeAssetStatus> {
+      return computeAssetStatus({
+        assetId: "vid-x",
+        fileNames: new Set(),
+        primaryMediaName: null,
+        hasPartFile: false,
+        lockData: null,
+        pendingTask: null,
+        generationError: null,
+        assetRow: null,
+        ...partial,
+      });
+    }
+
+    it("generating: pending row with kind=generate (the queued-window bug)", () => {
+      expect(pureCall({
+        assetRow: { status: "pending", meta: { kind: "generate", queued: true } },
+      })).toBe("generating");
+    });
+
+    it("render-queued-landscape: pending row with kind=render + landscape", () => {
+      expect(pureCall({
+        assetRow: {
+          status: "pending",
+          meta: { kind: "render", orientation: "landscape", queued: true },
+        },
+      })).toBe("render-queued-landscape");
+    });
+
+    it("rendering-portrait: working row with kind=render + portrait", () => {
+      expect(pureCall({
+        assetRow: {
+          status: "working",
+          meta: { kind: "render", orientation: "portrait", queued: false },
+        },
+      })).toBe("rendering-portrait");
+    });
+
+    it("render-queued: pending row with kind=render and no orientation", () => {
+      expect(pureCall({
+        assetRow: { status: "pending", meta: { kind: "render", queued: true } },
+      })).toBe("render-queued");
+    });
+
+    it("trimming: working row with kind=trim", () => {
+      expect(pureCall({
+        assetRow: { status: "working", meta: { kind: "trim", queued: false } },
+      })).toBe("trimming");
+    });
+
+    it("changing-speed: working row with kind=change_speed", () => {
+      expect(pureCall({
+        assetRow: { status: "working", meta: { kind: "change_speed", queued: false } },
+      })).toBe("changing-speed");
+    });
+
+    it("replacing-audio: working row with kind=replace_audio", () => {
+      expect(pureCall({
+        assetRow: { status: "working", meta: { kind: "replace_audio", queued: false } },
+      })).toBe("replacing-audio");
+    });
+
+    it("error: row.status=error wins over meta.kind", () => {
+      expect(pureCall({
+        assetRow: { status: "error", meta: { kind: "generate" } },
+      })).toBe("error");
+    });
+
+    it("orphan error: pending row with no kind falls through to file rules (no media)", () => {
+      // No kind → mapKindToStatus returns null → falls through. With no files,
+      // rule 10 returns "error" (orphan). This is the right behavior: a row
+      // without a kind is just "I exist" and the file rules take over.
+      expect(pureCall({
+        assetRow: { status: "pending", meta: {} },
+      })).toBe("error");
+    });
+
+    it("file-derived ready: pending row without kind, with all media files", () => {
+      // The file-based cascade still runs when meta.kind is missing — important
+      // for assets created by createAsset and then populated directly (e.g. the
+      // test scenario for expired-lock fall-through).
+      expect(pureCall({
+        assetId: "vid-files",
+        fileNames: new Set([
+          "original.mp4", ".original.json", ".original.analysis.json",
+        ]),
+        primaryMediaName: "original.mp4",
+        assetRow: { status: "pending", meta: {} },
+      })).toBe("ready");
+    });
+
+    it("active lock beats assets row precedence", () => {
+      expect(pureCall({
+        lockData: {
+          owner_id: "x",
+          acquired_at: Date.now() / 1000 - 1,
+          timeout_at: Date.now() / 1000 + 60,
+          state: "rendering-square",
+        } as never,
+        assetRow: { status: "pending", meta: { kind: "generate", queued: true } },
+      })).toBe("rendering-square");
+    });
+
+    it("isolating: working row with kind=isolate", () => {
+      expect(pureCall({
+        assetRow: { status: "working", meta: { kind: "isolate", queued: false } },
+      })).toBe("isolating");
+    });
+
+    it("downloading: pending row with kind=download", () => {
+      expect(pureCall({
+        assetRow: { status: "pending", meta: { kind: "download", queued: true } },
+      })).toBe("downloading");
+    });
   });
 });

@@ -1,3 +1,5 @@
+import type { AssetWorkKind } from "../asset/work.js";
+
 export type JobState =
   | "queued"
   | "running"
@@ -58,6 +60,13 @@ export interface EnqueueOptions {
   dedupeKey?: string | null;
   /** When `external_task_id` is set, the job starts in 'running' state ready for the next poll. */
   initialState?: "queued" | "running";
+  /** Clean AssetWorkKind to write into assets.meta.kind at enqueue time so
+   *  computeAssetStatus can derive the right in-progress UI state during the
+   *  window between enqueue and worker pickup. Server callers populate this
+   *  from a job-type→kind classifier; null leaves meta.kind unset. */
+  assetWorkKind?: AssetWorkKind | null;
+  /** Optional orientation for render jobs — drives render-queued-{landscape,portrait,square}. */
+  assetWorkOrientation?: "portrait" | "landscape" | "square" | null;
 }
 
 export interface EnqueueResult {

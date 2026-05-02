@@ -196,6 +196,7 @@ export async function recoverAssetRow(
     lockData: null,
     pendingTask: null,
     generationError: null,
+    assetRow: null,
   });
 
   if (status === "ready") {

@@ -10,40 +10,54 @@ import {
   type Job,
   type JobRow,
 } from "./types.js";
+import type { AssetWorkKind } from "../asset/work.js";
 
 const QUEUE_PENDING_DEADLINE_S = 5 * 60;
+
+type Orientation = "portrait" | "landscape" | "square";
 
 /**
  * Atomically refresh (or insert) the assets row at status='pending' for an
  * asset-scoped enqueue. CAS guard: never overwrites a row whose owner_id is
  * non-null — an in-flight worker keeps its lease. Caller must invoke this
  * inside the same transaction as the pending_jobs INSERT.
+ *
+ * `assetWorkKind` is the *clean* AssetWorkKind (e.g. 'generate', 'render',
+ * 'trim') — NOT the raw job type. It must match what the worker later passes
+ * to `beginAssetWork` so meta.kind has a single shape across the lifecycle.
+ * When null, meta.kind is omitted and computeAssetStatus falls through to its
+ * file-based rules instead of mapping to a queued ClipState.
  */
 function writePendingAssetRow(
   db: DatabaseType,
   assetId: string,
-  jobType: string,
+  assetWorkKind: AssetWorkKind | null,
+  orientation: Orientation | null,
   nowSeconds: number,
 ): void {
   const deadline = nowSeconds + QUEUE_PENDING_DEADLINE_S;
+  const meta: Record<string, unknown> = { queued: true };
+  if (assetWorkKind !== null) meta.kind = assetWorkKind;
+  if (orientation !== null) meta.orientation = orientation;
+  const metaJson = JSON.stringify(meta);
   // CAS guard: do not overwrite an active owner OR a terminal 'error' row.
   // The error must be cleared explicitly via generationErrors.clear → recover
   // before the asset is eligible for new work.
   db.prepare(
     `INSERT INTO assets (asset_id, status, meta, owner_id, owner_kind, pid, deadline_at, updated_at)
-     VALUES (?, 'pending', json_object('kind', ?, 'queued', json('true')), NULL, 'job', NULL, ?, ?)
+     VALUES (?, 'pending', ?, NULL, 'job', NULL, ?, ?)
      ON CONFLICT(asset_id) DO UPDATE SET
        status='pending',
-       meta=json_set(COALESCE(meta,'{}'), '$.queued', json('true'), '$.kind', ?),
+       meta=?,
        deadline_at=?,
        updated_at=?
      WHERE assets.owner_id IS NULL AND assets.status != 'error'`,
   ).run(
     assetId,
-    jobType,
+    metaJson,
     deadline,
     nowSeconds,
-    jobType,
+    metaJson,
     deadline,
     nowSeconds,
   );
@@ -152,7 +166,13 @@ export function enqueue(db: DatabaseType, opts: EnqueueOptions): EnqueueResult {
 
     const row = insertRow(db, params);
     if (assetId) {
-      writePendingAssetRow(db, assetId, opts.type, enqueuedAt / 1000);
+      writePendingAssetRow(
+        db,
+        assetId,
+        opts.assetWorkKind ?? null,
+        opts.assetWorkOrientation ?? null,
+        enqueuedAt / 1000,
+      );
     }
     return { inserted: true, job: rowToJob(row) };
   });
