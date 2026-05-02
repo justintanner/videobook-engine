@@ -8,7 +8,10 @@ const DEFAULT_LEASE_MS = 60_000;
 /**
  * Atomically claim the next queued job. Returns null when the queue is empty.
  * Uses a single UPDATE…WHERE id=(SELECT…LIMIT 1) so two concurrent claimers
- * cannot both win the same row.
+ * cannot both win the same row. Asset-scoped jobs are skipped while the
+ * corresponding assets row has an active owner; that lets completion handlers
+ * enqueue follow-up work before they release the provider lease without the
+ * child job racing into beginAssetWork.
  */
 export function dequeue(
   db: DatabaseType,
@@ -26,9 +29,15 @@ export function dequeue(
               lease_expires_at = ?,
               attempts         = attempts + 1
        WHERE  id = (
-         SELECT id FROM pending_jobs
-         WHERE  state = 'queued'
-         ORDER  BY enqueued_at, id
+         SELECT pending_jobs.id
+         FROM pending_jobs
+         LEFT JOIN assets ON assets.asset_id = pending_jobs.asset_id
+         WHERE pending_jobs.state = 'queued'
+           AND (
+             pending_jobs.asset_id IS NULL
+             OR assets.owner_id IS NULL
+           )
+         ORDER BY pending_jobs.enqueued_at, pending_jobs.id
          LIMIT  1
        )
        RETURNING *`,
