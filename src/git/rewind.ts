@@ -4,6 +4,7 @@ import { gitExec } from "./exec.js";
 import { isGitRepo } from "./init.js";
 import { withGitLock } from "./mutex.js";
 import { recoverAssetsTable } from "../asset/recover.js";
+import { closeMetadataDb } from "../db/metadata-client.js";
 
 export async function rewindProject(
   projectDir: string,
@@ -17,6 +18,14 @@ export async function rewindProject(
   const hash = await withGitLock(projectDir, async () => {
     try {
       await gitExec(["checkout", commitHash], { cwd: projectDir, gitPath });
+      // The full-tree checkout replaces .clipfirst/metadata.sqlite — drop
+      // the cached SQLite handle so subsequent operations bind to the new
+      // inode rather than failing with SQLITE_READONLY_DBMOVED.
+      try {
+        closeMetadataDb(projectDir);
+      } catch {
+        // Best-effort eviction; the next open will re-acquire the handle.
+      }
       return commitHash;
     } catch {
       return null;
