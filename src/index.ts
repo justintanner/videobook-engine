@@ -776,7 +776,7 @@ export function createFs(config: FsConfig): ClipfirstFs {
 
 // The metadata.sqlite migration count baked into this build. Bumped whenever
 // a new metadata migration ships in src/db/migrations/metadata_*.ts.
-const BUILD_METADATA_VERSION = 3;
+const BUILD_METADATA_VERSION = 4;
 
 function makePendingTasks(
   resolve: (slug: string) => Promise<string | null>,
