@@ -1,0 +1,13 @@
+{
+  "$schema": "https://unpkg.com/knip@5/schema.json",
+  "entry": [
+    "src/index.ts",
+    "tests/**/*.test.ts",
+    "examples/**/*.ts",
+    "benchmarks/**/*.bench.ts"
+  ],
+  "ignore": [
+    "**/dist/**",
+    "**/node_modules/**"
+  ]
+}

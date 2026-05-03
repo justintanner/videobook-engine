@@ -41,6 +41,7 @@
     "@types/proper-lockfile": "^4.1.4",
     "@types/uuid": "^11.0.0",
     "fast-check": "^4.5.3",
+    "knip": "^6.11.0",
     "prettier": "^3.8.1",
     "tsx": "^4.19.0",
     "typescript": "^5.5.0",
