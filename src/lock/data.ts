@@ -21,30 +21,6 @@ export function buildLockData(
   };
 }
 
-export function parseLockContent(content: string): LockData | null {
-  const trimmed = content.trim();
-  try {
-    const parsed: unknown = JSON.parse(trimmed);
-    if (
-      typeof parsed === "object" &&
-      parsed !== null &&
-      !Array.isArray(parsed)
-    ) {
-      return parsed as LockData;
-    }
-    if (typeof parsed === "number") {
-      return { created_at: parsed, timeout_at: 0 };
-    }
-    return null;
-  } catch {
-    const ts = parseFloat(trimmed);
-    if (!isNaN(ts)) {
-      return { created_at: ts, timeout_at: 0 };
-    }
-    return null;
-  }
-}
-
 export function isExpired(
   lock: LockData,
   now: number = Date.now() / 1000,

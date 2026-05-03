@@ -1,10 +1,6 @@
 import { describe, it, expect } from "vitest";
 
-import {
-  buildLockData,
-  parseLockContent,
-  isExpired,
-} from "../src/lock/data.js";
+import { buildLockData, isExpired } from "../src/lock/data.js";
 
 describe("buildLockData", () => {
   it("sets created_at, timeout_at, pid, and merges custom data", () => {
@@ -25,32 +21,6 @@ describe("buildLockData", () => {
     expect(result.created_at).toBe(100);
     expect(result.timeout_at).toBe(105);
     expect(result.pid).toBe(1);
-  });
-});
-
-describe("parseLockContent", () => {
-  it("parses JSON object", () => {
-    const data = parseLockContent(
-      JSON.stringify({ created_at: 100, timeout_at: 200, pid: 1 }),
-    );
-    expect(data).toEqual({ created_at: 100, timeout_at: 200, pid: 1 });
-  });
-
-  it("parses JSON number as legacy format", () => {
-    const data = parseLockContent("1700000000");
-    expect(data).toEqual({ created_at: 1700000000, timeout_at: 0 });
-  });
-
-  it("parses plain text number", () => {
-    const data = parseLockContent("  1700000000.5  ");
-    expect(data).toEqual({ created_at: 1700000000.5, timeout_at: 0 });
-  });
-
-  it("returns null for invalid content", () => {
-    expect(parseLockContent("not a number")).toBeNull();
-    expect(parseLockContent("[]")).toBeNull();
-    expect(parseLockContent('"string"')).toBeNull();
-    expect(parseLockContent("")).toBeNull();
   });
 });
 

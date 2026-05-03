@@ -2,7 +2,6 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
 import { type FsError, type Result, ok, err } from "../types.js";
-import { resolveProjectFromAssetDir } from "../db/resolve.js";
 
 export const PROJECT_LOCK_KEY = "__PROJECT__";
 
@@ -54,35 +53,3 @@ export async function resolveLockKey(
   const assetKey = segments.length === 1 ? PROJECT_LOCK_KEY : segments[1]!;
   return ok({ projectDir, assetKey });
 }
-
-/** Allow tests / non-project callers to provide an explicit project root. */
-export async function resolveLockKeyWithProject(
-  projectDir: string,
-  assetDir: string,
-): Promise<Result<ResolvedLock, FsError>> {
-  let realProject: string;
-  let realAbs: string;
-  try {
-    realProject = await fs.realpath(projectDir);
-    realAbs = await fs.realpath(assetDir);
-  } catch (error: unknown) {
-    return err({
-      code: "INVALID_INPUT",
-      message: error instanceof Error ? error.message : String(error),
-    });
-  }
-  const rel = path.relative(realProject, realAbs);
-  if (rel === "")
-    return ok({ projectDir: realProject, assetKey: PROJECT_LOCK_KEY });
-  if (rel.startsWith("..") || path.isAbsolute(rel)) {
-    return err({
-      code: "INVALID_INPUT",
-      message: `assetDir ${assetDir} is not inside projectDir ${projectDir}`,
-    });
-  }
-  const assetKey = rel.split(path.sep)[0]!;
-  return ok({ projectDir: realProject, assetKey });
-}
-
-// Re-exported for callers that still want it.
-export { resolveProjectFromAssetDir };
