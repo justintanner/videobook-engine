@@ -112,6 +112,7 @@ import {
   completeAssetWork,
   failAssetWork,
   renewAssetWork,
+  markAssetSeen,
   readAssetRow,
   listAssetRows,
 } from "./asset/work.js";
@@ -449,6 +450,7 @@ export interface ProjectScopedAssetWork {
     ownerId: string,
     extendMs: number,
   ): Promise<boolean>;
+  markSeen(projectSlug: string, assetId: string): Promise<boolean>;
   read(
     projectSlug: string,
     assetId: string,
@@ -856,6 +858,11 @@ function makeAssetWork(
       if (!dir) return false;
       return renewAssetWork(dir, assetId, ownerId, extendMs);
     },
+    markSeen: async (slug, assetId) => {
+      const dir = await resolve(slug);
+      if (!dir) return false;
+      return markAssetSeen(dir, assetId);
+    },
     read: async (slug, assetId) => {
       const dir = await resolve(slug);
       if (!dir) return err({ code: "NOT_FOUND", message: "Project not found" });
@@ -1068,6 +1075,7 @@ export {
   completeAssetWork,
   failAssetWork,
   renewAssetWork,
+  markAssetSeen,
   readAssetRow,
   listAssetRows,
 } from "./asset/work.js";

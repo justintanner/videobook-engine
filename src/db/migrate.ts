@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import * as m0001 from "./migrations/0001_init.js";
 import * as m0002 from "./migrations/0002_pending_tasks.js";
 import * as m0003 from "./migrations/0003_assets.js";
+import * as m0004 from "./migrations/0004_asset_seen_at.js";
 
 interface Migration {
   version: number;
@@ -11,7 +12,7 @@ interface Migration {
   up: (db: Database) => void;
 }
 
-const STATE_MIGRATIONS: ReadonlyArray<Migration> = [m0001, m0002, m0003];
+const STATE_MIGRATIONS: ReadonlyArray<Migration> = [m0001, m0002, m0003, m0004];
 
 interface SchemaMigrationRow {
   version: number;

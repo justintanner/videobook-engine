@@ -55,6 +55,7 @@ export interface AssetRow {
   pid: number | null;
   deadline_at: number | null;
   updated_at: number;
+  seen_at: number | null;
 }
 
 export interface AssetView {
@@ -66,6 +67,7 @@ export interface AssetView {
   pid: number | null;
   deadlineAt: number | null;
   updatedAt: number;
+  seenAt: number | null;
 }
 
 function parseMeta(text: string): AssetMeta {
@@ -90,6 +92,7 @@ function rowToView(row: AssetRow): AssetView {
     pid: row.pid,
     deadlineAt: row.deadline_at,
     updatedAt: row.updated_at,
+    seenAt: row.seen_at,
   };
 }
 
@@ -101,7 +104,7 @@ export function readAssetRow(
   try {
     const row = db
       .prepare(
-        `SELECT asset_id, status, meta, owner_id, owner_kind, pid, deadline_at, updated_at
+        `SELECT asset_id, status, meta, owner_id, owner_kind, pid, deadline_at, updated_at, seen_at
          FROM assets WHERE asset_id = ?`,
       )
       .get(assetId) as AssetRow | undefined;
@@ -119,7 +122,7 @@ export function listAssetRows(
   try {
     const rows = db
       .prepare(
-        `SELECT asset_id, status, meta, owner_id, owner_kind, pid, deadline_at, updated_at
+        `SELECT asset_id, status, meta, owner_id, owner_kind, pid, deadline_at, updated_at, seen_at
          FROM assets`,
       )
       .all() as AssetRow[];
@@ -297,6 +300,22 @@ export function renewAssetWork(
         WHERE asset_id=? AND owner_id=? AND status='working'`,
     )
     .run(proposed, now, assetId, ownerId);
+  return result.changes > 0;
+}
+
+/**
+ * Sets seen_at to now if currently NULL. Idempotent: re-marking an already-seen
+ * asset is a no-op. Independent of work status — seen_at survives transitions
+ * through working/ready/error so a "NEW" badge clears once and stays cleared.
+ */
+export function markAssetSeen(projectDir: string, assetId: string): boolean {
+  const db = getStateDb(projectDir);
+  const now = Date.now() / 1000;
+  const result = db
+    .prepare(
+      `UPDATE assets SET seen_at = COALESCE(seen_at, ?) WHERE asset_id = ?`,
+    )
+    .run(now, assetId);
   return result.changes > 0;
 }
 
