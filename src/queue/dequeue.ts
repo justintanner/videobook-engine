@@ -12,6 +12,13 @@ const DEFAULT_LEASE_MS = 60_000;
  * corresponding assets row has an active owner; that lets completion handlers
  * enqueue follow-up work before they release the provider lease without the
  * child job racing into beginAssetWork.
+ *
+ * Exception: provider-handoff inheritor jobs (currently `complete_kie_task`)
+ * are explicitly designed to take over a `owner_kind='provider'` lease via
+ * `pendingTasks.getOwner`, so they must dequeue despite the active owner.
+ * Without this exception the inheritor and the provider lease deadlock each
+ * other: the lease blocks the dequeue, and only the dequeued job can release
+ * the lease.
  */
 export function dequeue(
   db: DatabaseType,
@@ -36,6 +43,10 @@ export function dequeue(
            AND (
              pending_jobs.asset_id IS NULL
              OR assets.owner_id IS NULL
+             OR (
+               pending_jobs.type = 'complete_kie_task'
+               AND assets.owner_kind = 'provider'
+             )
            )
          ORDER BY pending_jobs.enqueued_at, pending_jobs.id
          LIMIT  1
