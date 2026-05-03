@@ -25,6 +25,7 @@ export type AssetStatus =
   | "processing"
   | "analyzing"
   | "trimming"
+  | "cropping"
   | "splicing"
   | "reversing"
   | "changing-speed"
@@ -87,6 +88,7 @@ function mapKindToStatus(meta: AssetMeta, queued: boolean): AssetStatus | null {
     case "download":       return "downloading";
     case "upload":         return "uploading";
     case "trim":           return "trimming";
+    case "crop":           return "cropping";
     case "splice":         return "splicing";
     case "reverse":        return "reversing";
     case "change_speed":   return "changing-speed";
