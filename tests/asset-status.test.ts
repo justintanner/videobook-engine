@@ -49,13 +49,13 @@ describe("asset status derivation", () => {
     expect(r.ok && r.value).toBe("processing");
   });
 
-  it("analyzing: vid- with original.mp4 + .original.json but no analysis", async () => {
+  it("ready: vid- with original.mp4 + .original.json but no analysis (analysis is lazy)", async () => {
     const { assetId } = await makeAsset("anlyz", {
       "original.mp4": "x",
       ".original.json": "{}",
     });
     const r = await cfs.getAssetStatus(assetId, "p");
-    expect(r.ok && r.value).toBe("analyzing");
+    expect(r.ok && r.value).toBe("ready");
   });
 
   it("processing: legacy .processing.json marker wins over file-only state", async () => {
@@ -194,7 +194,7 @@ describe("asset status derivation", () => {
         generationError: null,
         assetRow: null,
       }),
-    ).toBe("analyzing");
+    ).toBe("ready");
   });
 
   describe("assets-row precedence", () => {

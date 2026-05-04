@@ -130,8 +130,7 @@ function mapKindToStatus(meta: AssetMeta, queued: boolean): AssetStatus | null {
  *      a. Generation error recorded            → "error"
  *      b. id === "final"                       → "ready"
  *      c. vid- without .original.json          → "processing"
- *      d. vid- without .original.analysis.json → "analyzing"
- *      e. otherwise                            → "ready"
+ *      d. otherwise                            → "ready"
  *   9. Has part file (any kind)                → "error"
  *  10. Otherwise                               → "error" (orphan)
  */
@@ -192,7 +191,6 @@ export function computeAssetStatus(input: AssetStatusInput): AssetStatus {
     if (generationError !== null) return "error";
     if (assetId === "final") return "ready";
     if (isVideo && !fileNames.has(".original.json")) return "processing";
-    if (isVideo && !fileNames.has(".original.analysis.json")) return "analyzing";
     return "ready";
   }
 
