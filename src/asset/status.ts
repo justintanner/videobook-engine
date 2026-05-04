@@ -194,6 +194,10 @@ export function computeAssetStatus(input: AssetStatusInput): AssetStatus {
     return "ready";
   }
 
+  // Plan singleton: no primary media file by design — only `index.md` and
+  // `.plan.json`. Treat as ready once the markdown has been written.
+  if (assetId === "plan" && fileNames.has("index.md")) return "ready";
+
   if (hasPartFile) return "error";
   return "error";
 }
