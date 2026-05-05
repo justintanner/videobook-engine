@@ -81,13 +81,16 @@ export async function writeAudioWaveform(
           { path: exportRel, rebuild: (db) => exportAudioWaveform(db, assetId) },
         ],
       });
-      const hash = await commitAndFinalizeOperation(projectDir, result, {
+      // commitAndFinalizeOperation returns null when git status is clean —
+      // i.e. the waveform sqlite row + export file produced no on-disk diff
+      // (already at HEAD). The data is still persisted via runOperation's
+      // sqlite write + export write, so a no-op commit is benign, not fatal.
+      await commitAndFinalizeOperation(projectDir, result, {
         operation: "write_audio_waveform",
         assetId,
         details: { bar_count: peaks.length },
         gitPath,
       });
-      if (!hash) throw new Error("Failed to commit audio waveform");
     });
   } catch (error: unknown) {
     return err({
