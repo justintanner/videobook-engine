@@ -27,12 +27,19 @@ export interface ProjectMetadata {
 }
 
 // Git commit entry
+export interface GitFileChange {
+  status: string;
+  file: string;
+  oldFile?: string;
+}
+
 export interface GitCommit {
   hash: string;
   message: string;
   date: string;
   author?: string;
   files?: string[];
+  fileChanges?: GitFileChange[];
 }
 
 // Lock data stored in lock files

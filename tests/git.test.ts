@@ -65,6 +65,26 @@ describe('git operations', () => {
     expect(history[0]!.message).toContain('vid-a');
   });
 
+  it('getAssetHistory includes file change statuses', async () => {
+    const projectDir = path.join(sandbox.projectsDir, projectSlug);
+    const assetDir = path.join(projectDir, 'vid-test');
+    await fs.mkdir(assetDir, { recursive: true });
+
+    await fs.writeFile(path.join(assetDir, 'original.mp4'), 'version-1');
+    await sandbox.fs.commitOperation('upload', 'vid-test', undefined, projectSlug);
+
+    await fs.unlink(path.join(assetDir, 'original.mp4'));
+    await sandbox.fs.commitOperation('delete-file', 'vid-test', undefined, projectSlug);
+
+    const history = await sandbox.fs.getAssetHistory('vid-test', projectSlug);
+    expect(history[0]!.fileChanges).toEqual([
+      { status: 'D', file: 'original.mp4' },
+    ]);
+    expect(history[1]!.fileChanges).toEqual([
+      { status: 'A', file: 'original.mp4' },
+    ]);
+  });
+
   it('restoreAsset restores files from a previous commit', async () => {
     const projectDir = path.join(sandbox.projectsDir, projectSlug);
     const assetDir = path.join(projectDir, 'vid-test');
@@ -86,5 +106,47 @@ describe('git operations', () => {
     // Verify content
     const content = await fs.readFile(path.join(assetDir, 'original.mp4'), 'utf-8');
     expect(content).toBe('version-1');
+  });
+
+  it('restoreAsset succeeds when the target version is already current', async () => {
+    const projectDir = path.join(sandbox.projectsDir, projectSlug);
+    const assetDir = path.join(projectDir, 'vid-test');
+    await fs.mkdir(assetDir, { recursive: true });
+
+    await fs.writeFile(path.join(assetDir, 'original.mp4'), 'version-1');
+    const hash1 = await sandbox.fs.commitOperation('upload', 'vid-test', undefined, projectSlug);
+    expect(hash1).toBeTruthy();
+
+    await fs.writeFile(path.join(assetDir, 'original.mp4'), 'version-2');
+    await sandbox.fs.commitOperation('edit', 'vid-test', undefined, projectSlug);
+
+    const firstRestoreHash = await sandbox.fs.restoreAsset('vid-test', hash1!, projectSlug);
+    expect(firstRestoreHash).toBeTruthy();
+
+    const secondRestoreHash = await sandbox.fs.restoreAsset('vid-test', hash1!, projectSlug);
+    expect(secondRestoreHash).toBe(firstRestoreHash);
+
+    const content = await fs.readFile(path.join(assetDir, 'original.mp4'), 'utf-8');
+    expect(content).toBe('version-1');
+  });
+
+  it('restoreAsset removes files added after the target commit', async () => {
+    const projectDir = path.join(sandbox.projectsDir, projectSlug);
+    const assetDir = path.join(projectDir, 'vid-test');
+    await fs.mkdir(assetDir, { recursive: true });
+
+    await fs.writeFile(path.join(assetDir, 'original.mp4'), 'version-1');
+    const hash1 = await sandbox.fs.commitOperation('upload', 'vid-test', undefined, projectSlug);
+    expect(hash1).toBeTruthy();
+
+    await fs.writeFile(path.join(assetDir, 'analysis.json'), 'later-only');
+    await sandbox.fs.commitOperation('write', 'vid-test', undefined, projectSlug);
+
+    const restoreHash = await sandbox.fs.restoreAsset('vid-test', hash1!, projectSlug);
+    expect(restoreHash).toBeTruthy();
+
+    const content = await fs.readFile(path.join(assetDir, 'original.mp4'), 'utf-8');
+    expect(content).toBe('version-1');
+    await expect(fs.access(path.join(assetDir, 'analysis.json'))).rejects.toThrow();
   });
 });

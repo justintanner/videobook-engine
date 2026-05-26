@@ -34,7 +34,7 @@ export async function getAssetHistory(
   }
 
   const result = await gitExecSafe(
-    ['log', `--max-count=${limit}`, '--format=%H\x1f%s\x1f%ai', '--name-only', '--', assetId],
+    ['log', `--max-count=${limit}`, '--format=%H\x1f%s\x1f%ai', '--name-status', '--', assetId],
     { cwd: projectDir, gitPath },
   );
 
@@ -49,17 +49,29 @@ function parseAssetHistoryOutput(stdout: string, assetId: string): GitCommit[] {
   const history: GitCommit[] = [];
   const prefix = assetId + '/';
   let current: GitCommit | null = null;
+  const stripPrefix = (file: string): string =>
+    file.startsWith(prefix) ? file.slice(prefix.length) : file;
 
   for (const line of stdout.trim().split('\n')) {
     if (!line) continue;
     if (line.includes('\x1f')) {
       const parts = line.split('\x1f');
       if (parts.length < 3) continue;
-      current = { hash: parts[0]!, message: parts[1]!, date: parts[2]!, files: [] };
+      current = { hash: parts[0]!, message: parts[1]!, date: parts[2]!, files: [], fileChanges: [] };
       history.push(current);
     } else if (current) {
-      const file = line.startsWith(prefix) ? line.slice(prefix.length) : line;
+      const fields = line.split('\t');
+      const status = fields[0] ?? '';
+      const rawFile = fields.length >= 3 && /^[RC]/.test(status)
+        ? fields[2]!
+        : fields[1] ?? line;
+      const file = stripPrefix(rawFile);
       current.files!.push(file);
+      current.fileChanges!.push({
+        status: status[0] ?? '',
+        file,
+        ...(fields.length >= 3 && /^[RC]/.test(status) ? { oldFile: stripPrefix(fields[1]!) } : {}),
+      });
     }
   }
   return history;
