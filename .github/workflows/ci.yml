@@ -21,7 +21,7 @@ jobs:
       - name: Configure git for tests
         run: |
           git config --global user.name "CI"
-          git config --global user.email "ci@clipfirst.test"
+          git config --global user.email "ci@videocity.test"
       - run: npm run typecheck
       - run: npm run build
       - run: npm test
