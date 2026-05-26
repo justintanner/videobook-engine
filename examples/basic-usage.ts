@@ -1,15 +1,15 @@
 /**
- * Basic usage of clipfirst-engine: create a project, add assets, write/read files.
+ * Basic usage of vc-engine: create a project, add assets, write/read files.
  *
  * Run: npx tsx examples/basic-usage.ts
  */
-import * as fs from 'node:fs/promises';
-import * as os from 'node:os';
-import * as path from 'node:path';
-import { createFs } from 'clipfirst-engine';
+import * as fs from "node:fs/promises";
+import * as os from "node:os";
+import * as path from "node:path";
+import { createFs } from "vc-engine";
 
-const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'clipfirst-basic-'));
-const projectsDir = path.join(tmpDir, 'projects');
+const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "clipfirst-basic-"));
+const projectsDir = path.join(tmpDir, "projects");
 await fs.mkdir(projectsDir);
 
 try {
@@ -22,42 +22,50 @@ try {
   console.log(`Created project: ${slug}`);
 
   // --- Create a video asset ---
-  const videoResult = await cfs.createAsset('vid', 'beach sunset', slug);
+  const videoResult = await cfs.createAsset("vid", "beach sunset", slug);
   if (!videoResult.ok) throw new Error(videoResult.error.message);
   console.log(`Created video asset: ${videoResult.value.assetId}`);
 
   // --- Create an image asset ---
-  const imageResult = await cfs.createAsset('img', 'thumbnail photo', slug);
+  const imageResult = await cfs.createAsset("img", "thumbnail photo", slug);
   if (!imageResult.ok) throw new Error(imageResult.error.message);
   console.log(`Created image asset: ${imageResult.value.assetId}`);
 
   // --- Write a text file ---
   const writeTextResult = await cfs.writeFile(
     videoResult.value.assetId,
-    'notes.txt',
-    'Shot on location at Malibu beach.',
+    "notes.txt",
+    "Shot on location at Malibu beach.",
     slug,
   );
   if (!writeTextResult.ok) throw new Error(writeTextResult.error.message);
-  console.log('Wrote notes.txt');
+  console.log("Wrote notes.txt");
 
   // --- Write a binary file ---
-  const fakeVideo = Buffer.from('fake-mp4-data-for-demo');
+  const fakeVideo = Buffer.from("fake-mp4-data-for-demo");
   const writeBinResult = await cfs.writeFile(
     videoResult.value.assetId,
-    'original.mp4',
+    "original.mp4",
     fakeVideo,
     slug,
   );
   if (!writeBinResult.ok) throw new Error(writeBinResult.error.message);
-  console.log('Wrote original.mp4');
+  console.log("Wrote original.mp4");
 
   // --- Read files back ---
-  const readTextResult = await cfs.readFile(videoResult.value.assetId, 'notes.txt', slug);
+  const readTextResult = await cfs.readFile(
+    videoResult.value.assetId,
+    "notes.txt",
+    slug,
+  );
   if (!readTextResult.ok) throw new Error(readTextResult.error.message);
   console.log(`Read notes.txt: "${readTextResult.value.toString()}"`);
 
-  const readBinResult = await cfs.readFile(videoResult.value.assetId, 'original.mp4', slug);
+  const readBinResult = await cfs.readFile(
+    videoResult.value.assetId,
+    "original.mp4",
+    slug,
+  );
   if (!readBinResult.ok) throw new Error(readBinResult.error.message);
   console.log(`Read original.mp4: ${readBinResult.value.length} bytes`);
 
@@ -77,7 +85,7 @@ try {
     console.log(`    ${file.name} — ${file.size_bytes} bytes`);
   }
 
-  console.log('\nDone!');
+  console.log("\nDone!");
 } finally {
   await fs.rm(tmpDir, { recursive: true, force: true });
 }

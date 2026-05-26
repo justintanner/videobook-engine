@@ -1,5 +1,5 @@
 {
-  "name": "clipfirst-engine",
+  "name": "vc-engine",
   "version": "0.6.0",
   "type": "module",
   "exports": {

@@ -1,7 +1,7 @@
 import { gitExec, gitExecSafe } from "./exec.js";
 import { closeMetadataDb } from "../db/metadata-client.js";
 
-const STASH_MESSAGE = "clipfirst-engine: auto-stash";
+const STASH_MESSAGE = "vc-engine: auto-stash";
 
 /**
  * Close the cached metadata.sqlite handle so the NEXT getMetadataDb call

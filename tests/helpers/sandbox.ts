@@ -1,11 +1,11 @@
-import * as fs from 'node:fs/promises';
-import * as path from 'node:path';
-import * as os from 'node:os';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
+import * as os from "node:os";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 
-import { createFs, type ClipfirstFs } from '../../src/index.js';
-import { closeAllStateDbs } from '../../src/db/client.js';
+import { createFs, type ClipfirstFs } from "../../src/index.js";
+import { closeAllStateDbs } from "../../src/db/client.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -17,15 +17,19 @@ export interface Sandbox {
 }
 
 export async function createSandbox(): Promise<Sandbox> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'clipfirst-engine-test-'));
-  const projectsDir = path.join(dir, 'projects');
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "vc-engine-test-"));
+  const projectsDir = path.join(dir, "projects");
   await fs.mkdir(projectsDir, { recursive: true });
 
   // Configure git for test environment
-  await execFileAsync('git', ['config', '--global', 'user.email', 'test@clipfirst.test'], {
-    env: { ...process.env, HOME: dir },
-  }).catch(() => {});
-  await execFileAsync('git', ['config', '--global', 'user.name', 'Test User'], {
+  await execFileAsync(
+    "git",
+    ["config", "--global", "user.email", "test@clipfirst.test"],
+    {
+      env: { ...process.env, HOME: dir },
+    },
+  ).catch(() => {});
+  await execFileAsync("git", ["config", "--global", "user.name", "Test User"], {
     env: { ...process.env, HOME: dir },
   }).catch(() => {});
 

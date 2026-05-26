@@ -1,6 +1,6 @@
-# clipfirst-engine
+# vc-engine
 
-[![CI](https://github.com/justintanner/clipfirst-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/justintanner/clipfirst-engine/actions/workflows/ci.yml)
+[![CI](https://github.com/justintanner/vc-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/justintanner/vc-engine/actions/workflows/ci.yml)
 [![Node.js](https://img.shields.io/badge/node-%3E%3D20-brightgreen)](https://nodejs.org)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.5-blue)](https://www.typescriptlang.org)
 
@@ -9,13 +9,13 @@ TypeScript/Node.js filesystem abstraction for managing video, image, audio, scri
 ## Install
 
 ```bash
-npm install clipfirst-engine
+npm install vc-engine
 ```
 
 ## Quick Start
 
 ```typescript
-import { createFs } from 'clipfirst-engine';
+import { createFs } from 'vc-engine';
 
 const fs = createFs({ projectsDir: '/path/to/projects' });
 
@@ -189,7 +189,7 @@ const result = await fs.queue.enqueueAndWait<RenderResult>(slug, {
 Tracks external long-running provider jobs (transcription, generation, etc.) in the `pending_tasks` table of `state.sqlite`. Each row is keyed by `assetId`; `taskId` is the provider's task identifier (or `QUEUED_TASK_ID` for jobs that haven't been submitted yet). `createdAt` is **epoch seconds**.
 
 ```typescript
-import { QUEUED_TASK_ID } from 'clipfirst-engine';
+import { QUEUED_TASK_ID } from 'vc-engine';
 
 await fs.pendingTasks.write(slug, {
   assetId: 'vid-clip-1',
