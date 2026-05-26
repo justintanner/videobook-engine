@@ -6,21 +6,21 @@ import Database, { type Database as DatabaseType } from "better-sqlite3";
 import { migrateState } from "./migrate.js";
 import { closeAllMetadataDbs, closeMetadataDb } from "./metadata-client.js";
 
-export const CLIPFIRST_DIR = ".clipfirst";
+export const VIDEOCITY_DIR = ".videocity";
 export const STATE_DB_FILENAME = "state.sqlite";
 
 const cache = new Map<string, DatabaseType>();
 
-function clipfirstDir(projectDir: string): string {
-  return path.join(projectDir, CLIPFIRST_DIR);
+function videocityDir(projectDir: string): string {
+  return path.join(projectDir, VIDEOCITY_DIR);
 }
 
 export function stateDbPath(projectDir: string): string {
-  return path.join(clipfirstDir(projectDir), STATE_DB_FILENAME);
+  return path.join(videocityDir(projectDir), STATE_DB_FILENAME);
 }
 
-function ensureClipfirstDir(projectDir: string): void {
-  fs.mkdirSync(clipfirstDir(projectDir), { recursive: true });
+function ensureVideocityDir(projectDir: string): void {
+  fs.mkdirSync(videocityDir(projectDir), { recursive: true });
 }
 
 function configurePragmas(db: DatabaseType): void {
@@ -31,7 +31,7 @@ function configurePragmas(db: DatabaseType): void {
 }
 
 function openState(projectDir: string): DatabaseType {
-  ensureClipfirstDir(projectDir);
+  ensureVideocityDir(projectDir);
   const db = new Database(stateDbPath(projectDir));
   configurePragmas(db);
   migrateState(db);

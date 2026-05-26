@@ -3,7 +3,7 @@ import * as path from "node:path";
 
 import Database from "better-sqlite3";
 
-import { CLIPFIRST_DIR } from "./client.js";
+import { VIDEOCITY_DIR } from "./client.js";
 
 interface SchemaRow {
   version: number;
@@ -50,7 +50,7 @@ export interface VersionCheckResult {
 /**
  * Guard against opening a project with a SCHEMA NEWER than this build knows
  * about — typically a downgrade scenario where a developer rolled back the
- * clipfirst binary but the project's metadata.sqlite was migrated by a
+ * videocity binary but the project's metadata.sqlite was migrated by a
  * newer build. A noisy refusal beats silent corruption.
  */
 export async function checkProjectSchemaVersion(
@@ -59,10 +59,10 @@ export async function checkProjectSchemaVersion(
   buildMetadataVersion: number,
 ): Promise<VersionCheckResult> {
   const stateVer = await readSchemaVersion(
-    path.join(projectDir, CLIPFIRST_DIR, "state.sqlite"),
+    path.join(projectDir, VIDEOCITY_DIR, "state.sqlite"),
   );
   const metaVer = await readSchemaVersion(
-    path.join(projectDir, CLIPFIRST_DIR, "metadata.sqlite"),
+    path.join(projectDir, VIDEOCITY_DIR, "metadata.sqlite"),
   );
   if (stateVer > buildStateVersion) {
     return {

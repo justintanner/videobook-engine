@@ -8,7 +8,7 @@ export const name = "metadata_init";
  *
  * Tables created here are the source-of-truth for content metadata. The DB
  * file is committed to git alongside canonical JSON exports under
- * .clipfirst/export/ — see src/db/export.ts for the export pipeline.
+ * .videocity/export/ — see src/db/export.ts for the export pipeline.
  *
  * Phase 2 ships only the entities migrated in this phase (project, timeline,
  * timeline_slots, characters, character_pins, render_settings, asset_metadata

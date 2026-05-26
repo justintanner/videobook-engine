@@ -3,14 +3,14 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as os from "node:os";
 
-import { createFs, type ClipfirstFs } from "../../src/index.js";
+import { createFs, type VideocityFs } from "../../src/index.js";
 import { closeAllStateDbs, getStateDb } from "../../src/db/client.js";
 import { dequeue, heartbeat } from "../../src/queue/dequeue.js";
 import { reapStaleLeases } from "../../src/queue/reaper.js";
 
 describe("queue lease + heartbeat + reaper", () => {
   let projectsDir: string;
-  let cfs: ClipfirstFs;
+  let cfs: VideocityFs;
 
   beforeEach(async () => {
     projectsDir = await fs.mkdtemp(path.join(os.tmpdir(), "cfs-lease-"));

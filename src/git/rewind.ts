@@ -18,7 +18,7 @@ export async function rewindProject(
   const hash = await withGitLock(projectDir, async () => {
     try {
       await gitExec(["checkout", commitHash], { cwd: projectDir, gitPath });
-      // The full-tree checkout replaces .clipfirst/metadata.sqlite — drop
+      // The full-tree checkout replaces .videocity/metadata.sqlite — drop
       // the cached SQLite handle so subsequent operations bind to the new
       // inode rather than failing with SQLITE_READONLY_DBMOVED.
       try {

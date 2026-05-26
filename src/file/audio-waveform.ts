@@ -18,11 +18,12 @@ import {
 } from "../db/run-operation.js";
 import { withGitLock } from "../git/mutex.js";
 import { getMetadataDb } from "../db/metadata-client.js";
+import { VIDEOCITY_DIR } from "../db/client.js";
 
 async function metadataDbExists(projectDir: string): Promise<boolean> {
   try {
     const stat = await fs.stat(
-      path.join(projectDir, ".clipfirst", "metadata.sqlite"),
+      path.join(projectDir, VIDEOCITY_DIR, "metadata.sqlite"),
     );
     return stat.isFile();
   } catch {

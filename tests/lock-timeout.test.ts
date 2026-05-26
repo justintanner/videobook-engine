@@ -12,7 +12,7 @@ describe("lock timeout behavior", () => {
   let assetDir: string;
 
   beforeEach(async () => {
-    projectsDir = await fs.mkdtemp(path.join(os.tmpdir(), "clipfirst-timeout-"));
+    projectsDir = await fs.mkdtemp(path.join(os.tmpdir(), "videocity-timeout-"));
     projectDir = path.join(projectsDir, "proj");
     assetDir = path.join(projectDir, "vid-test");
     await fs.mkdir(assetDir, { recursive: true });

@@ -1,15 +1,15 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
-import { CLIPFIRST_DIR } from "./client.js";
+import { VIDEOCITY_DIR } from "./client.js";
 
 const REQUIRED_PATTERNS = [
-  `${CLIPFIRST_DIR}/state.sqlite`,
-  `${CLIPFIRST_DIR}/state.sqlite-wal`,
-  `${CLIPFIRST_DIR}/state.sqlite-shm`,
-  `${CLIPFIRST_DIR}/state.sqlite-journal`,
-  `${CLIPFIRST_DIR}/.project.lock`,
-  `${CLIPFIRST_DIR}/metadata.sqlite-journal`,
+  `${VIDEOCITY_DIR}/state.sqlite`,
+  `${VIDEOCITY_DIR}/state.sqlite-wal`,
+  `${VIDEOCITY_DIR}/state.sqlite-shm`,
+  `${VIDEOCITY_DIR}/state.sqlite-journal`,
+  `${VIDEOCITY_DIR}/.project.lock`,
+  `${VIDEOCITY_DIR}/metadata.sqlite-journal`,
 ];
 
 /**

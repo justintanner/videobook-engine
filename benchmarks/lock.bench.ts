@@ -6,7 +6,7 @@ import { createFs } from "../src/index.js";
 import { FAST_BENCH_OPTS } from "./helpers/setup.js";
 
 // Top-level await: lock operations are pure filesystem, no git needed
-const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clipfirst-lock-bench-"));
+const dir = await fs.mkdtemp(path.join(os.tmpdir(), "videocity-lock-bench-"));
 const outputDir = path.join(dir, "output");
 await fs.mkdir(outputDir, { recursive: true });
 const instance = createFs({ outputDir });

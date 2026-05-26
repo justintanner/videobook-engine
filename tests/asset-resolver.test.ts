@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createFs } from "../src/index.js";
-import type { ClipfirstFs } from "../src/index.js";
+import type { VideocityFs } from "../src/index.js";
 import { parseAssetTags, resolveAllAssets, expandSlotRefs } from "../src/asset/resolver.js";
 
 describe("parseAssetTags", () => {
@@ -87,11 +87,11 @@ describe("expandSlotRefs", () => {
 
 describe("resolveAllAssets (real fs)", () => {
   let tempDir: string;
-  let fs: ClipfirstFs;
+  let fs: VideocityFs;
   const slug = "test-proj";
 
   beforeEach(async () => {
-    tempDir = await mkdtemp(join(tmpdir(), "clipfirst-resolver-"));
+    tempDir = await mkdtemp(join(tmpdir(), "videocity-resolver-"));
     fs = createFs({ projectsDir: tempDir });
     await fs.createProject(slug);
   });

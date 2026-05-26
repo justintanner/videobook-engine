@@ -71,6 +71,7 @@ import { readLog } from "./log.js";
 import { queueApi, type QueueApi } from "./queue/index.js";
 import { ensureGitignorePatterns } from "./db/gitignore.js";
 import { getStateDb, closeAllStateDbs } from "./db/client.js";
+import { migrateLegacySidecar } from "./git/init.js";
 import { getMetadataDb } from "./db/metadata-client.js";
 import {
   recordPromptRow,
@@ -124,7 +125,7 @@ import {
 } from "./db/version-guard.js";
 import { highestMigrationVersion as highestStateVersion } from "./db/migrate.js";
 
-export interface ClipfirstFs {
+export interface VideocityFs {
   // Project
   createProject(
     slug?: string,
@@ -356,7 +357,7 @@ export interface ClipfirstFs {
   // Resolve a project slug to a directory; null if not present.
   resolveProjectDir(slug?: string): Promise<string | null>;
 
-  // Idempotent initialization: ensures .clipfirst/ exists, opens state DB,
+  // Idempotent initialization: ensures .videocity/ exists, opens state DB,
   // applies gitignore patterns. Safe to call on every boot or enqueue.
   ensureProjectInitialized(slug: string): Promise<void>;
 
@@ -529,7 +530,7 @@ export interface ProjectScopedQueue {
   ): Promise<import("./queue/index.js").QueueRunner | null>;
 }
 
-export function createFs(config: FsConfig): ClipfirstFs {
+export function createFs(config: FsConfig): VideocityFs {
   const { projectsDir, gitPath } = config;
 
   async function resolve(projectSlug: string): Promise<string | null> {
@@ -739,7 +740,9 @@ export function createFs(config: FsConfig): ClipfirstFs {
     ensureProjectInitialized: async (slug) => {
       const dir = await resolve(slug);
       if (!dir) return;
-      // Opening the state DB is idempotent and creates .clipfirst/ as a side-effect.
+      // Upgrade legacy `.clipfirst/` sidecars before opening the state DB.
+      await migrateLegacySidecar(dir, gitPath);
+      // Opening the state DB is idempotent and creates .videocity/ as a side-effect.
       getStateDb(dir);
       await ensureGitignorePatterns(dir);
     },

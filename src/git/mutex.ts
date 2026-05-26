@@ -2,7 +2,7 @@ import * as path from "node:path";
 import * as fs from "node:fs/promises";
 import { lock as lockFile } from "proper-lockfile";
 
-import { CLIPFIRST_DIR } from "../db/client.js";
+import { VIDEOCITY_DIR } from "../db/client.js";
 
 const locks = new Map<string, Promise<void>>();
 
@@ -30,7 +30,7 @@ export async function withGitLock<T>(
   locks.set(key, next);
 
   await prev;
-  const lockDir = path.join(key, CLIPFIRST_DIR);
+  const lockDir = path.join(key, VIDEOCITY_DIR);
   await fs.mkdir(lockDir, { recursive: true });
   const release = await lockFile(key, {
     lockfilePath: path.join(lockDir, ".project.lock"),

@@ -8,7 +8,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { createFs } from "vc-engine";
 
-const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "clipfirst-basic-"));
+const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "videocity-basic-"));
 const projectsDir = path.join(tmpDir, "projects");
 await fs.mkdir(projectsDir);
 

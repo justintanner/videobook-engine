@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as os from "node:os";
 
-import { createFs, type ClipfirstFs } from "../../src/index.js";
+import { createFs, type VideocityFs } from "../../src/index.js";
 import { closeAllStateDbs } from "../../src/db/client.js";
 import { getMetadataDb } from "../../src/db/metadata-client.js";
 
@@ -17,7 +17,7 @@ interface SlotRow {
 
 describe("timeline metadata.sqlite migration", () => {
   let projectsDir: string;
-  let cfs: ClipfirstFs;
+  let cfs: VideocityFs;
   let projectDir: string;
 
   beforeEach(async () => {
@@ -81,7 +81,7 @@ describe("timeline metadata.sqlite migration", () => {
     expect(read.value.slots[0].slug).toBe("vid-x");
   });
 
-  it("emits canonical export under .clipfirst/export/timeline.json", async () => {
+  it("emits canonical export under .videocity/export/timeline.json", async () => {
     const config = {
       slots: [{ slug: "vid-z", volume: 1 }],
       render: "square" as const,
@@ -90,7 +90,7 @@ describe("timeline metadata.sqlite migration", () => {
 
     const exportPath = path.join(
       projectDir,
-      ".clipfirst",
+      ".videocity",
       "export",
       "timeline.json",
     );

@@ -1,4 +1,4 @@
-import type { ClipfirstFs } from "./index.js";
+import type { VideocityFs } from "./index.js";
 
 type ChatLogEntry = {
   role: "user" | "assistant";
@@ -10,12 +10,12 @@ type ChatLogEntry = {
   ts: number;
 };
 
-function logUserTurn(fs: ClipfirstFs, slug: string, prompt: string): void {
+function logUserTurn(fs: VideocityFs, slug: string, prompt: string): void {
   fs.appendLog("chat", { role: "user", text: prompt, ts: Date.now() }, slug).catch(() => {});
 }
 
 function logAssistantTurn(
-  fs: ClipfirstFs,
+  fs: VideocityFs,
   slug: string,
   tool: string,
   params: Record<string, unknown>,
@@ -26,7 +26,7 @@ function logAssistantTurn(
 }
 
 async function getRecentHistory(
-  fs: ClipfirstFs,
+  fs: VideocityFs,
   slug: string,
   limit = 10,
 ): Promise<ChatLogEntry[]> {

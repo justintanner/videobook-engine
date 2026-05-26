@@ -15,7 +15,7 @@ export async function seedHistory(
   targetAssetId: string,
 ): Promise<void> {
   const BASE_EPOCH = 1_700_000_000;
-  const AUTHOR = "Bench User <bench@clipfirst.test>";
+  const AUTHOR = "Bench User <bench@videocity.test>";
 
   return new Promise<void>((resolve, reject) => {
     const proc = spawn("git", ["fast-import", "--quiet"], {

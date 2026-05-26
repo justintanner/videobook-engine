@@ -2,9 +2,9 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
 import { gitExecSafe } from "../git/exec.js";
-import { CLIPFIRST_DIR } from "./client.js";
+import { VIDEOCITY_DIR } from "./client.js";
 
-const METADATA_PATH = `${CLIPFIRST_DIR}/metadata.sqlite`;
+const METADATA_PATH = `${VIDEOCITY_DIR}/metadata.sqlite`;
 
 const REQUIRED_PATTERNS = [`${METADATA_PATH} merge=ours -text`];
 

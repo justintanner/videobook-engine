@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as os from "node:os";
 
-import { createFs, type ClipfirstFs } from "../../src/index.js";
+import { createFs, type VideocityFs } from "../../src/index.js";
 import { closeAllStateDbs } from "../../src/db/client.js";
 import { getMetadataDb } from "../../src/db/metadata-client.js";
 
@@ -16,7 +16,7 @@ interface PinRow {
 
 describe("character metadata.sqlite migration", () => {
   let projectsDir: string;
-  let cfs: ClipfirstFs;
+  let cfs: VideocityFs;
   let projectDir: string;
 
   beforeEach(async () => {
@@ -176,14 +176,14 @@ describe("character metadata.sqlite migration", () => {
     await cfs.writeMetadata("char-alex", "character", character, "p");
 
     const exportedChars = await fs.readFile(
-      path.join(projectDir, ".clipfirst", "export", "characters.json"),
+      path.join(projectDir, ".videocity", "export", "characters.json"),
       "utf-8",
     );
     expect(exportedChars).toContain('"asset_id": "char-alex"');
     expect(exportedChars.endsWith("\n")).toBe(true);
 
     const exportedPins = await fs.readFile(
-      path.join(projectDir, ".clipfirst", "export", "character_pins.json"),
+      path.join(projectDir, ".videocity", "export", "character_pins.json"),
       "utf-8",
     );
     expect(exportedPins).toContain('"slot": "wardrobe"');
@@ -193,7 +193,7 @@ describe("character metadata.sqlite migration", () => {
 
 describe("asset_metadata fallback for arbitrary keys", () => {
   let projectsDir: string;
-  let cfs: ClipfirstFs;
+  let cfs: VideocityFs;
   let projectDir: string;
 
   beforeEach(async () => {

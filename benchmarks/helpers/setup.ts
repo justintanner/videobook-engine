@@ -5,25 +5,25 @@ import * as crypto from "node:crypto";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
-import { createFs, type ClipfirstFs } from "../../src/index.js";
+import { createFs, type VideocityFs } from "../../src/index.js";
 
 const execFileAsync = promisify(execFile);
 
 export interface BenchSandbox {
   dir: string;
   outputDir: string;
-  fs: ClipfirstFs;
+  fs: VideocityFs;
   cleanup: () => Promise<void>;
 }
 
 export async function createBenchSandbox(): Promise<BenchSandbox> {
-  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "clipfirst-bench-"));
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), "videocity-bench-"));
   const outputDir = path.join(dir, "output");
   await fs.mkdir(outputDir, { recursive: true });
 
   await execFileAsync(
     "git",
-    ["config", "--global", "user.email", "bench@clipfirst.test"],
+    ["config", "--global", "user.email", "bench@videocity.test"],
     {
       env: { ...process.env, HOME: dir },
     },
@@ -90,7 +90,7 @@ export const FAST_BENCH_OPTS = {
 } as const;
 
 export async function populateProject(
-  instance: ClipfirstFs,
+  instance: VideocityFs,
   projectSlug: string,
   count: number,
 ): Promise<string[]> {

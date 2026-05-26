@@ -4,7 +4,7 @@ import { createHash } from "node:crypto";
 
 import Database, { type Database as DatabaseType } from "better-sqlite3";
 
-import { CLIPFIRST_DIR } from "./client.js";
+import { VIDEOCITY_DIR } from "./client.js";
 import * as m0001 from "./migrations/metadata_0001_init.js";
 import * as m0002 from "./migrations/metadata_0002_audio_waveforms.js";
 import * as m0003 from "./migrations/metadata_0003_timeline_audio.js";
@@ -29,12 +29,12 @@ const METADATA_MIGRATIONS: ReadonlyArray<MetadataMigration> = [
 
 const cache = new Map<string, DatabaseType>();
 
-function clipfirstDir(projectDir: string): string {
-  return path.join(projectDir, CLIPFIRST_DIR);
+function videocityDir(projectDir: string): string {
+  return path.join(projectDir, VIDEOCITY_DIR);
 }
 
 function metadataDbPath(projectDir: string): string {
-  return path.join(clipfirstDir(projectDir), METADATA_DB_FILENAME);
+  return path.join(videocityDir(projectDir), METADATA_DB_FILENAME);
 }
 
 interface SchemaRow {
@@ -146,12 +146,12 @@ function configurePragmas(db: DatabaseType): void {
   db.pragma("auto_vacuum = NONE");
 }
 
-function ensureClipfirstDir(projectDir: string): void {
-  fs.mkdirSync(clipfirstDir(projectDir), { recursive: true });
+function ensureVideocityDir(projectDir: string): void {
+  fs.mkdirSync(videocityDir(projectDir), { recursive: true });
 }
 
 function open(projectDir: string): DatabaseType {
-  ensureClipfirstDir(projectDir);
+  ensureVideocityDir(projectDir);
   const db = new Database(metadataDbPath(projectDir));
   configurePragmas(db);
   migrate(db);

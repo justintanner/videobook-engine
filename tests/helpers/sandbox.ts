@@ -4,7 +4,7 @@ import * as os from "node:os";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
-import { createFs, type ClipfirstFs } from "../../src/index.js";
+import { createFs, type VideocityFs } from "../../src/index.js";
 import { closeAllStateDbs } from "../../src/db/client.js";
 
 const execFileAsync = promisify(execFile);
@@ -12,7 +12,7 @@ const execFileAsync = promisify(execFile);
 export interface Sandbox {
   dir: string;
   projectsDir: string;
-  fs: ClipfirstFs;
+  fs: VideocityFs;
   cleanup: () => Promise<void>;
 }
 
@@ -24,7 +24,7 @@ export async function createSandbox(): Promise<Sandbox> {
   // Configure git for test environment
   await execFileAsync(
     "git",
-    ["config", "--global", "user.email", "test@clipfirst.test"],
+    ["config", "--global", "user.email", "test@videocity.test"],
     {
       env: { ...process.env, HOME: dir },
     },

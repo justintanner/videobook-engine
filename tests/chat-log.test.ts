@@ -3,7 +3,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createFs } from "../src/index.js";
-import type { ClipfirstFs } from "../src/index.js";
+import type { VideocityFs } from "../src/index.js";
 import {
   formatHistoryForPrompt,
   getRecentHistory,
@@ -80,11 +80,11 @@ describe("formatHistoryForPrompt", () => {
 
 describe("chat log round-trip (real fs)", () => {
   let tempDir: string;
-  let fs: ClipfirstFs;
+  let fs: VideocityFs;
   const slug = "test-proj";
 
   beforeEach(async () => {
-    tempDir = await mkdtemp(join(tmpdir(), "clipfirst-chatlog-"));
+    tempDir = await mkdtemp(join(tmpdir(), "videocity-chatlog-"));
     fs = createFs({ projectsDir: tempDir });
     await fs.createProject(slug);
   });

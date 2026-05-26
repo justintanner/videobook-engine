@@ -8,7 +8,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { createFs } from "vc-engine";
 
-const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "clipfirst-git-"));
+const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "videocity-git-"));
 const outputDir = path.join(tmpDir, "output");
 await fs.mkdir(outputDir);
 

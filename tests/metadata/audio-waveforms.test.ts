@@ -3,13 +3,13 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as os from "node:os";
 
-import { createFs, type ClipfirstFs } from "../../src/index.js";
+import { createFs, type VideocityFs } from "../../src/index.js";
 import { closeAllStateDbs } from "../../src/db/client.js";
 import { getMetadataDb } from "../../src/db/metadata-client.js";
 
 describe("audio waveform primitive", () => {
   let projectsDir: string;
-  let cfs: ClipfirstFs;
+  let cfs: VideocityFs;
   let projectDir: string;
 
   beforeEach(async () => {
@@ -51,7 +51,7 @@ describe("audio waveform primitive", () => {
     const exported = await fs.readFile(
       path.join(
         projectDir,
-        ".clipfirst",
+        ".videocity",
         "export",
         "audio_waveforms",
         "vid-alpha.json",
@@ -78,8 +78,8 @@ describe("audio waveform primitive", () => {
   });
 
   it("readAudioWaveform returns NOT_FOUND when no metadata.sqlite exists", async () => {
-    // Wipe .clipfirst/ so metadata.sqlite is gone
-    await fs.rm(path.join(projectDir, ".clipfirst"), {
+    // Wipe .videocity/ so metadata.sqlite is gone
+    await fs.rm(path.join(projectDir, ".videocity"), {
       recursive: true,
       force: true,
     });
@@ -89,7 +89,7 @@ describe("audio waveform primitive", () => {
     expect(r.error.code).toBe("NOT_FOUND");
     // No metadata.sqlite was created by this read
     await expect(
-      fs.access(path.join(projectDir, ".clipfirst", "metadata.sqlite")),
+      fs.access(path.join(projectDir, ".videocity", "metadata.sqlite")),
     ).rejects.toBeTruthy();
   });
 
@@ -108,7 +108,7 @@ describe("audio waveform primitive", () => {
     expect(r.error.code).toBe("NOT_FOUND");
   });
 
-  it("commits only .clipfirst paths even when the asset worktree is dirty", async () => {
+  it("commits only .videocity paths even when the asset worktree is dirty", async () => {
     // Drop a stray uncommitted file inside the asset dir, simulating
     // process_video's mid-job state where original_frames/ are dirty.
     const framesDir = path.join(projectDir, "vid-alpha", "original_frames");
@@ -132,9 +132,9 @@ describe("audio waveform primitive", () => {
       ["show", "--name-only", "--format=", "HEAD"],
       { cwd: projectDir, encoding: "utf-8" },
     ).stdout;
-    expect(lastCommitFiles).toContain(".clipfirst/metadata.sqlite");
+    expect(lastCommitFiles).toContain(".videocity/metadata.sqlite");
     expect(lastCommitFiles).toContain(
-      ".clipfirst/export/audio_waveforms/vid-alpha.json",
+      ".videocity/export/audio_waveforms/vid-alpha.json",
     );
     expect(lastCommitFiles).not.toContain("vid-alpha/original_frames");
   });
@@ -143,7 +143,7 @@ describe("audio waveform primitive", () => {
     await cfs.writeAudioWaveform("vid-alpha", [0.1, 0.9], "p");
     const exportFile = path.join(
       projectDir,
-      ".clipfirst",
+      ".videocity",
       "export",
       "audio_waveforms",
       "vid-alpha.json",
@@ -164,7 +164,7 @@ describe("audio waveform primitive", () => {
 
 describe("recovery rebuilds audio waveform exports", () => {
   let projectsDir: string;
-  let cfs: ClipfirstFs;
+  let cfs: VideocityFs;
   let projectDir: string;
 
   beforeEach(async () => {
@@ -184,7 +184,7 @@ describe("recovery rebuilds audio waveform exports", () => {
     await cfs.writeAudioWaveform("vid-alpha", [0.2, 0.4, 0.6], "p");
     const exportFile = path.join(
       projectDir,
-      ".clipfirst",
+      ".videocity",
       "export",
       "audio_waveforms",
       "vid-alpha.json",
@@ -241,7 +241,7 @@ describe("recovery rebuilds audio waveform exports", () => {
 
 describe("metadata schema downgrade guard", () => {
   let projectsDir: string;
-  let cfs: ClipfirstFs;
+  let cfs: VideocityFs;
   let projectDir: string;
 
   beforeEach(async () => {

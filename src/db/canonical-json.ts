@@ -1,5 +1,5 @@
 /**
- * Deterministic JSON serializer for canonical exports under .clipfirst/export/.
+ * Deterministic JSON serializer for canonical exports under .videocity/export/.
  *
  * Properties:
  *   - Object keys sorted alphabetically at every nesting level.

@@ -4,7 +4,7 @@
 [![Node.js](https://img.shields.io/badge/node-%3E%3D20-brightgreen)](https://nodejs.org)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.5-blue)](https://www.typescriptlang.org)
 
-TypeScript/Node.js filesystem abstraction for managing video, image, audio, script, and character asset projects. Each project is a git repo with a sidecar `.clipfirst/` directory holding two SQLite databases: `state.sqlite` for ephemeral coordination (locks, job queue, recovery journal) and `metadata.sqlite` for content metadata (timeline, characters, asset metadata, audio waveforms). Every mutation produces an atomic git commit; metadata changes are mirrored to canonical JSON exports under `.clipfirst/export/` so git stays diffable.
+TypeScript/Node.js filesystem abstraction for managing video, image, audio, script, and character asset projects. Each project is a git repo with a sidecar `.videocity/` directory holding two SQLite databases: `state.sqlite` for ephemeral coordination (locks, job queue, recovery journal) and `metadata.sqlite` for content metadata (timeline, characters, asset metadata, audio waveforms). Every mutation produces an atomic git commit; metadata changes are mirrored to canonical JSON exports under `.videocity/export/` so git stays diffable.
 
 ## Install
 
@@ -229,7 +229,7 @@ Sibling table to `pending_tasks` for terminal failures. `failedAt` is **epoch se
 
 | Method | Return Type |
 |--------|------------|
-| `ensureProjectInitialized(slug)` | `Promise<void>` — idempotently create `.clipfirst/`, open the state DB, apply gitignore patterns. Safe to call on every boot or enqueue. |
+| `ensureProjectInitialized(slug)` | `Promise<void>` — idempotently create `.videocity/`, open the state DB, apply gitignore patterns. Safe to call on every boot or enqueue. |
 | `recoverIncompleteOperations(slug)` | `Promise<number>` — drain the recovery journal at startup |
 | `checkSchemaVersion(slug)` | `Promise<VersionCheckResult>` — refuse to open a project written by a newer build |
 | `close()` | `void` — close all SQLite handles before process exit |
@@ -238,8 +238,8 @@ Sibling table to `pending_tasks` for terminal failures. `failedAt` is **epoch se
 
 Every metadata write follows the same shape:
 
-1. Acquire the per-project git mutex (`proper-lockfile` on `.clipfirst/.project.lock`).
-2. Open a `recovery_journal` row, run the SQLite work in a transaction, and rebuild the affected canonical JSON exports under `.clipfirst/export/`.
+1. Acquire the per-project git mutex (`proper-lockfile` on `.videocity/.project.lock`).
+2. Open a `recovery_journal` row, run the SQLite work in a transaction, and rebuild the affected canonical JSON exports under `.videocity/export/`.
 3. Stage the SQLite file, exports, and any sidecars in a single `git commit` whose body includes `op-id: <uuid>`.
 4. Mark the journal row complete.
 

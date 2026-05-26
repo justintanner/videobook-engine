@@ -7,7 +7,7 @@ import { withGitLock } from "../git/mutex.js";
 import { withCleanWorktree } from "../git/stash.js";
 import { isValidAssetId, isWithinDir, invalidInput } from "../validation.js";
 import { isLocked } from "../lock/query.js";
-import { CLIPFIRST_DIR, getStateDb } from "../db/client.js";
+import { VIDEOCITY_DIR, getStateDb } from "../db/client.js";
 import { getMetadataDb } from "../db/metadata-client.js";
 import {
   audioWaveformExportPath,
@@ -29,7 +29,7 @@ async function cleanupAssetSqliteState(
 ): Promise<string[]> {
   const metadataPath = path.join(
     projectDir,
-    CLIPFIRST_DIR,
+    VIDEOCITY_DIR,
     "metadata.sqlite",
   );
   try {
@@ -44,13 +44,13 @@ async function cleanupAssetSqliteState(
     .get(assetId);
   if (!before) return [];
   deleteAudioWaveformRow(db, assetId);
-  const exportRel = path.join(CLIPFIRST_DIR, "export", audioWaveformExportPath(assetId));
+  const exportRel = path.join(VIDEOCITY_DIR, "export", audioWaveformExportPath(assetId));
   try {
     await fs.unlink(path.join(projectDir, exportRel));
   } catch {
     // Already gone — fine.
   }
-  return [path.join(CLIPFIRST_DIR, "metadata.sqlite"), exportRel];
+  return [path.join(VIDEOCITY_DIR, "metadata.sqlite"), exportRel];
 }
 
 export async function deleteAsset(

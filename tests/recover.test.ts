@@ -3,12 +3,12 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as os from "node:os";
 
-import { createFs, type ClipfirstFs } from "../src/index.js";
+import { createFs, type VideocityFs } from "../src/index.js";
 import { closeAllStateDbs, getStateDb } from "../src/db/client.js";
 
 describe("recovery sweep + version guard", () => {
   let projectsDir: string;
-  let cfs: ClipfirstFs;
+  let cfs: VideocityFs;
   let projectDir: string;
 
   beforeEach(async () => {

@@ -18,7 +18,7 @@ import {
   exportCharacters,
   readCharacter,
 } from "./character.js";
-import { CLIPFIRST_DIR, getStateDb } from "./client.js";
+import { VIDEOCITY_DIR, getStateDb } from "./client.js";
 import { getMetadataDb } from "./metadata-client.js";
 import { exportTimeline, readTimeline } from "./timeline.js";
 
@@ -136,7 +136,7 @@ function operationCommitted(
 
 async function rebuildKnownExports(projectDir: string): Promise<string[]> {
   const db = getMetadataDb(projectDir);
-  const exportRoot = path.join(projectDir, CLIPFIRST_DIR, "export");
+  const exportRoot = path.join(projectDir, VIDEOCITY_DIR, "export");
   const exports: Array<{ rel: string; body: string }> = [
     { rel: "asset_events.json", body: exportAssetEvents(db) },
     { rel: "asset_metadata.json", body: exportAssetMetadata(db) },
@@ -156,7 +156,7 @@ async function rebuildKnownExports(projectDir: string): Promise<string[]> {
     const full = path.join(exportRoot, e.rel);
     await fs.mkdir(path.dirname(full), { recursive: true });
     await fs.writeFile(full, e.body);
-    written.push(path.join(CLIPFIRST_DIR, "export", e.rel));
+    written.push(path.join(VIDEOCITY_DIR, "export", e.rel));
   }
   return written;
 }
@@ -271,7 +271,7 @@ async function recoverSqliteDone(
     undefined,
     false,
     [
-      path.join(CLIPFIRST_DIR, "metadata.sqlite"),
+      path.join(VIDEOCITY_DIR, "metadata.sqlite"),
       ...exportPaths,
       ...sidecarPaths,
     ],

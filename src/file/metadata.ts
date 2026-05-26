@@ -27,6 +27,7 @@ import {
   writeCharacter,
 } from "../db/character.js";
 import { getMetadataDb } from "../db/metadata-client.js";
+import { VIDEOCITY_DIR } from "../db/client.js";
 
 const KEY_PATTERN = /^[a-z0-9][a-z0-9.-]*$/;
 const KEY_MAX_LENGTH = 100;
@@ -219,7 +220,7 @@ export async function writeMetadata(
 async function metadataDbExists(projectDir: string): Promise<boolean> {
   try {
     const stat = await fs.stat(
-      path.join(projectDir, ".clipfirst", "metadata.sqlite"),
+      path.join(projectDir, VIDEOCITY_DIR, "metadata.sqlite"),
     );
     return stat.isFile();
   } catch {

@@ -12,7 +12,7 @@ describe("lock operations (sqlite-backed)", () => {
   let assetDir: string;
 
   beforeEach(async () => {
-    projectsDir = await fs.mkdtemp(path.join(os.tmpdir(), "clipfirst-lock-"));
+    projectsDir = await fs.mkdtemp(path.join(os.tmpdir(), "videocity-lock-"));
     projectDir = path.join(projectsDir, "proj");
     assetDir = path.join(projectDir, "vid-test");
     await fs.mkdir(assetDir, { recursive: true });

@@ -4,7 +4,7 @@ import { v7 as uuidv7 } from "uuid";
 
 import type { Database as DatabaseType } from "better-sqlite3";
 
-import { CLIPFIRST_DIR, getStateDb } from "./client.js";
+import { VIDEOCITY_DIR, getStateDb } from "./client.js";
 import { getMetadataDb } from "./metadata-client.js";
 import { commitOperation } from "../git/commit.js";
 
@@ -36,10 +36,10 @@ export interface RunOperationOptions {
   subject: string;
   /** Application work — runs INSIDE the BEGIN IMMEDIATE / COMMIT block. */
   work: (ctx: OperationContext) => void | Promise<void>;
-  /** Files under .clipfirst/export/ that this operation touches. The runner
+  /** Files under .videocity/export/ that this operation touches. The runner
    *  rewrites each one from current SQLite state and stages it for commit. */
   exports?: ReadonlyArray<{
-    path: string; // relative to .clipfirst/export/
+    path: string; // relative to .videocity/export/
     rebuild: (db: DatabaseType) => string;
   }>;
 }
@@ -96,7 +96,7 @@ function writeJournal(
 
 export interface OperationResult {
   operationId: string;
-  /** Files rebuilt under .clipfirst/export/ relative to projectDir. */
+  /** Files rebuilt under .videocity/export/ relative to projectDir. */
   exportFilesWritten: string[];
 }
 
@@ -192,14 +192,14 @@ export async function runOperation(
 
     const written: string[] = [];
     if (opts.exports) {
-      const exportRoot = path.join(projectDir, CLIPFIRST_DIR, EXPORT_DIR);
+      const exportRoot = path.join(projectDir, VIDEOCITY_DIR, EXPORT_DIR);
       await fs.mkdir(exportRoot, { recursive: true });
       for (const e of opts.exports) {
         const full = path.join(exportRoot, e.path);
         await fs.mkdir(path.dirname(full), { recursive: true });
         const body = e.rebuild(metadataDb);
         await fs.writeFile(full, body);
-        written.push(path.join(CLIPFIRST_DIR, EXPORT_DIR, e.path));
+        written.push(path.join(VIDEOCITY_DIR, EXPORT_DIR, e.path));
       }
     }
 
@@ -248,7 +248,7 @@ export async function commitAndFinalizeOperation(
   options: CommitOperationResultOptions,
 ): Promise<string | null> {
   const paths = uniquePaths([
-    path.join(CLIPFIRST_DIR, "metadata.sqlite"),
+    path.join(VIDEOCITY_DIR, "metadata.sqlite"),
     ...result.exportFilesWritten,
     ...(options.paths ?? []),
   ]);

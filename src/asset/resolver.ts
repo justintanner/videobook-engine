@@ -1,7 +1,7 @@
 /**
  * Reusable @tag parsing & resolution for asset references in prompts.
  */
-import type { ClipfirstFs } from "../index.js";
+import type { VideocityFs } from "../index.js";
 import type { AssetType } from "../types.js";
 
 type ResolvedAsset = {
@@ -24,7 +24,7 @@ function parseAssetTags(text: string): string[] {
 
 async function resolveAllAssets(
   text: string,
-  fs: ClipfirstFs,
+  fs: VideocityFs,
   projectSlug: string,
 ): Promise<{ resolved: ResolvedAsset[]; unresolved: string[] }> {
   const tags = parseAssetTags(text);
