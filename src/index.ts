@@ -20,6 +20,7 @@ import { listProjects } from "./project/list.js";
 import { getProject, resolveProjectDir } from "./project/get.js";
 import { switchProject } from "./project/switch.js";
 import { renameProject } from "./project/rename.js";
+import { deleteProject } from "./project/delete.js";
 
 import { createAsset } from "./asset/create.js";
 import { listAssets } from "./asset/list.js";
@@ -144,6 +145,14 @@ export interface VideocityFs {
     newSlug: string,
   ): Promise<
     Result<{ oldSlug: string; newSlug: string; path: string }, FsError>
+  >;
+  deleteProject(
+    slug: string,
+  ): Promise<
+    Result<
+      { slug: string; deleted_at: string; default_project_slug: string | null },
+      FsError
+    >
   >;
 
   // Asset
@@ -554,6 +563,7 @@ export function createFs(config: FsConfig): VideocityFs {
     switchProject: (slug) => switchProject(projectsDir, slug),
     renameProject: (oldSlug, newSlug) =>
       renameProject(projectsDir, oldSlug, newSlug, gitPath),
+    deleteProject: (slug) => deleteProject(projectsDir, slug, gitPath),
 
     // Asset
     createAsset: (prefix, name, projectSlug) =>

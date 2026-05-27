@@ -84,4 +84,33 @@ describe("project operations", () => {
     if (result.ok) return;
     expect(result.error.code).toBe("NOT_FOUND");
   });
+
+  it("deletes a project and moves the default to a remaining project", async () => {
+    await sandbox.fs.createProject("project-a");
+    await sandbox.fs.createProject("project-b");
+    await sandbox.fs.switchProject("project-a");
+
+    const result = await sandbox.fs.deleteProject("project-a");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.slug).toBe("project-a");
+    expect(result.value.default_project_slug).toBe("project-b");
+
+    const projects = await sandbox.fs.listProjects();
+    expect(projects.map((p) => p.slug)).toEqual(["project-b"]);
+
+    const defaultFile = path.join(sandbox.projectsDir, ".default-project");
+    const defaultSlug = (await fs.readFile(defaultFile, "utf-8")).trim();
+    expect(defaultSlug).toBe("project-b");
+  });
+
+  it("removes the default file when deleting the only project", async () => {
+    await sandbox.fs.createProject("lonely");
+
+    const result = await sandbox.fs.deleteProject("lonely");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.default_project_slug).toBeNull();
+    await expect(fs.access(path.join(sandbox.projectsDir, ".default-project"))).rejects.toThrow();
+  });
 });
