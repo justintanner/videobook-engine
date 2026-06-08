@@ -2,6 +2,6 @@
   "database": "dolt",
   "backend": "dolt",
   "dolt_mode": "server",
-  "dolt_database": "jwt",
+  "dolt_database": "vce",
   "project_id": "51e61b07-8ce4-46b9-aa79-40bdcb187408"
 }
