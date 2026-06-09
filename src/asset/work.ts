@@ -9,6 +9,7 @@ export type AssetWorkKind =
   | "transcribe"
   | "isolate"
   | "download"
+  | "archive"
   | "trim"
   | "crop"
   | "splice"

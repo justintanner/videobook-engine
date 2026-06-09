@@ -314,5 +314,11 @@ describe("asset status derivation", () => {
         assetRow: { status: "pending", meta: { kind: "download", queued: true } },
       })).toBe("downloading");
     });
+
+    it("archiving: pending row with kind=archive", () => {
+      expect(pureCall({
+        assetRow: { status: "pending", meta: { kind: "archive", queued: true } },
+      })).toBe("archiving");
+    });
   });
 });

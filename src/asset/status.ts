@@ -40,6 +40,7 @@ export type AssetStatus =
   | "render-queued-portrait"
   | "render-queued-square"
   | "downloading"
+  | "archiving"
   | "transcribing"
   | "error"
   | "deleting"
@@ -86,6 +87,7 @@ function mapKindToStatus(meta: AssetMeta, queued: boolean): AssetStatus | null {
     case "transcribe":     return "transcribing";
     case "isolate":        return "isolating";
     case "download":       return "downloading";
+    case "archive":        return "archiving";
     case "upload":         return "uploading";
     case "trim":           return "trimming";
     case "crop":           return "cropping";
