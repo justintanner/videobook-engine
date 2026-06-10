@@ -1,0 +1,377 @@
+description = """
+vc-engine npm release formula — cut a release of the single `vc-engine` npm
+package from the `main` branch to the public npm registry.
+
+Branch model:
+  - main = the release branch; release commits and tags are pushed here
+
+Before publishing, the formula verifies that the exact `origin/main` commit
+passes local release gates and GitHub CI. The package version is bumped in
+`package.json` and `package-lock.json`, the package tarball is inspected with
+`npm pack --dry-run`, then the package is published with the npm `latest` tag.
+
+The real publish step expects an npm token in `NPM_TOKEN`. The token must have
+publish access for the `vc-engine` package. The token is written only to a
+temporary npm user config that is removed before the formula exits.
+
+## Variables
+
+| Variable     | Source | Default | Description                              |
+|--------------|--------|---------|------------------------------------------|
+| version      | caller | —       | Three-part semver to publish, e.g. 0.6.1 |
+| dry_run      | caller | false   | If "true", stop after publish-dry-run    |
+| release_bead | caller | —       | Tracking bead this release closes        |
+"""
+formula = "mol-vc-engine-release"
+version = 1
+
+[vars]
+[vars.version]
+description = "Three-part semver string to publish, e.g. 0.6.1."
+required = true
+
+[vars.dry_run]
+description = 'If "true", stop after publish-dry-run; do not run real publish, tag, or push.'
+default = "false"
+
+[vars.release_bead]
+description = "The tracking bead this release is closing. Closed in the final step."
+required = true
+
+[[steps]]
+id = "load-context"
+title = "Load context and verify clean working tree"
+description = """
+Initialize the session and verify the repo is in a publishable state.
+
+**1. Prime your environment:**
+```bash
+bd prime
+```
+
+**2. Read the release bead:**
+```bash
+bd show {{release_bead}}
+```
+
+**3. Verify the working tree is clean:**
+```bash
+git fetch --all --prune
+git status --porcelain   # MUST be empty
+```
+
+If `git status --porcelain` is non-empty, STOP. Do not release on top of
+unstaged, uncommitted, or untracked work.
+
+**4. Confirm intent:**
+
+You are about to publish `vc-engine` to the public npm registry. Once a version
+is published, npm registry unpublish rules apply. Read the values:
+
+  - package = vc-engine
+  - version = {{version}}
+  - npm tag = latest
+  - dry_run = {{dry_run}}
+
+Validate the version before continuing:
+
+```bash
+node -e '
+const version = process.argv[1];
+if (!/^[0-9]+\\.[0-9]+\\.[0-9]+$/.test(version)) {
+  console.error(`Release version must be X.Y.Z, got ${version}`);
+  process.exit(1);
+}
+' "{{version}}"
+```
+
+**Exit criteria:** Working tree clean, vars confirmed, release bead read."""
+
+[[steps]]
+id = "sync-main"
+title = "Fast-forward main from origin"
+needs = ["load-context"]
+description = """
+Ensure the local release commit exactly matches `origin/main` before running
+release gates.
+
+```bash
+git checkout main
+git pull --ff-only origin main
+main_sha=$(git rev-parse origin/main)
+test "$(git rev-parse HEAD)" = "$main_sha"
+```
+
+If the pull cannot fast-forward, STOP. `main` has local divergence or unpushed
+work; resolve that before attempting a release.
+
+**Exit criteria:** Local `main` equals `origin/main`."""
+
+[[steps]]
+id = "local-gates"
+title = "Run local release gates"
+needs = ["sync-main"]
+description = """
+Mirror the GitHub Actions workflow locally using this repo's npm lockfile.
+
+```bash
+npm ci
+git config --global user.name "CI"
+git config --global user.email "ci@videocity.test"
+npm run typecheck
+npm run build
+npm test
+```
+
+If any gate fails, STOP. Fix the failure before bumping a version or publishing.
+
+**Exit criteria:** `npm run typecheck`, `npm run build`, and `npm test` exit 0."""
+
+[[steps]]
+id = "verify-github-ci"
+title = "Verify GitHub CI is green on main"
+needs = ["local-gates"]
+description = """
+Confirm GitHub CI succeeded for the same commit that local gates tested.
+
+```bash
+main_sha=$(git rev-parse origin/main)
+run_json=$(gh run list \
+  --branch main \
+  --workflow CI \
+  --commit "$main_sha" \
+  --limit 1 \
+  --json databaseId,status,conclusion,headSha,url)
+
+node -e '
+const [run] = JSON.parse(process.argv[1]);
+if (!run) {
+  console.error("No GitHub CI run found for origin/main");
+  process.exit(1);
+}
+console.log(`${run.status}/${run.conclusion || "-"} ${run.url}`);
+if (run.headSha !== process.argv[2]) {
+  console.error(`CI run is for ${run.headSha}, expected ${process.argv[2]}`);
+  process.exit(1);
+}
+if (run.status !== "completed" || run.conclusion !== "success") {
+  console.error("GitHub CI on main is not green; wait for success or fix main.");
+  process.exit(1);
+}
+' "$run_json" "$main_sha"
+```
+
+If the GitHub run is missing, pending, cancelled, or failed, STOP. Do not
+publish until CI on `main` is green.
+
+**Exit criteria:** GitHub CI reports success for `origin/main`."""
+
+[[steps]]
+id = "verify-package"
+title = "Verify package metadata"
+needs = ["verify-github-ci"]
+description = """
+Confirm this checkout describes the expected public package and has the build
+metadata needed for npm publishing.
+
+```bash
+node <<'NODE'
+const fs = require("fs");
+const pkg = JSON.parse(fs.readFileSync("package.json", "utf8"));
+let bad = 0;
+
+function fail(message) {
+  console.error(`✗ ${message}`);
+  bad++;
+}
+
+if (pkg.name !== "vc-engine") fail(`expected package name vc-engine, got ${pkg.name}`);
+if (pkg.private === true) fail("package.json has private=true");
+if (pkg.type !== "module") fail("package.json should publish as an ES module package");
+if (pkg.main !== "./dist/index.js") fail("main should point at ./dist/index.js");
+if (pkg.types !== "./dist/index.d.ts") fail("types should point at ./dist/index.d.ts");
+if (!Array.isArray(pkg.files) || !pkg.files.includes("dist")) fail("files should include dist");
+if (!fs.existsSync("package-lock.json")) fail("package-lock.json is required for npm ci");
+if (!fs.existsSync("README.md")) fail("README.md is required for npm package docs");
+if (!pkg.engines || pkg.engines.node !== ">=20") fail("engines.node should be >=20");
+
+if (bad === 0) console.log("✓ package metadata is publish-ready");
+process.exit(bad === 0 ? 0 : 1);
+NODE
+```
+
+If this fails, STOP and fix the package metadata before publishing.
+
+**Exit criteria:** Package metadata verification exits 0."""
+
+[[steps]]
+id = "bump-version"
+title = "Bump vc-engine to {{version}}"
+needs = ["verify-package"]
+description = """
+Bump the package version without creating a tag yet. The tag is created only
+after the package publishes successfully.
+
+```bash
+current_version=$(node -p 'require("./package.json").version')
+if [ "$current_version" = "{{version}}" ]; then
+  echo "package.json is already at {{version}}"
+else
+  npm version "{{version}}" --no-git-tag-version
+fi
+
+git diff -- package.json package-lock.json
+git status --porcelain
+```
+
+Confirm only the expected version files changed before continuing.
+
+**Exit criteria:** `package.json` and `package-lock.json` are at `{{version}}`."""
+
+[[steps]]
+id = "publish-dry-run"
+title = "Inspect npm tarball with dry run"
+needs = ["bump-version"]
+description = """
+Build and inspect the exact package contents npm would publish.
+
+```bash
+rm -rf dist
+npm run build
+npm pack --dry-run
+```
+
+Review the tarball summary. It should include compiled files under `dist/`,
+type declarations, `README.md`, and `package.json`; it should not include
+source tests, Beads state, or local project artifacts.
+
+If `dry_run` is true, restore the temporary version bump and stop after this
+step:
+
+```bash
+if [ "{{dry_run}}" = "true" ]; then
+  git restore package.json package-lock.json
+  echo "dry_run=true: stopping before npm publish, git tag, and git push"
+  exit 0
+fi
+```
+
+**Exit criteria:** `npm pack --dry-run` exits 0 and tarball contents look correct."""
+
+[[steps]]
+id = "publish"
+title = "Publish vc-engine to npm"
+needs = ["publish-dry-run"]
+description = """
+Publish `vc-engine@{{version}}` to npm with the `latest` tag.
+
+```bash
+test -n "${NPM_TOKEN:-}" || {
+  echo "NPM_TOKEN is required to publish vc-engine";
+  exit 1;
+}
+
+npmrc=$(mktemp)
+cleanup() {
+  rm -f "$npmrc"
+}
+trap cleanup EXIT
+
+printf '//registry.npmjs.org/:_authToken=%s\nregistry=https://registry.npmjs.org/\n' "$NPM_TOKEN" > "$npmrc"
+npm whoami --userconfig "$npmrc"
+npm publish --tag latest --userconfig "$npmrc"
+```
+
+If `npm publish` fails because the version already exists, STOP and decide
+whether to smoke-test the existing release or cut a new patch version. Do not
+retag a different commit for an already published version.
+
+**Exit criteria:** npm accepts `vc-engine@{{version}}` under the `latest` tag."""
+
+[[steps]]
+id = "tag-and-push"
+title = "Commit release, tag it, and push"
+needs = ["publish"]
+description = """
+Commit the version bump, create an annotated release tag, and push both to
+GitHub.
+
+```bash
+git status --porcelain
+git add package.json package-lock.json
+git commit -m "chore(release): vc-engine {{version}}"
+
+tag="v{{version}}"
+git tag -a "$tag" -m "vc-engine {{version}}"
+
+git push origin main
+git push origin "$tag"
+```
+
+If pushing the tag fails because it already exists, STOP. Do not move public
+release tags without a human decision.
+
+**Exit criteria:** `origin/main` contains the release commit and `v{{version}}`
+exists on GitHub."""
+
+[[steps]]
+id = "github-release"
+title = "Create GitHub release"
+needs = ["tag-and-push"]
+description = """
+Create a GitHub release page for the pushed tag.
+
+```bash
+gh release create "v{{version}}" \
+  --repo justintanner/vc-engine \
+  --title "vc-engine {{version}}" \
+  --generate-notes
+```
+
+If the release already exists, inspect it and update notes only if needed.
+
+**Exit criteria:** GitHub has a release page for `v{{version}}`."""
+
+[[steps]]
+id = "smoke-install"
+title = "Smoke-test the published package"
+needs = ["github-release"]
+description = """
+Install the published package in a clean temporary project and verify the ESM
+entrypoint loads.
+
+```bash
+tmpdir=$(mktemp -d)
+cleanup() {
+  rm -rf "$tmpdir"
+}
+trap cleanup EXIT
+
+cd "$tmpdir"
+npm init -y >/dev/null
+npm install "vc-engine@{{version}}"
+node --input-type=module -e '
+import * as vc from "vc-engine";
+if (!("createFs" in vc)) {
+  console.error("vc-engine did not export createFs");
+  process.exit(1);
+}
+console.log("✓ vc-engine import smoke test passed");
+'
+```
+
+**Exit criteria:** Clean install and import smoke test pass."""
+
+[[steps]]
+id = "close"
+title = "Close the release bead"
+needs = ["smoke-install"]
+description = """
+Close the release bead and capture the released version.
+
+```bash
+bd close {{release_bead}} --reason="Released vc-engine {{version}} to npm"
+bd show {{release_bead}}
+```
+
+**Exit criteria:** The tracking bead is closed with the release version noted."""
