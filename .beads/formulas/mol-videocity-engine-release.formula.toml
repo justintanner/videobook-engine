@@ -326,7 +326,7 @@ Create a GitHub release page for the pushed tag.
 
 ```bash
 gh release create "v{{version}}" \
-  --repo justintanner/vc-engine \
+  --repo justintanner/videocity-engine \
   --title "videocity-engine {{version}}" \
   --generate-notes
 ```
