@@ -4,7 +4,6 @@ import * as path from "node:path";
 import { type FsError, type Result, ok, err } from "../types.js";
 import { commitOperation } from "../git/commit.js";
 import { withGitLock } from "../git/mutex.js";
-import { withCleanWorktree } from "../git/stash.js";
 import { isValidAssetId, isWithinDir, invalidInput } from "../validation.js";
 import { isLocked } from "../lock/query.js";
 import { VIDEOCITY_DIR, getStateDb } from "../db/client.js";
@@ -75,36 +74,22 @@ export async function deleteAsset(
     return err({ code: "LOCKED", message: `Asset is locked: ${assetId}` });
   }
 
-  // Delete + commit under mutex — lock files are deleted with the directory.
-  // After withCleanWorktree, stash pop may resurrect untracked files from the
-  // deleted directory, so we remove any leftover directory after the lock.
+  // Delete + commit under mutex. Stage only this asset path plus metadata
+  // cleanup exports, so unrelated dirty or untracked project files do not
+  // need to be auto-stashed before deletion.
   const commitHash = await withGitLock(projectDir, async () => {
-    const hash = await withCleanWorktree(
+    await fs.rm(assetDir, { recursive: true, force: true });
+    const extraPaths = await cleanupAssetSqliteState(projectDir, assetId);
+    const paths = [assetId, ...extraPaths];
+    return commitOperation(
       projectDir,
-      async () => {
-        await fs.rm(assetDir, { recursive: true, force: true });
-        const extraPaths = await cleanupAssetSqliteState(projectDir, assetId);
-        const paths =
-          extraPaths.length > 0 ? [assetId, ...extraPaths] : undefined;
-        return commitOperation(
-          projectDir,
-          "delete",
-          assetId,
-          undefined,
-          gitPath,
-          true,
-          paths,
-        );
-      },
+      "delete",
+      assetId,
+      undefined,
       gitPath,
+      true,
+      paths,
     );
-
-    // Stash pop may restore untracked files that recreate the deleted directory
-    try {
-      await fs.rm(assetDir, { recursive: true, force: true });
-    } catch {}
-
-    return hash;
   });
 
   const deletedAt = new Date().toISOString();

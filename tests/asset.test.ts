@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs/promises";
+import * as path from "node:path";
 
 import { createSandbox, type Sandbox } from "./helpers/sandbox.js";
 
@@ -73,6 +74,29 @@ describe("asset operations", () => {
 
     // Directory is gone
     await expect(fs.access(createResult.value.path)).rejects.toThrow();
+  });
+
+  it("deletes an asset while unrelated untracked files exist", async () => {
+    const createResult = await sandbox.fs.createAsset(
+      "img",
+      "delete target",
+      projectSlug,
+    );
+    if (!createResult.ok) throw new Error("Failed to create asset");
+
+    const projectDir = path.join(sandbox.projectsDir, projectSlug);
+    const bystanderDir = path.join(projectDir, "vid-bystander", "original_frames");
+    await fs.mkdir(bystanderDir, { recursive: true });
+    await fs.writeFile(path.join(bystanderDir, "0.00.jpg"), "untracked");
+
+    const deleteResult = await sandbox.fs.deleteAsset(
+      createResult.value.assetId,
+      projectSlug,
+    );
+    expect(deleteResult.ok).toBe(true);
+
+    await expect(fs.access(createResult.value.path)).rejects.toThrow();
+    await expect(fs.access(path.join(bystanderDir, "0.00.jpg"))).resolves.toBeUndefined();
   });
 
   it("renames an asset with git mv", async () => {
