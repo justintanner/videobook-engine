@@ -55,4 +55,4 @@ issue-prefix: vce
 # - linear.api_key  → use LINEAR_API_KEY env var instead
 # - github.token    → use GITHUB_TOKEN env var instead
 
-sync.remote: "git+https://github.com/justintanner/vc-engine.git"
+# sync.remote: "git+https://github.com/justintanner/videocity-engine.git"
