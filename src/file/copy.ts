@@ -65,9 +65,9 @@ export async function copyFile(
     });
   }
 
-  await withGitLock(projectDir, async () => {
+  const commit = await withGitLock(projectDir, async () => {
     await fs.copyFile(srcPath, destPath);
-    await commitOperation(
+    return commitOperation(
       projectDir,
       "copy-file",
       destAssetId,
@@ -77,6 +77,12 @@ export async function copyFile(
       [path.join(destAssetId, destFilename)],
     );
   });
+  if (commit.status === "failed") {
+    return err({
+      code: "GIT_ERROR",
+      message: `Failed to commit file copy: ${commit.message}`,
+    });
+  }
 
   return ok(destPath);
 }

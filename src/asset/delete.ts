@@ -3,6 +3,7 @@ import * as path from "node:path";
 
 import { type FsError, type Result, ok, err } from "../types.js";
 import { commitOperation } from "../git/commit.js";
+import { gitExecSafe } from "../git/exec.js";
 import { withGitLock } from "../git/mutex.js";
 import { isValidAssetId, isWithinDir, invalidInput } from "../validation.js";
 import { isLocked } from "../lock/query.js";
@@ -11,45 +12,77 @@ import { getMetadataDb } from "../db/metadata-client.js";
 import {
   audioWaveformExportPath,
   deleteAudioWaveformRow,
+  readAudioWaveform,
+  writeAudioWaveformRow,
 } from "../db/audio-waveforms.js";
 
 function projectsDirOf(projectDir: string): string {
   return path.dirname(projectDir);
 }
 
+interface AssetSqliteCleanup {
+  /** Repo-relative paths to stage in the delete commit. */
+  paths: string[];
+  /** Undo the SQLite row delete + export unlink if the commit fails. */
+  rollback: () => Promise<void>;
+}
+
+const NOOP_CLEANUP: AssetSqliteCleanup = {
+  paths: [],
+  rollback: async () => {},
+};
+
 /**
  * Remove SQLite metadata rows tied to this asset, plus their canonical export
- * files. Returns the list of repo-relative paths that should be staged in the
- * delete commit alongside the asset directory.
+ * files. Returns the repo-relative paths that should be staged in the delete
+ * commit alongside the asset directory, and a rollback that restores the
+ * captured row + export file should the commit fail.
  */
 async function cleanupAssetSqliteState(
   projectDir: string,
   assetId: string,
-): Promise<string[]> {
-  const metadataPath = path.join(
-    projectDir,
-    VIDEOCITY_DIR,
-    "metadata.sqlite",
-  );
+): Promise<AssetSqliteCleanup> {
+  const metadataPath = path.join(projectDir, VIDEOCITY_DIR, "metadata.sqlite");
   try {
     const stat = await fs.stat(metadataPath);
-    if (!stat.isFile()) return [];
+    if (!stat.isFile()) return NOOP_CLEANUP;
   } catch {
-    return [];
+    return NOOP_CLEANUP;
   }
   const db = getMetadataDb(projectDir);
-  const before = db
-    .prepare("SELECT 1 FROM audio_waveforms WHERE asset_id = ?")
-    .get(assetId);
-  if (!before) return [];
-  deleteAudioWaveformRow(db, assetId);
-  const exportRel = path.join(VIDEOCITY_DIR, "export", audioWaveformExportPath(assetId));
+  const record = readAudioWaveform(db, assetId);
+  if (!record) return NOOP_CLEANUP;
+
+  const exportRel = path.join(
+    VIDEOCITY_DIR,
+    "export",
+    audioWaveformExportPath(assetId),
+  );
+  const exportAbs = path.join(projectDir, exportRel);
+  let exportBody: string | null = null;
   try {
-    await fs.unlink(path.join(projectDir, exportRel));
+    exportBody = await fs.readFile(exportAbs, "utf-8");
+  } catch {
+    // No export on disk — nothing to restore on rollback.
+  }
+
+  deleteAudioWaveformRow(db, assetId);
+  try {
+    await fs.unlink(exportAbs);
   } catch {
     // Already gone — fine.
   }
-  return [path.join(VIDEOCITY_DIR, "metadata.sqlite"), exportRel];
+
+  return {
+    paths: [path.join(VIDEOCITY_DIR, "metadata.sqlite"), exportRel],
+    rollback: async () => {
+      writeAudioWaveformRow(db, assetId, record.peaks, record.generated_at);
+      if (exportBody !== null) {
+        await fs.mkdir(path.dirname(exportAbs), { recursive: true });
+        await fs.writeFile(exportAbs, exportBody);
+      }
+    },
+  };
 }
 
 export async function deleteAsset(
@@ -77,11 +110,11 @@ export async function deleteAsset(
   // Delete + commit under mutex. Stage only this asset path plus metadata
   // cleanup exports, so unrelated dirty or untracked project files do not
   // need to be auto-stashed before deletion.
-  const commitHash = await withGitLock(projectDir, async () => {
+  const commit = await withGitLock(projectDir, async () => {
+    const cleanup = await cleanupAssetSqliteState(projectDir, assetId);
     await fs.rm(assetDir, { recursive: true, force: true });
-    const extraPaths = await cleanupAssetSqliteState(projectDir, assetId);
-    const paths = [assetId, ...extraPaths];
-    return commitOperation(
+    const paths = [assetId, ...cleanup.paths];
+    const result = await commitOperation(
       projectDir,
       "delete",
       assetId,
@@ -90,14 +123,26 @@ export async function deleteAsset(
       true,
       paths,
     );
+    if (result.status === "failed") {
+      // Commit failed — HEAD still has the asset, so restore the working tree
+      // from it and undo the metadata cleanup. Untracked files in the asset
+      // dir are not recoverable (they were never committed). Best-effort: if
+      // the restore itself fails, the GIT_ERROR below still surfaces.
+      await gitExecSafe(["checkout", "HEAD", "--", assetId], {
+        cwd: projectDir,
+        gitPath,
+      });
+      await cleanup.rollback();
+    }
+    return result;
   });
 
   const deletedAt = new Date().toISOString();
 
-  if (commitHash === null) {
+  if (commit.status === "failed") {
     return err({
       code: "GIT_ERROR",
-      message: `Git commit failed for asset deletion: ${assetId}`,
+      message: `Git commit failed for asset deletion (rolled back): ${assetId}: ${commit.message}`,
     });
   }
 

@@ -105,7 +105,7 @@ export async function renameAsset(
         }
 
         // Commit (allowEmpty for assets with no tracked files yet)
-        const commitHash = await commitOperation(
+        const commit = await commitOperation(
           projectDir,
           "rename",
           newSlug,
@@ -114,7 +114,7 @@ export async function renameAsset(
           true,
         );
 
-        if (commitHash === null) {
+        if (commit.status === "failed") {
           // Rollback
           await gitMv(projectDir, newSlug, cleanId, gitPath);
           return err({

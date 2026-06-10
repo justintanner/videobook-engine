@@ -15,6 +15,12 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+export type CommitResult =
+  | { status: "committed"; hash: string }
+  /** Nothing to commit — the operation produced no on-disk diff. */
+  | { status: "clean" }
+  | { status: "failed"; message: string };
+
 export async function commitOperation(
   projectDir: string,
   operation: string,
@@ -23,10 +29,12 @@ export async function commitOperation(
   gitPath?: string,
   allowEmpty?: boolean,
   paths?: string[],
-): Promise<string | null> {
+): Promise<CommitResult> {
   if (!(await isGitRepo(projectDir))) {
-    return null;
+    return { status: "failed", message: "Not a git repository" };
   }
+
+  let lastError = "";
 
   for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
     let addResult;
@@ -76,11 +84,14 @@ export async function commitOperation(
 
     if (addResult.exitCode !== 0) {
       if (isIndexLockError(addResult.stderr) && attempt < MAX_ATTEMPTS - 1) {
+        lastError = addResult.stderr;
         await delay(BASE_DELAY_MS * Math.pow(2, attempt));
         continue;
       }
       // When allowEmpty, add failures are non-fatal (e.g. pathspec matched nothing)
-      if (!allowEmpty) return null;
+      if (!allowEmpty) {
+        return { status: "failed", message: addResult.stderr };
+      }
     }
 
     // Check for changes (skip when allowEmpty)
@@ -89,8 +100,11 @@ export async function commitOperation(
         cwd: projectDir,
         gitPath,
       });
+      if (statusResult.exitCode !== 0) {
+        return { status: "failed", message: statusResult.stderr };
+      }
       if (!statusResult.stdout.trim()) {
-        return null;
+        return { status: "clean" };
       }
     }
 
@@ -102,7 +116,10 @@ export async function commitOperation(
     if (details) {
       for (const [key, value] of Object.entries(details)) {
         if (value !== undefined && value !== null) {
-          bodyLines.push(`${key}: ${value}`);
+          // Newlines in a value could inject extra body lines (e.g. a forged
+          // `op-id:`); collapse control characters to spaces.
+          const safe = String(value).replace(/[\x00-\x1f\x7f]+/g, " ");
+          bodyLines.push(`${key}: ${safe}`);
         }
       }
     }
@@ -118,10 +135,11 @@ export async function commitOperation(
     });
     if (commitResult.exitCode !== 0) {
       if (isIndexLockError(commitResult.stderr) && attempt < MAX_ATTEMPTS - 1) {
+        lastError = commitResult.stderr;
         await delay(BASE_DELAY_MS * Math.pow(2, attempt));
         continue;
       }
-      return null;
+      return { status: "failed", message: commitResult.stderr };
     }
 
     // Get commit hash
@@ -129,8 +147,14 @@ export async function commitOperation(
       cwd: projectDir,
       gitPath,
     });
-    return hashResult.exitCode === 0 ? hashResult.stdout.trim() : null;
+    if (hashResult.exitCode !== 0) {
+      return { status: "failed", message: "Failed to resolve commit hash" };
+    }
+    return { status: "committed", hash: hashResult.stdout.trim() };
   }
 
-  return null;
+  return {
+    status: "failed",
+    message: `Git commit failed after retries: ${lastError}`,
+  };
 }

@@ -6,7 +6,7 @@ import type { Database as DatabaseType } from "better-sqlite3";
 
 import { VIDEOCITY_DIR, getStateDb } from "./client.js";
 import { getMetadataDb } from "./metadata-client.js";
-import { commitOperation } from "../git/commit.js";
+import { commitOperation, type CommitResult } from "../git/commit.js";
 
 export const EXPORT_DIR = "export";
 
@@ -34,8 +34,11 @@ export interface RunOperationOptions {
   scope: OperationScope;
   target?: string | null;
   subject: string;
-  /** Application work — runs INSIDE the BEGIN IMMEDIATE / COMMIT block. */
-  work: (ctx: OperationContext) => void | Promise<void>;
+  /** Application work — runs INSIDE the BEGIN IMMEDIATE / COMMIT block.
+   *  Must be synchronous: better-sqlite3 transactions hold the connection,
+   *  and yielding to the event loop mid-transaction lets interleaved code
+   *  hit the open transaction. */
+  work: (ctx: OperationContext) => void;
   /** Files under .videocity/export/ that this operation touches. The runner
    *  rewrites each one from current SQLite state and stages it for commit. */
   exports?: ReadonlyArray<{
@@ -145,7 +148,7 @@ export async function runOperation(
   try {
     metadataDb.prepare("BEGIN IMMEDIATE").run();
     try {
-      await opts.work(ctx);
+      opts.work(ctx);
 
       const now = Date.now();
       metadataDb
@@ -246,13 +249,13 @@ export async function commitAndFinalizeOperation(
   projectDir: string,
   result: OperationResult,
   options: CommitOperationResultOptions,
-): Promise<string | null> {
+): Promise<CommitResult> {
   const paths = uniquePaths([
     path.join(VIDEOCITY_DIR, "metadata.sqlite"),
     ...result.exportFilesWritten,
     ...(options.paths ?? []),
   ]);
-  const hash = await commitOperation(
+  const commit = await commitOperation(
     projectDir,
     options.operation,
     options.assetId,
@@ -261,8 +264,12 @@ export async function commitAndFinalizeOperation(
     false,
     paths,
   );
-  if (hash) {
-    finalizeOperation(projectDir, result.operationId, hash);
+  // A clean tree means the operation was a no-op on disk — the journal row
+  // must still reach `complete`, or recovery will replay it on next startup.
+  if (commit.status === "committed") {
+    finalizeOperation(projectDir, result.operationId, commit.hash);
+  } else if (commit.status === "clean") {
+    finalizeOperation(projectDir, result.operationId);
   }
-  return hash;
+  return commit;
 }

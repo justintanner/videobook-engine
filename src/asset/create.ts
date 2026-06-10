@@ -37,8 +37,8 @@ export async function createAsset(
   );
 
   // Commit under mutex (allow-empty since dir has no tracked files yet)
-  await withGitLock(projectDir, async () => {
-    await commitOperation(
+  const commit = await withGitLock(projectDir, async () => {
+    return commitOperation(
       projectDir,
       "create",
       assetId,
@@ -47,6 +47,12 @@ export async function createAsset(
       true,
     );
   });
+  if (commit.status === "failed") {
+    return err({
+      code: "GIT_ERROR",
+      message: `Failed to commit asset creation: ${commit.message}`,
+    });
+  }
 
   // Co-write assets row at status='pending'. The 5-minute deadline catches
   // "created but never used" rows; a real handler that takes ownership writes

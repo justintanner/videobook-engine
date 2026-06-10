@@ -259,7 +259,7 @@ async function recoverSqliteDone(
     getMetadataDb(projectDir),
     row,
   );
-  const hash = await commitOperation(
+  const commit = await commitOperation(
     projectDir,
     "recover",
     row.scope === "asset" ? (row.target ?? undefined) : undefined,
@@ -276,11 +276,17 @@ async function recoverSqliteDone(
       ...sidecarPaths,
     ],
   );
-  if (!hash) {
+  if (commit.status === "failed") {
     markFailed(stateDb, row.operation_id, "recovery commit failed");
     return "failed";
   }
-  markComplete(stateDb, row.operation_id, hash);
+  // `clean` means the rebuilt state already matches HEAD (e.g. crash landed
+  // after the original commit but before journal finalize) — that IS recovered.
+  markComplete(
+    stateDb,
+    row.operation_id,
+    commit.status === "committed" ? commit.hash : null,
+  );
   return "completed";
 }
 

@@ -75,7 +75,14 @@ function assertAppliedChecksums(db: Database): void {
   );
   for (const row of rows) {
     const migration = byVersion.get(row.version);
-    if (!migration) continue;
+    if (!migration) {
+      // An applied version this build doesn't know about means the binary was
+      // rolled back past a migration (or a migration was reverted). Proceeding
+      // risks silent corruption if that version is ever re-added.
+      throw new Error(
+        `state schema has applied migration version ${row.version} unknown to this build`,
+      );
+    }
     const expected = checksumFor(migration);
     if (!row.checksum) {
       update.run(expected, row.version);

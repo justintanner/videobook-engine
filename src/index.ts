@@ -638,7 +638,14 @@ export function createFs(config: FsConfig): VideocityFs {
     commitOperation: async (operation, assetId, details, projectSlug) => {
       const dir = await resolve(projectSlug);
       if (!dir) return null;
-      return commitOperation(dir, operation, assetId, details, gitPath);
+      const commit = await commitOperation(
+        dir,
+        operation,
+        assetId,
+        details,
+        gitPath,
+      );
+      return commit.status === "committed" ? commit.hash : null;
     },
     getHistory: async (projectSlug, limit) => {
       const dir = await resolve(projectSlug);

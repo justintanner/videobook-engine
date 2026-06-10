@@ -89,7 +89,8 @@ function coerceAudioClips(value: unknown): TimelineConfig["audio"] | null {
 
 /** Validate a `{slots, render}` timeline payload. Returns null on shape mismatch. */
 function coerceTimelineConfig(value: unknown): TimelineConfig | null {
-  if (typeof value !== "object" || value === null || Array.isArray(value)) return null;
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    return null;
   const obj = value as {
     slots?: unknown;
     render?: unknown;
@@ -155,13 +156,15 @@ async function writeTimelineToSqlite(
     });
 
     await fs.writeFile(filePath, json);
-    const hash = await commitAndFinalizeOperation(projectDir, result, {
+    const commit = await commitAndFinalizeOperation(projectDir, result, {
       operation: "write",
       details: { file: metadataFilename(TIMELINE_KEY) },
       gitPath,
       paths: [metadataFilename(TIMELINE_KEY)],
     });
-    if (!hash) throw new Error("Failed to commit timeline metadata");
+    if (commit.status === "failed") {
+      throw new Error(`Failed to commit timeline metadata: ${commit.message}`);
+    }
   });
 }
 
@@ -194,13 +197,7 @@ export async function writeProjectMeta(
       );
     }
     try {
-      await writeTimelineToSqlite(
-        projectDir,
-        coerced,
-        json,
-        filePath,
-        gitPath,
-      );
+      await writeTimelineToSqlite(projectDir, coerced, json, filePath, gitPath);
     } catch (error: unknown) {
       return err({
         code: "IO_ERROR",
@@ -210,12 +207,12 @@ export async function writeProjectMeta(
     return ok(filePath);
   }
 
-  await withGitLock(projectDir, async () => {
+  const commit = await withGitLock(projectDir, async () => {
     return withCleanWorktree(
       projectDir,
       async () => {
         await fs.writeFile(filePath, json);
-        await commitOperation(
+        return commitOperation(
           projectDir,
           "write",
           filename,
@@ -226,6 +223,12 @@ export async function writeProjectMeta(
       gitPath,
     );
   });
+  if (commit.status === "failed") {
+    return err({
+      code: "GIT_ERROR",
+      message: `Failed to commit project metadata: ${commit.message}`,
+    });
+  }
 
   return ok(filePath);
 }

@@ -21,13 +21,24 @@ function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** Collapse control characters to spaces. Newlines in the subject would split
+ *  the commit subject line; \x00/\x1f in the body would forge the record and
+ *  field separators readActionLog parses with. */
+function sanitizeControlChars(text: string): string {
+  return text.replace(/[\x00-\x1f\x7f]+/g, " ");
+}
+
 function buildCommitMessage(
   action: string,
   payload: string | Record<string, unknown>,
 ): string {
   const isText = typeof payload === "string";
-  const preview = isText ? payload.slice(0, 72) : action;
-  const body = isText ? payload : JSON.stringify(payload);
+  const preview = isText ? sanitizeControlChars(payload).slice(0, 72) : action;
+  // Record payloads are safe via JSON.stringify (control chars are escaped);
+  // string payloads must keep newlines but drop the separator bytes.
+  const body = isText
+    ? payload.replace(/[\x00\x1f\x7f]+/g, " ")
+    : JSON.stringify(payload);
   return `[action:${action}] ${preview}\n\n${body}`;
 }
 

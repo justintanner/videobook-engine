@@ -9,12 +9,7 @@ import {
   isExpired,
 } from "./data.js";
 
-const RESERVED_KEYS = new Set([
-  "created_at",
-  "timeout_at",
-  "pid",
-  "state",
-]);
+const RESERVED_KEYS = new Set(["created_at", "timeout_at", "pid", "state"]);
 
 function lockExtras(lock: LockData): Record<string, unknown> | null {
   const extras: Record<string, unknown> = {};
@@ -73,9 +68,22 @@ function readRow(projectDir: string, assetKey: string): LockRow | undefined {
     .get(assetKey) as LockRow | undefined;
 }
 
-function deleteRow(projectDir: string, assetKey: string): void {
+/**
+ * Delete the lock row only if it is still expired at `now`. The condition is
+ * what makes the reap safe across processes: an unconditional delete could
+ * remove a fresh lock that a racing process inserted between our read and
+ * our delete, letting both processes believe they hold the lock.
+ */
+function deleteExpiredRow(
+  projectDir: string,
+  assetKey: string,
+  now: number,
+): void {
   const db = getStateDb(projectDir);
-  db.prepare("DELETE FROM locks WHERE asset_id = ?").run(assetKey);
+  db.prepare("DELETE FROM locks WHERE asset_id = ? AND timeout_at <= ?").run(
+    assetKey,
+    now,
+  );
 }
 
 export async function acquireLock(
@@ -99,8 +107,8 @@ export async function acquireLock(
     return tryInsert(projectDir, assetKey, lock);
   }
   const existingData = rowToLockData(existing);
-  if (isExpired(existingData)) {
-    deleteRow(projectDir, assetKey);
+  if (isExpired(existingData, now)) {
+    deleteExpiredRow(projectDir, assetKey, now);
     return tryInsert(projectDir, assetKey, lock);
   }
   return first;

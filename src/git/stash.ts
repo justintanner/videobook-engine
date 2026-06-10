@@ -58,6 +58,12 @@ export async function withCleanWorktree<T>(
         cwd: projectDir,
         gitPath,
       });
+      console.error(
+        `[vc-engine] git stash pop conflicted in ${projectDir}; ` +
+          `conflicted working-tree changes were discarded. The auto-stash ` +
+          `("${STASH_MESSAGE}") is preserved — inspect with 'git stash list' ` +
+          `and recover with 'git stash pop'.`,
+      );
     }
     evictMetadataDbCache(projectDir);
   }

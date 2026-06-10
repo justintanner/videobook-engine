@@ -35,9 +35,9 @@ export async function writeFile(
     return invalidInput("Path escapes project directory");
 
   // Write + commit together under mutex so each write gets its own scoped commit
-  await withGitLock(projectDir, async () => {
+  const commit = await withGitLock(projectDir, async () => {
     await fs.writeFile(filePath, data);
-    await commitOperation(
+    return commitOperation(
       projectDir,
       "write",
       assetId,
@@ -47,6 +47,12 @@ export async function writeFile(
       [path.join(assetId, filename)],
     );
   });
+  if (commit.status === "failed") {
+    return err({
+      code: "GIT_ERROR",
+      message: `Failed to commit file write: ${commit.message}`,
+    });
+  }
 
   return ok(filePath);
 }

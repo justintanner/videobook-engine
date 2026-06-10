@@ -94,14 +94,16 @@ async function writeCharacterToSqlite(
       ],
     });
     await fs.writeFile(sidecarPath, json);
-    const hash = await commitAndFinalizeOperation(projectDir, result, {
+    const commit = await commitAndFinalizeOperation(projectDir, result, {
       operation: "write",
       assetId: charAssetId,
       details: { file: metadataFilename(CHARACTER_KEY) },
       gitPath,
       paths: [path.join(charAssetId, metadataFilename(CHARACTER_KEY))],
     });
-    if (!hash) throw new Error("Failed to commit character metadata");
+    if (commit.status === "failed") {
+      throw new Error(`Failed to commit character metadata: ${commit.message}`);
+    }
   });
 }
 
@@ -141,14 +143,18 @@ async function writeAssetMetadataToSqlite(
       ],
     });
     await fs.writeFile(sidecarPath, json);
-    const hash = await commitAndFinalizeOperation(projectDir, result, {
+    const commit = await commitAndFinalizeOperation(projectDir, result, {
       operation: "write",
       assetId,
       details: { file: metadataFilename(key) },
       gitPath,
       paths: [path.join(assetId, metadataFilename(key))],
     });
-    if (!hash) throw new Error(`Failed to commit metadata key: ${key}`);
+    if (commit.status === "failed") {
+      throw new Error(
+        `Failed to commit metadata key ${key}: ${commit.message}`,
+      );
+    }
   });
 }
 

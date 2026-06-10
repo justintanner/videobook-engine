@@ -79,19 +79,25 @@ export async function writeAudioWaveform(
         },
         exports: [
           { path: "asset_events.json", rebuild: (db) => exportAssetEvents(db) },
-          { path: exportRel, rebuild: (db) => exportAudioWaveform(db, assetId) },
+          {
+            path: exportRel,
+            rebuild: (db) => exportAudioWaveform(db, assetId),
+          },
         ],
       });
-      // commitAndFinalizeOperation returns null when git status is clean —
-      // i.e. the waveform sqlite row + export file produced no on-disk diff
-      // (already at HEAD). The data is still persisted via runOperation's
-      // sqlite write + export write, so a no-op commit is benign, not fatal.
-      await commitAndFinalizeOperation(projectDir, result, {
+      // A `clean` result means the waveform sqlite row + export file produced
+      // no on-disk diff (already at HEAD). The data is still persisted via
+      // runOperation's sqlite write + export write, so a no-op commit is
+      // benign, not fatal — but a real commit failure must surface.
+      const commit = await commitAndFinalizeOperation(projectDir, result, {
         operation: "write_audio_waveform",
         assetId,
         details: { bar_count: peaks.length },
         gitPath,
       });
+      if (commit.status === "failed") {
+        throw new Error(`Failed to commit audio waveform: ${commit.message}`);
+      }
     });
   } catch (error: unknown) {
     return err({

@@ -58,9 +58,9 @@ export async function renameFile(
     // Expected — destination should not exist
   }
 
-  await withGitLock(projectDir, async () => {
+  const commit = await withGitLock(projectDir, async () => {
     await fs.rename(oldPath, newPath);
-    await commitOperation(
+    return commitOperation(
       projectDir,
       "rename-file",
       assetId,
@@ -70,6 +70,12 @@ export async function renameFile(
       [path.join(assetId, oldFilename), path.join(assetId, newFilename)],
     );
   });
+  if (commit.status === "failed") {
+    return err({
+      code: "GIT_ERROR",
+      message: `Failed to commit file rename: ${commit.message}`,
+    });
+  }
 
   return ok({ oldPath, newPath });
 }

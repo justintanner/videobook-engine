@@ -42,9 +42,9 @@ export async function deleteFile(
     });
   }
 
-  await withGitLock(projectDir, async () => {
+  const commit = await withGitLock(projectDir, async () => {
     await fs.unlink(filePath);
-    await commitOperation(
+    return commitOperation(
       projectDir,
       "delete-file",
       assetId,
@@ -54,6 +54,12 @@ export async function deleteFile(
       [path.join(assetId, filename)],
     );
   });
+  if (commit.status === "failed") {
+    return err({
+      code: "GIT_ERROR",
+      message: `Failed to commit file deletion: ${commit.message}`,
+    });
+  }
 
   return ok(filePath);
 }

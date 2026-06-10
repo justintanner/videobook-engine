@@ -1,11 +1,7 @@
 import { dequeue, heartbeat, DEFAULT_LEASE_DURATION_MS } from "./dequeue.js";
 import { complete, fail } from "./complete.js";
 import { reapStaleLeases } from "./reaper.js";
-import {
-  type Job,
-  type JobError,
-  type JobHandler,
-} from "./types.js";
+import { type Job, type JobError, type JobHandler } from "./types.js";
 
 import type { Database as DatabaseType } from "better-sqlite3";
 
@@ -57,10 +53,13 @@ export class QueueRunner {
     if (this.running) return;
     this.running = true;
     this.scheduleNextPoll(0);
-    this.reapTimer = setInterval(
-      () => reapStaleLeases(this.db),
-      this.config.reapIntervalMs,
-    );
+    this.reapTimer = setInterval(() => {
+      try {
+        reapStaleLeases(this.db);
+      } catch {
+        // Tolerate transient db errors; the next sweep retries.
+      }
+    }, this.config.reapIntervalMs);
     this.reapTimer.unref?.();
   }
 
@@ -91,12 +90,22 @@ export class QueueRunner {
         | undefined;
       if (!row) throw new Error(`Job ${id} not found`);
       if (row.state === "done") {
-        return row.result == null ? null : JSON.parse(row.result);
+        if (row.result == null) return null;
+        try {
+          return JSON.parse(row.result);
+        } catch {
+          throw new Error(`Job ${id} done but result column is corrupt JSON`);
+        }
       }
       if (row.state === "failed" || row.state === "aborted") {
-        const error = row.error
-          ? (JSON.parse(row.error) as JobError)
-          : { message: "unknown error" };
+        let error: JobError = { message: "unknown error" };
+        if (row.error) {
+          try {
+            error = JSON.parse(row.error) as JobError;
+          } catch {
+            error = { message: row.error };
+          }
+        }
         throw new Error(`Job ${id} ${row.state}: ${error.message}`);
       }
       await new Promise((r) => setTimeout(r, 50));
@@ -125,9 +134,16 @@ export class QueueRunner {
   }
 
   private run(job: Job): void {
-    const heartbeatTimer = setInterval(() => {
-      heartbeat(this.db, job.id, this.config.leaseMs);
-    }, Math.max(1_000, Math.floor(this.config.leaseMs / 3)));
+    const heartbeatTimer = setInterval(
+      () => {
+        try {
+          heartbeat(this.db, job.id, this.config.leaseMs);
+        } catch {
+          // Tolerate transient db errors; a missed beat is covered by the lease.
+        }
+      },
+      Math.max(1_000, Math.floor(this.config.leaseMs / 3)),
+    );
     heartbeatTimer.unref?.();
 
     const active: ActiveJob = { job, heartbeatTimer };
@@ -140,9 +156,15 @@ export class QueueRunner {
       .catch((error: unknown) => {
         const message = error instanceof Error ? error.message : String(error);
         const code = error instanceof Error ? error.name : undefined;
-        fail(this.db, job.id, {
-          error: { message, ...(code ? { code } : {}) },
-        });
+        try {
+          fail(this.db, job.id, {
+            error: { message, ...(code ? { code } : {}) },
+          });
+        } catch {
+          // Terminal-state write failed (e.g. db closed during stop) — the
+          // lease reaper will reclaim the job. Swallow so the rejection never
+          // escapes this void chain as an unhandledRejection.
+        }
       })
       .finally(() => {
         clearInterval(heartbeatTimer);

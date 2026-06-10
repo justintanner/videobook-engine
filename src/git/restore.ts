@@ -14,10 +14,13 @@ async function assetExistsAtCommit(
   commitHash: string,
   gitPath?: string,
 ): Promise<boolean> {
-  const result = await gitExecSafe(["cat-file", "-e", `${commitHash}:${assetId}`], {
-    cwd: projectDir,
-    gitPath,
-  });
+  const result = await gitExecSafe(
+    ["cat-file", "-e", `${commitHash}:${assetId}`],
+    {
+      cwd: projectDir,
+      gitPath,
+    },
+  );
   return result.exitCode === 0;
 }
 
@@ -27,16 +30,22 @@ async function assetTreeMatchesCommit(
   commitHash: string,
   gitPath?: string,
 ): Promise<boolean | null> {
-  const result = await gitExecSafe(["diff", "--quiet", "HEAD", commitHash, "--", assetId], {
-    cwd: projectDir,
-    gitPath,
-  });
+  const result = await gitExecSafe(
+    ["diff", "--quiet", "HEAD", commitHash, "--", assetId],
+    {
+      cwd: projectDir,
+      gitPath,
+    },
+  );
   if (result.exitCode === 0) return true;
   if (result.exitCode === 1) return false;
   return null;
 }
 
-async function getHeadHash(projectDir: string, gitPath?: string): Promise<string | null> {
+async function getHeadHash(
+  projectDir: string,
+  gitPath?: string,
+): Promise<string | null> {
   const result = await gitExecSafe(["rev-parse", "HEAD"], {
     cwd: projectDir,
     gitPath,
@@ -58,11 +67,18 @@ export async function restoreAsset(
     return withCleanWorktree(
       projectDir,
       async () => {
-        if (!(await assetExistsAtCommit(projectDir, assetId, commitHash, gitPath))) {
+        if (
+          !(await assetExistsAtCommit(projectDir, assetId, commitHash, gitPath))
+        ) {
           return null;
         }
 
-        const matches = await assetTreeMatchesCommit(projectDir, assetId, commitHash, gitPath);
+        const matches = await assetTreeMatchesCommit(
+          projectDir,
+          assetId,
+          commitHash,
+          gitPath,
+        );
         if (matches === true) {
           return getHeadHash(projectDir, gitPath);
         }
@@ -70,7 +86,10 @@ export async function restoreAsset(
           return null;
         }
 
-        await fs.rm(path.join(projectDir, assetId), { recursive: true, force: true });
+        await fs.rm(path.join(projectDir, assetId), {
+          recursive: true,
+          force: true,
+        });
 
         try {
           await gitExec(["checkout", commitHash, "--", assetId], {
@@ -81,13 +100,18 @@ export async function restoreAsset(
           return null;
         }
 
-        return commitOperation(
+        const commit = await commitOperation(
           projectDir,
           "restore",
           assetId,
           { from_commit: commitHash.slice(0, 8) },
           gitPath,
         );
+        if (commit.status === "committed") return commit.hash;
+        // Clean tree after checkout means the restore was a no-op (e.g. only
+        // mode bits differed) — still a successful restore at HEAD.
+        if (commit.status === "clean") return getHeadHash(projectDir, gitPath);
+        return null;
       },
       gitPath,
     );
