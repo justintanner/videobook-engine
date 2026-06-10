@@ -1,6 +1,7 @@
 description = """
-vc-engine npm release formula — cut a release of the single `vc-engine` npm
-package from the `main` branch to the public npm registry.
+videocity-engine npm release formula — cut a release of the single
+`videocity-engine` npm package from the `main` branch to the public npm
+registry.
 
 Branch model:
   - main = the release branch; release commits and tags are pushed here
@@ -11,8 +12,8 @@ passes local release gates and GitHub CI. The package version is bumped in
 `npm pack --dry-run`, then the package is published with the npm `latest` tag.
 
 The real publish step expects an npm token in `NPM_TOKEN`. The token must have
-publish access for the `vc-engine` package. The token is written only to a
-temporary npm user config that is removed before the formula exits.
+publish access for the `videocity-engine` package. The token is written only
+to a temporary npm user config that is removed before the formula exits.
 
 ## Variables
 
@@ -22,7 +23,7 @@ temporary npm user config that is removed before the formula exits.
 | dry_run      | caller | false   | If "true", stop after publish-dry-run    |
 | release_bead | caller | —       | Tracking bead this release closes        |
 """
-formula = "mol-vc-engine-release"
+formula = "mol-videocity-engine-release"
 version = 1
 
 [vars]
@@ -65,10 +66,11 @@ unstaged, uncommitted, or untracked work.
 
 **4. Confirm intent:**
 
-You are about to publish `vc-engine` to the public npm registry. Once a version
-is published, npm registry unpublish rules apply. Read the values:
+You are about to publish `videocity-engine` to the public npm registry.
+Once a version is published, npm registry unpublish rules apply. Read the
+values:
 
-  - package = vc-engine
+  - package = videocity-engine
   - version = {{version}}
   - npm tag = latest
   - dry_run = {{dry_run}}
@@ -185,7 +187,7 @@ function fail(message) {
   bad++;
 }
 
-if (pkg.name !== "vc-engine") fail(`expected package name vc-engine, got ${pkg.name}`);
+if (pkg.name !== "videocity-engine") fail(`expected package name videocity-engine, got ${pkg.name}`);
 if (pkg.private === true) fail("package.json has private=true");
 if (pkg.type !== "module") fail("package.json should publish as an ES module package");
 if (pkg.main !== "./dist/index.js") fail("main should point at ./dist/index.js");
@@ -206,7 +208,7 @@ If this fails, STOP and fix the package metadata before publishing.
 
 [[steps]]
 id = "bump-version"
-title = "Bump vc-engine to {{version}}"
+title = "Bump videocity-engine to {{version}}"
 needs = ["verify-package"]
 description = """
 Bump the package version without creating a tag yet. The tag is created only
@@ -260,14 +262,14 @@ fi
 
 [[steps]]
 id = "publish"
-title = "Publish vc-engine to npm"
+title = "Publish videocity-engine to npm"
 needs = ["publish-dry-run"]
 description = """
-Publish `vc-engine@{{version}}` to npm with the `latest` tag.
+Publish `videocity-engine@{{version}}` to npm with the `latest` tag.
 
 ```bash
 test -n "${NPM_TOKEN:-}" || {
-  echo "NPM_TOKEN is required to publish vc-engine";
+  echo "NPM_TOKEN is required to publish videocity-engine";
   exit 1;
 }
 
@@ -286,7 +288,8 @@ If `npm publish` fails because the version already exists, STOP and decide
 whether to smoke-test the existing release or cut a new patch version. Do not
 retag a different commit for an already published version.
 
-**Exit criteria:** npm accepts `vc-engine@{{version}}` under the `latest` tag."""
+**Exit criteria:** npm accepts `videocity-engine@{{version}}` under the
+`latest` tag."""
 
 [[steps]]
 id = "tag-and-push"
@@ -299,10 +302,10 @@ GitHub.
 ```bash
 git status --porcelain
 git add package.json package-lock.json
-git commit -m "chore(release): vc-engine {{version}}"
+git commit -m "chore(release): videocity-engine {{version}}"
 
 tag="v{{version}}"
-git tag -a "$tag" -m "vc-engine {{version}}"
+git tag -a "$tag" -m "videocity-engine {{version}}"
 
 git push origin main
 git push origin "$tag"
@@ -324,7 +327,7 @@ Create a GitHub release page for the pushed tag.
 ```bash
 gh release create "v{{version}}" \
   --repo justintanner/vc-engine \
-  --title "vc-engine {{version}}" \
+  --title "videocity-engine {{version}}" \
   --generate-notes
 ```
 
@@ -349,14 +352,14 @@ trap cleanup EXIT
 
 cd "$tmpdir"
 npm init -y >/dev/null
-npm install "vc-engine@{{version}}"
+npm install "videocity-engine@{{version}}"
 node --input-type=module -e '
-import * as vc from "vc-engine";
+import * as vc from "videocity-engine";
 if (!("createFs" in vc)) {
-  console.error("vc-engine did not export createFs");
+  console.error("videocity-engine did not export createFs");
   process.exit(1);
 }
-console.log("✓ vc-engine import smoke test passed");
+console.log("✓ videocity-engine import smoke test passed");
 '
 ```
 
@@ -370,7 +373,7 @@ description = """
 Close the release bead and capture the released version.
 
 ```bash
-bd close {{release_bead}} --reason="Released vc-engine {{version}} to npm"
+bd close {{release_bead}} --reason="Released videocity-engine {{version}} to npm"
 bd show {{release_bead}}
 ```
 

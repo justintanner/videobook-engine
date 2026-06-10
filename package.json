@@ -1,6 +1,6 @@
 {
-  "name": "vc-engine",
-  "version": "0.6.0",
+  "name": "videocity-engine",
+  "version": "0.1.5",
   "type": "module",
   "exports": {
     ".": {
