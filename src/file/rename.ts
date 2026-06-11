@@ -2,7 +2,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
 import { type FsError, type Result, ok, err } from "../types.js";
-import { commitOperation } from "../git/commit.js";
+import { commitOperation, type CommitResult } from "../git/commit.js";
 import { withGitLock } from "../git/mutex.js";
 import {
   isSafeFilename,
@@ -48,28 +48,36 @@ export async function renameFile(
     });
   }
 
-  try {
-    await fs.access(newPath);
-    return err({
-      code: "ALREADY_EXISTS",
-      message: `File already exists: ${assetId}/${newFilename}`,
-    });
-  } catch {
-    // Expected — destination should not exist
-  }
-
-  const commit = await withGitLock(projectDir, async () => {
-    await fs.rename(oldPath, newPath);
-    return commitOperation(
-      projectDir,
-      "rename-file",
-      assetId,
-      { from: oldFilename, to: newFilename },
-      gitPath,
-      false,
-      [path.join(assetId, oldFilename), path.join(assetId, newFilename)],
-    );
-  });
+  const locked = await withGitLock(
+    projectDir,
+    async (): Promise<Result<CommitResult, FsError>> => {
+      // Checked inside the lock: POSIX rename silently replaces an existing
+      // destination, so a check before the lock leaves a window where a
+      // racing operation's file would be destroyed.
+      try {
+        await fs.access(newPath);
+        return err({
+          code: "ALREADY_EXISTS",
+          message: `File already exists: ${assetId}/${newFilename}`,
+        });
+      } catch {
+        // Expected — destination should not exist
+      }
+      await fs.rename(oldPath, newPath);
+      const commit = await commitOperation(
+        projectDir,
+        "rename-file",
+        assetId,
+        { from: oldFilename, to: newFilename },
+        gitPath,
+        false,
+        [path.join(assetId, oldFilename), path.join(assetId, newFilename)],
+      );
+      return ok(commit);
+    },
+  );
+  if (!locked.ok) return locked;
+  const commit = locked.value;
   if (commit.status === "failed") {
     return err({
       code: "GIT_ERROR",

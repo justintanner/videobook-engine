@@ -2,7 +2,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
 import { type FsError, type Result, ok, err } from "../types.js";
-import { commitOperation } from "../git/commit.js";
+import { commitOperation, type CommitResult } from "../git/commit.js";
 import { withGitLock } from "../git/mutex.js";
 import {
   isSafeFilename,
@@ -65,18 +65,35 @@ export async function copyFile(
     });
   }
 
-  const commit = await withGitLock(projectDir, async () => {
-    await fs.copyFile(srcPath, destPath);
-    return commitOperation(
-      projectDir,
-      "copy-file",
-      destAssetId,
-      { from: `${assetId}/${filename}`, to: destFilename },
-      gitPath,
-      false,
-      [path.join(destAssetId, destFilename)],
-    );
-  });
+  const locked = await withGitLock(
+    projectDir,
+    async (): Promise<Result<CommitResult, FsError>> => {
+      try {
+        await fs.copyFile(srcPath, destPath, fs.constants.COPYFILE_EXCL);
+      } catch (error: unknown) {
+        const e = error as NodeJS.ErrnoException;
+        if (e.code === "EEXIST") {
+          return err({
+            code: "ALREADY_EXISTS",
+            message: `File already exists: ${destAssetId}/${destFilename}`,
+          });
+        }
+        throw error;
+      }
+      const commit = await commitOperation(
+        projectDir,
+        "copy-file",
+        destAssetId,
+        { from: `${assetId}/${filename}`, to: destFilename },
+        gitPath,
+        false,
+        [path.join(destAssetId, destFilename)],
+      );
+      return ok(commit);
+    },
+  );
+  if (!locked.ok) return locked;
+  const commit = locked.value;
   if (commit.status === "failed") {
     return err({
       code: "GIT_ERROR",

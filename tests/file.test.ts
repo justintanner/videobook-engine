@@ -305,7 +305,7 @@ describe("file operations", () => {
       if (read.ok) expect(read.value.toString()).toBe("same-asset");
     });
 
-    it("overwrites existing destination", async () => {
+    it("returns ALREADY_EXISTS instead of overwriting the destination (vce-inf)", async () => {
       const src = await sandbox.fs.createAsset(
         "vid",
         "copy-over-src",
@@ -338,15 +338,17 @@ describe("file operations", () => {
         "f.txt",
         projectSlug,
       );
-      expect(result.ok).toBe(true);
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.error.code).toBe("ALREADY_EXISTS");
 
+      // Destination content must be untouched
       const read = await sandbox.fs.readFile(
         dest.value.assetId,
         "f.txt",
         projectSlug,
       );
       expect(read.ok).toBe(true);
-      if (read.ok) expect(read.value.toString()).toBe("new");
+      if (read.ok) expect(read.value.toString()).toBe("old");
     });
 
     it("returns NOT_FOUND for missing source file", async () => {

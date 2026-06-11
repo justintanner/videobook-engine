@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as os from "node:os";
+import { spawn } from "node:child_process";
 
 import { createFs } from "../src/index.js";
 import { closeAllStateDbs, getStateDb } from "../src/db/client.js";
@@ -12,7 +13,9 @@ describe("lock timeout behavior", () => {
   let assetDir: string;
 
   beforeEach(async () => {
-    projectsDir = await fs.mkdtemp(path.join(os.tmpdir(), "videocity-timeout-"));
+    projectsDir = await fs.mkdtemp(
+      path.join(os.tmpdir(), "videocity-timeout-"),
+    );
     projectDir = path.join(projectsDir, "proj");
     assetDir = path.join(projectDir, "vid-test");
     await fs.mkdir(assetDir, { recursive: true });
@@ -67,6 +70,48 @@ describe("lock timeout behavior", () => {
       .prepare("SELECT * FROM locks WHERE asset_id = ?")
       .get("vid-test");
     expect(row).toBeUndefined();
+  });
+
+  it("cleanStaleLock reaps a dead-pid lock before its timeout (vce-tlb)", async () => {
+    const cfs = cfsFor();
+    const db = getStateDb(projectDir);
+
+    // A real process that has already exited gives a genuinely dead pid
+    const child = spawn("sleep", ["0"]);
+    const deadPid = child.pid!;
+    await new Promise((resolve) => child.once("exit", resolve));
+
+    const now = Date.now() / 1000;
+    db.prepare(
+      `INSERT INTO locks (asset_id, pid, created_at, timeout_at)
+       VALUES (?, ?, ?, ?)`,
+    ).run("vid-test", deadPid, now, now + 3600);
+
+    const cleaned = await cfs.cleanStaleLock(assetDir);
+    expect(cleaned).toBe(true);
+
+    const row = db
+      .prepare("SELECT * FROM locks WHERE asset_id = ?")
+      .get("vid-test");
+    expect(row).toBeUndefined();
+  });
+
+  it("cleanStaleLock leaves a fresh live-pid lock untouched (vce-tlb)", async () => {
+    const cfs = cfsFor();
+    const db = getStateDb(projectDir);
+    const now = Date.now() / 1000;
+    db.prepare(
+      `INSERT INTO locks (asset_id, pid, created_at, timeout_at)
+       VALUES (?, ?, ?, ?)`,
+    ).run("vid-test", process.pid, now, now + 3600);
+
+    const cleaned = await cfs.cleanStaleLock(assetDir);
+    expect(cleaned).toBe(false);
+
+    const row = db
+      .prepare("SELECT created_at FROM locks WHERE asset_id = ?")
+      .get("vid-test") as { created_at: number };
+    expect(row.created_at).toBe(now);
   });
 
   it("non-expired lock blocks acquisition", async () => {

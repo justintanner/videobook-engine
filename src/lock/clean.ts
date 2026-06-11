@@ -42,8 +42,14 @@ export async function cleanStaleLock(
   const data = rowToLockData(row);
   if (!isStale(data, Date.now() / 1000)) return false;
 
+  // Delete only the exact row we judged stale: an unconditional delete could
+  // remove a fresh lock that a racing process inserted between our read and
+  // our delete, letting both processes believe they hold the lock.
   const result = db
-    .prepare("DELETE FROM locks WHERE asset_id = ?")
-    .run(assetKey);
+    .prepare(
+      `DELETE FROM locks
+       WHERE asset_id = ? AND pid IS ? AND created_at = ? AND timeout_at = ?`,
+    )
+    .run(assetKey, row.pid, row.created_at, row.timeout_at);
   return result.changes > 0;
 }

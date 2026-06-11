@@ -145,6 +145,8 @@ export async function runOperation(
     appendEvent: (e) => eventsToInsert.push(e),
   };
 
+  let sqliteCommitted = false;
+
   try {
     metadataDb.prepare("BEGIN IMMEDIATE").run();
     try {
@@ -190,6 +192,7 @@ export async function runOperation(
       }
       throw txError;
     }
+    sqliteCommitted = true;
 
     writeJournal(projectDir, { operationId, status: "sqlite_done" });
 
@@ -208,11 +211,21 @@ export async function runOperation(
 
     return { operationId, exportFilesWritten: written };
   } catch (error: unknown) {
-    writeJournal(projectDir, {
-      operationId,
-      status: "aborted",
-      error: error instanceof Error ? error.message : String(error),
-    });
+    // Once the SQLite transaction has committed, the journal row must stay
+    // replayable (pending/sqlite_done) so recoverOnStartup rebuilds the
+    // exports and git commit — marking it aborted would orphan the mutation.
+    if (!sqliteCommitted) {
+      try {
+        writeJournal(projectDir, {
+          operationId,
+          status: "aborted",
+          error: error instanceof Error ? error.message : String(error),
+        });
+      } catch {
+        // A journal-write failure must not mask the original error; recovery
+        // resolves the row from the operations table on next startup.
+      }
+    }
     throw error;
   }
 }
