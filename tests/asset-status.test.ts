@@ -49,6 +49,14 @@ describe("asset status derivation", () => {
     expect(r.ok && r.value).toBe("processing");
   });
 
+  it("loading: freshly created asset with no media reads as loading, not orphan error", async () => {
+    // createAsset co-writes a pending row with a 5-minute deadline; until a
+    // job enqueue stamps meta.kind (or media lands), status is "loading".
+    const { assetId } = await makeAsset("fresh", {});
+    const r = await cfs.getAssetStatus(assetId, "p");
+    expect(r.ok && r.value).toBe("loading");
+  });
+
   it("ready: vid- with original.mp4 + .original.json but no analysis (analysis is lazy)", async () => {
     const { assetId } = await makeAsset("anlyz", {
       "original.mp4": "x",
@@ -268,12 +276,59 @@ describe("asset status derivation", () => {
       })).toBe("error");
     });
 
-    it("orphan error: pending row with no kind falls through to file rules (no media)", () => {
-      // No kind → mapKindToStatus returns null → falls through. With no files,
-      // rule 10 returns "error" (orphan). This is the right behavior: a row
-      // without a kind is just "I exist" and the file rules take over.
+    it("orphan error: pending row with no kind and no deadline falls through to file rules (no media)", () => {
+      // No kind → mapKindToStatus returns null → falls through. With no files
+      // and no live deadline, the orphan rule returns "error". A row without a
+      // kind is just "I exist" and the file rules take over.
       expect(pureCall({
         assetRow: { status: "pending", meta: {} },
+      })).toBe("error");
+    });
+
+    it("loading: kindless pending row with live deadline and no media (createAsset→enqueue window)", () => {
+      expect(pureCall({
+        assetRow: {
+          status: "pending",
+          meta: {},
+          deadlineAt: Date.now() / 1000 + 60,
+        },
+      })).toBe("loading");
+    });
+
+    it("orphan error: kindless pending row with expired deadline and no media", () => {
+      expect(pureCall({
+        assetRow: {
+          status: "pending",
+          meta: {},
+          deadlineAt: Date.now() / 1000 - 60,
+        },
+      })).toBe("error");
+    });
+
+    it("file rules beat the kindless-pending loading rescue (media present → ready)", () => {
+      expect(pureCall({
+        assetId: "vid-files",
+        fileNames: new Set([
+          "original.mp4", ".original.json", ".original.analysis.json",
+        ]),
+        primaryMediaName: "original.mp4",
+        assetRow: {
+          status: "pending",
+          meta: {},
+          deadlineAt: Date.now() / 1000 + 60,
+        },
+      })).toBe("ready");
+    });
+
+    it("part-file error beats the kindless-pending loading rescue", () => {
+      expect(pureCall({
+        fileNames: new Set(["original.mp4.part"]),
+        hasPartFile: true,
+        assetRow: {
+          status: "pending",
+          meta: {},
+          deadlineAt: Date.now() / 1000 + 60,
+        },
       })).toBe("error");
     });
 

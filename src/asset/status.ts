@@ -60,8 +60,15 @@ export interface AssetStatusInput {
   /** Materialized assets-table row, or null if no row exists. The row's
    *  status='error' beats stale lock data (rule 1); status='pending'/'working'
    *  with a meta.kind set drives the in-progress UI state (rule 4) so a
-   *  freshly-enqueued asset never falls through to the orphan "error". */
-  assetRow: { status: AssetRowStatus; meta: AssetMeta } | null;
+   *  freshly-enqueued asset never falls through to the orphan "error".
+   *  `deadlineAt` (unix seconds) lets rule 10 treat a kindless pending row
+   *  from createAsset as "loading" while the deadline is live, instead of
+   *  orphan "error" during the createAsset→enqueue window. */
+  assetRow: {
+    status: AssetRowStatus;
+    meta: AssetMeta;
+    deadlineAt?: number | null;
+  } | null;
 }
 
 /**
@@ -134,7 +141,11 @@ function mapKindToStatus(meta: AssetMeta, queued: boolean): AssetStatus | null {
  *      c. vid- without .original.json          → "processing"
  *      d. otherwise                            → "ready"
  *   9. Has part file (any kind)                → "error"
- *  10. Otherwise                               → "error" (orphan)
+ *  10. Kindless pending row, live deadline     → "loading"
+ *      (createAsset co-writes a kindless pending row before the job enqueue
+ *      stamps meta.kind; without this the createAsset→enqueue window reads
+ *      as orphan "error")
+ *  11. Otherwise                               → "error" (orphan)
  */
 export function computeAssetStatus(input: AssetStatusInput): AssetStatus {
   const {
@@ -201,6 +212,14 @@ export function computeAssetStatus(input: AssetStatusInput): AssetStatus {
   if (assetId === "plan" && fileNames.has("index.md")) return "ready";
 
   if (hasPartFile) return "error";
+
+  const pendingRowLive =
+    assetRow !== null &&
+    assetRow.status === "pending" &&
+    typeof assetRow.deadlineAt === "number" &&
+    now < assetRow.deadlineAt;
+  if (pendingRowLive) return "loading";
+
   return "error";
 }
 
@@ -247,7 +266,11 @@ export async function getAssetStatus(
 
   const assetRowResult = readAssetRow(projectDir, assetId);
   const assetRow = assetRowResult.ok && assetRowResult.value
-    ? { status: assetRowResult.value.status, meta: assetRowResult.value.meta }
+    ? {
+        status: assetRowResult.value.status,
+        meta: assetRowResult.value.meta,
+        deadlineAt: assetRowResult.value.deadlineAt,
+      }
     : null;
 
   const primaryMediaName =
