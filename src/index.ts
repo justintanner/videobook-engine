@@ -1064,6 +1064,7 @@ export {
   queueApi,
 } from "./queue/index.js";
 export { closeAllStateDbs, closeStateDb, getStateDb } from "./db/client.js";
+export { runGitMaintenance } from "./git/init.js";
 export { isValidProjectSlug } from "./project/slug.js";
 export type { AudioWaveformRecord } from "./db/audio-waveforms.js";
 export type {

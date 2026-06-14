@@ -1,8 +1,30 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 
 import { createSandbox, type Sandbox } from "./helpers/sandbox.js";
+
+const execFileAsync = promisify(execFile);
+
+async function gitConfig(repoDir: string, key: string): Promise<string> {
+  const { stdout } = await execFileAsync(
+    "git",
+    ["config", "--local", "--get", key],
+    { cwd: repoDir },
+  );
+  return stdout.trim();
+}
+
+async function gitLfsAvailable(): Promise<boolean> {
+  try {
+    await execFileAsync("git", ["lfs", "version"]);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 describe("project operations", () => {
   let sandbox: Sandbox;
@@ -33,6 +55,41 @@ describe("project operations", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
     expect(result.value.slug).toBe("my-project");
+  });
+
+  it("disables git auto-gc on the project repo (vc-147)", async () => {
+    const result = await sandbox.fs.createProject("gc-test");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    // Rapid engine commits otherwise spawn detached `git gc --auto` that can
+    // corrupt the repo on a near-full disk; init must turn it off.
+    expect(await gitConfig(result.value.path, "gc.auto")).toBe("0");
+    expect(await gitConfig(result.value.path, "gc.autoDetach")).toBe("false");
+  });
+
+  it("only writes LFS filter patterns when git-lfs is installed (vc-cqh)", async () => {
+    const result = await sandbox.fs.createProject("lfs-test");
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    let gitattributes = "";
+    try {
+      gitattributes = await fs.readFile(
+        path.join(result.value.path, ".gitattributes"),
+        "utf-8",
+      );
+    } catch {
+      gitattributes = "";
+    }
+
+    if (await gitLfsAvailable()) {
+      expect(gitattributes).toContain("filter=lfs");
+    } else {
+      // Without git-lfs the filters never run, so the patterns must not be
+      // written — otherwise .gitattributes implies LFS while media commits raw.
+      expect(gitattributes).not.toContain("filter=lfs");
+    }
   });
 
   it("lists projects sorted newest-first by default", async () => {
