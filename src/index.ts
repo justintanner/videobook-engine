@@ -543,7 +543,7 @@ export function createFs(config: FsConfig): VideocityFs {
   const { projectsDir, gitPath } = config;
 
   async function resolve(projectSlug: string): Promise<string | null> {
-    return resolveProjectDir(projectsDir, projectSlug, gitPath);
+    return resolveProjectDir(projectsDir, projectSlug);
   }
 
   async function withProject<T>(
