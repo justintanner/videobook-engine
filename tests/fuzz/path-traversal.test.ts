@@ -85,7 +85,7 @@ describe('path traversal fuzz tests', () => {
   it('deleteAsset rejects assetIds with ../', async () => {
     await fc.assert(
       fc.asyncProperty(
-        dangerousAssetIdArb.filter((id) => id !== 'plan' && !isValidAssetId(id)),
+        dangerousAssetIdArb.filter((id) => !isValidAssetId(id)),
         async (assetId) => {
           const result = await sandbox.fs.deleteAsset(assetId, projectSlug);
           expect(result.ok).toBe(false);

@@ -55,4 +55,5 @@ issue-prefix: vce
 # - linear.api_key  → use LINEAR_API_KEY env var instead
 # - github.token    → use GITHUB_TOKEN env var instead
 
-sync.remote: "git+https://github.com/justintanner/videocity-engine.git"
+# Local-only workspace (2026-07-12): remote sync disabled; re-add sync.remote to resume syncing.
+# sync.remote: "git+https://github.com/justintanner/videocity-engine.git"

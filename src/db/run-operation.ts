@@ -23,7 +23,7 @@ export interface OperationContext {
 }
 
 export interface AssetEvent {
-  subjectType: "asset" | "character" | "timeline" | "project" | "render";
+  subjectType: "asset" | "timeline" | "project" | "render";
   subjectId: string;
   kind: string;
   detail?: unknown;

@@ -4,7 +4,7 @@
 [![Node.js](https://img.shields.io/badge/node-%3E%3D20-brightgreen)](https://nodejs.org)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.5-blue)](https://www.typescriptlang.org)
 
-TypeScript/Node.js filesystem abstraction for managing video, image, audio, script, and character asset projects. Each project is a git repo with a sidecar `.videocity/` directory holding two SQLite databases: `state.sqlite` for ephemeral coordination (locks, job queue, recovery journal) and `metadata.sqlite` for content metadata (timeline, characters, asset metadata, audio waveforms). Every mutation produces an atomic git commit; metadata changes are mirrored to canonical JSON exports under `.videocity/export/` so git stays diffable.
+TypeScript/Node.js filesystem abstraction for managing video, image, audio, script, character, and notebook asset projects. Each project is a git repo with a sidecar `.videocity/` directory holding two SQLite databases: `state.sqlite` for ephemeral coordination (locks, job queue, recovery journal) and `metadata.sqlite` for content metadata (timeline, asset metadata, audio waveforms). Every mutation produces an atomic git commit; metadata changes are mirrored to canonical JSON exports under `.videocity/export/` so git stays diffable.
 
 ## Install
 
@@ -66,7 +66,8 @@ Assets live as prefixed directories at the project root. Valid prefixes:
 | `img-` | image |
 | `aud-` | audio |
 | `script-` | script |
-| `char-` | character |
+| `char-` | character (free-form) |
+| `nb-` | notebook |
 
 The asset id `final` is reserved as a project-level singleton.
 
@@ -111,7 +112,7 @@ All methods are available on the object returned by `createFs(config)`. Unless n
 
 ### Metadata
 
-`writeMetadata(assetId, 'character', record, ...)` is special-cased: the record is stored in the typed `characters` table in `metadata.sqlite`. Other keys are stored in the generic `asset_metadata` table. In both cases a `.{key}.json` sidecar is also written next to the asset and the operation produces a single git commit covering the SQLite file, the canonical export, and the sidecar.
+`writeMetadata(assetId, 'character', record, ...)` writes to the generic `asset_metadata` table like any other key. A `.{key}.json` sidecar is also written next to the asset and the operation produces a single git commit covering the SQLite file, the canonical export, and the sidecar. The `char-` asset type is a free-form folder supporting arbitrary files and free-form metadata.
 
 `writeProjectMeta(key, data, ...)` with `key === 'timeline'` is also special-cased and **strict**: `data` must be `{ slots: [{ slug, ... }, ...], render: 'landscape' | 'portrait' | 'square' }` (an optional `currentOrientation` and an optional `audio` array are accepted). Non-conforming payloads return `INVALID_INPUT`. Reads come from SQLite only — there is no sidecar fallback. Other project-meta keys are written as plain `.{key}.json` sidecars.
 

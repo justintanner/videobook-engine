@@ -71,7 +71,6 @@ export const dangerousAssetIdArb = fc.oneof(
   fc.constant(''),
   fc.constant('.git'),
   fc.constant('.git/config'),
-  fc.constant('plan'),
   fc.constant('vid-\0test'),
   fc.constant('/vid-test'),
   fc.constant('vid-test/../../../etc'),
@@ -93,7 +92,7 @@ export const commitMessageInjectionArb = fc.oneof(
 
 // --- Valid prefix arbitrary ---
 
-export const validPrefixArb = fc.constantFrom('vid', 'img', 'aud', 'script');
+export const validPrefixArb = fc.constantFrom('vid', 'img', 'aud', 'script', 'char', 'nb');
 
 // --- Safe asset name arbitrary ---
 

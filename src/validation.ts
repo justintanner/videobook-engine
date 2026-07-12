@@ -2,8 +2,8 @@ import * as path from "node:path";
 
 import { type FsError, type Result, err } from "./types.js";
 
-const VALID_PREFIXES = ["img-", "vid-", "aud-", "script-", "char-"] as const;
-const SINGLETON_ASSETS = ["final", "plan"] as const;
+const VALID_PREFIXES = ["img-", "vid-", "aud-", "script-", "char-", "nb-"] as const;
+const SINGLETON_ASSETS = ["final"] as const;
 
 /** Reject empty, null bytes, `..` segments, absolute paths */
 export function isSafePath(segment: string): boolean {

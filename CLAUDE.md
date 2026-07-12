@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-videocity-engine is a TypeScript/Node.js filesystem abstraction library for managing video, image, audio, script, and character asset projects. Each project is a git repo with a `.videocity/` sidecar that holds two SQLite databases: `state.sqlite` for ephemeral coordination (locks, job queue, recovery journal, process locks) and `metadata.sqlite` for content metadata (timeline, characters, asset/project metadata, audio waveforms). It is an ESM package targeting Node.js >= 20.
+videocity-engine is a TypeScript/Node.js filesystem abstraction library for managing video, image, audio, script, character, and notebook asset projects. Each project is a git repo with a `.videocity/` sidecar that holds two SQLite databases: `state.sqlite` for ephemeral coordination (locks, job queue, recovery journal, process locks) and `metadata.sqlite` for content metadata (timeline, asset/project metadata, audio waveforms). It is an ESM package targeting Node.js >= 20.
 
 ## Commands
 
@@ -24,7 +24,7 @@ npm run bench        # vitest bench --config vitest.config.bench.ts
 **Module layout** — each module is a directory with single-responsibility files:
 
 - `src/project/` — project lifecycle (create, list, get, switch, rename). Projects are directories under `projectsDir`, each a git repo. Slugs are `{adjective}-{noun}-{number}`.
-- `src/asset/` — asset lifecycle (create, delete, rename, list, manifest, list-subdir). Assets are prefixed directories at the project root. Valid prefixes: `vid-`, `img-`, `aud-`, `script-`, `char-`. The id `final` is a project-level singleton. Slugs are `{prefix}-{slugified-name}[-{counter}]` with collision detection against both live directories and historical git slugs.
+- `src/asset/` — asset lifecycle (create, delete, rename, list, manifest, list-subdir). Assets are prefixed directories at the project root. Valid prefixes: `vid-`, `img-`, `aud-`, `script-`, `char-`, `nb-`. The id `final` is a project-level singleton. Slugs are `{prefix}-{slugified-name}[-{counter}]` with collision detection against both live directories and historical git slugs.
 - `src/file/` — file I/O (read, write, delete, rename, copy, metadata, audio-waveform). Mutations route through `db/run-operation.ts` so they share the recovery journal and atomic-commit machinery.
 - `src/git/` — git operations via `child_process.execFile` (`gitExecSafe`). Commits use scoped staging, structured `op-id`-tagged messages, and exponential backoff for `index.lock` contention. `withGitLock(projectDir, fn)` is the per-project mutex (in-process chain + `proper-lockfile` on `.videocity/.project.lock`).
 - `src/lock/` — SQLite-backed asset/project locking. One row per `(projectDir, assetKey)` in the `locks` table; `assetKey` is the first path segment under the project, or `__PROJECT__` for project-root locks. Stale locks (expired timeout or dead pid) are reaped on next acquire.

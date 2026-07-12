@@ -795,7 +795,7 @@ export function createFs(config: FsConfig): VideocityFs {
 
 // The metadata.sqlite migration count baked into this build. Bumped whenever
 // a new metadata migration ships in src/db/migrations/metadata_*.ts.
-const BUILD_METADATA_VERSION = 5;
+const BUILD_METADATA_VERSION = 6;
 
 function makePendingTasks(
   resolve: (slug: string) => Promise<string | null>,

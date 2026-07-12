@@ -13,11 +13,6 @@ import {
   exportAudioWaveform,
   listAudioWaveformAssetIds,
 } from "./audio-waveforms.js";
-import {
-  exportCharacterPins,
-  exportCharacters,
-  readCharacter,
-} from "./character.js";
 import { VIDEOCITY_DIR, getStateDb } from "./client.js";
 import { getMetadataDb } from "./metadata-client.js";
 import { exportTimeline, readTimeline } from "./timeline.js";
@@ -140,8 +135,6 @@ async function rebuildKnownExports(projectDir: string): Promise<string[]> {
   const exports: Array<{ rel: string; body: string }> = [
     { rel: "asset_events.json", body: exportAssetEvents(db) },
     { rel: "asset_metadata.json", body: exportAssetMetadata(db) },
-    { rel: "characters.json", body: exportCharacters(db) },
-    { rel: "character_pins.json", body: exportCharacterPins(db) },
     { rel: "timeline.json", body: exportTimeline(db) },
   ];
   for (const assetId of listAudioWaveformAssetIds(db)) {
@@ -208,17 +201,6 @@ async function rebuildSidecarsForOperation(
   row: JournalRow,
 ): Promise<string[]> {
   const written: string[] = [];
-  if (row.intent === "write_character" && row.target) {
-    const character = readCharacter(metadataDb, row.target);
-    if (character) {
-      const rel = await writeJsonSidecar(
-        projectDir,
-        path.join(row.target, ".character.json"),
-        character,
-      );
-      if (rel) written.push(rel);
-    }
-  }
   if (row.intent === "write_asset_metadata" && row.target) {
     const detail = operationDetail(metadataDb, row.operation_id);
     const key = detail.key;
