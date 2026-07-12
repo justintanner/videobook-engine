@@ -58,6 +58,28 @@ describe("asset operations", () => {
     expect(vid!.type).toBe("video");
   });
 
+  it("creates and lists a ready-by-default notebook", async () => {
+    const created = await sandbox.fs.createAsset(
+      "nb",
+      "research notes",
+      projectSlug,
+    );
+    expect(created.ok).toBe(true);
+    if (!created.ok) return;
+
+    expect(created.value.assetId).toMatch(/^nb-research-notes/);
+
+    const assets = await sandbox.fs.listAssets(projectSlug);
+    const notebook = assets.find((asset) => asset.id === created.value.assetId);
+    expect(notebook?.type).toBe("notebook");
+
+    const status = await sandbox.fs.getAssetStatus(
+      created.value.assetId,
+      projectSlug,
+    );
+    expect(status.ok && status.value).toBe("ready");
+  });
+
   it("deletes an asset", async () => {
     const createResult = await sandbox.fs.createAsset(
       "img",
@@ -85,7 +107,11 @@ describe("asset operations", () => {
     if (!createResult.ok) throw new Error("Failed to create asset");
 
     const projectDir = path.join(sandbox.projectsDir, projectSlug);
-    const bystanderDir = path.join(projectDir, "vid-bystander", "original_frames");
+    const bystanderDir = path.join(
+      projectDir,
+      "vid-bystander",
+      "original_frames",
+    );
     await fs.mkdir(bystanderDir, { recursive: true });
     await fs.writeFile(path.join(bystanderDir, "0.00.jpg"), "untracked");
 
@@ -96,7 +122,9 @@ describe("asset operations", () => {
     expect(deleteResult.ok).toBe(true);
 
     await expect(fs.access(createResult.value.path)).rejects.toThrow();
-    await expect(fs.access(path.join(bystanderDir, "0.00.jpg"))).resolves.toBeUndefined();
+    await expect(
+      fs.access(path.join(bystanderDir, "0.00.jpg")),
+    ).resolves.toBeUndefined();
   });
 
   it("renames an asset with git mv", async () => {

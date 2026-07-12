@@ -10,6 +10,7 @@ import * as m0002 from "./migrations/metadata_0002_audio_waveforms.js";
 import * as m0003 from "./migrations/metadata_0003_timeline_audio.js";
 import * as m0004 from "./migrations/metadata_0004_prompt_history.js";
 import * as m0005 from "./migrations/metadata_0005_drop_unused.js";
+import * as m0006 from "./migrations/metadata_0006_drop_characters.js";
 
 const METADATA_DB_FILENAME = "metadata.sqlite";
 
@@ -25,6 +26,7 @@ const METADATA_MIGRATIONS: ReadonlyArray<MetadataMigration> = [
   m0003,
   m0004,
   m0005,
+  m0006,
 ];
 
 const cache = new Map<string, DatabaseType>();
@@ -186,4 +188,12 @@ export function closeAllMetadataDbs(): void {
     if (db.open) db.close();
   }
   cache.clear();
+}
+
+export function highestMetadataMigrationVersion(): number {
+  let max = 0;
+  for (const migration of METADATA_MIGRATIONS) {
+    if (migration.version > max) max = migration.version;
+  }
+  return max;
 }

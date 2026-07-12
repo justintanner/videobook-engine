@@ -73,7 +73,10 @@ import { queueApi, type QueueApi } from "./queue/index.js";
 import { ensureGitignorePatterns } from "./db/gitignore.js";
 import { getStateDb, closeAllStateDbs } from "./db/client.js";
 import { migrateLegacySidecar } from "./git/init.js";
-import { getMetadataDb } from "./db/metadata-client.js";
+import {
+  getMetadataDb,
+  highestMetadataMigrationVersion,
+} from "./db/metadata-client.js";
 import {
   recordPromptRow,
   listPromptHistoryRows,
@@ -779,23 +782,19 @@ export function createFs(config: FsConfig): VideocityFs {
           recordedStateVersion: 0,
           recordedMetadataVersion: 0,
           buildStateVersion: highestStateVersion(),
-          buildMetadataVersion: BUILD_METADATA_VERSION,
+          buildMetadataVersion: highestMetadataMigrationVersion(),
         };
       }
       return checkProjectSchemaVersion(
         dir,
         highestStateVersion(),
-        BUILD_METADATA_VERSION,
+        highestMetadataMigrationVersion(),
       );
     },
 
     close: () => closeAllStateDbs(),
   };
 }
-
-// The metadata.sqlite migration count baked into this build. Bumped whenever
-// a new metadata migration ships in src/db/migrations/metadata_*.ts.
-const BUILD_METADATA_VERSION = 6;
 
 function makePendingTasks(
   resolve: (slug: string) => Promise<string | null>,

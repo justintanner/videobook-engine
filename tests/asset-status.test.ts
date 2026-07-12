@@ -3,7 +3,11 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as os from "node:os";
 
-import { createFs, type VideocityFs, computeAssetStatus } from "../src/index.js";
+import {
+  createFs,
+  type VideocityFs,
+  computeAssetStatus,
+} from "../src/index.js";
 import { closeAllStateDbs } from "../src/db/client.js";
 
 describe("asset status derivation", () => {
@@ -223,157 +227,260 @@ describe("asset status derivation", () => {
     }
 
     it("generating: pending row with kind=generate (the queued-window bug)", () => {
-      expect(pureCall({
-        assetRow: { status: "pending", meta: { kind: "generate", queued: true } },
-      })).toBe("generating");
+      expect(
+        pureCall({
+          assetRow: {
+            status: "pending",
+            meta: { kind: "generate", queued: true },
+          },
+        }),
+      ).toBe("generating");
     });
 
     it("render-queued-landscape: pending row with kind=render + landscape", () => {
-      expect(pureCall({
-        assetRow: {
-          status: "pending",
-          meta: { kind: "render", orientation: "landscape", queued: true },
-        },
-      })).toBe("render-queued-landscape");
+      expect(
+        pureCall({
+          assetRow: {
+            status: "pending",
+            meta: { kind: "render", orientation: "landscape", queued: true },
+          },
+        }),
+      ).toBe("render-queued-landscape");
     });
 
     it("rendering-portrait: working row with kind=render + portrait", () => {
-      expect(pureCall({
-        assetRow: {
-          status: "working",
-          meta: { kind: "render", orientation: "portrait", queued: false },
-        },
-      })).toBe("rendering-portrait");
+      expect(
+        pureCall({
+          assetRow: {
+            status: "working",
+            meta: { kind: "render", orientation: "portrait", queued: false },
+          },
+        }),
+      ).toBe("rendering-portrait");
     });
 
     it("render-queued: pending row with kind=render and no orientation", () => {
-      expect(pureCall({
-        assetRow: { status: "pending", meta: { kind: "render", queued: true } },
-      })).toBe("render-queued");
+      expect(
+        pureCall({
+          assetRow: {
+            status: "pending",
+            meta: { kind: "render", queued: true },
+          },
+        }),
+      ).toBe("render-queued");
     });
 
     it("trimming: working row with kind=trim", () => {
-      expect(pureCall({
-        assetRow: { status: "working", meta: { kind: "trim", queued: false } },
-      })).toBe("trimming");
+      expect(
+        pureCall({
+          assetRow: {
+            status: "working",
+            meta: { kind: "trim", queued: false },
+          },
+        }),
+      ).toBe("trimming");
     });
 
     it("changing-speed: working row with kind=change_speed", () => {
-      expect(pureCall({
-        assetRow: { status: "working", meta: { kind: "change_speed", queued: false } },
-      })).toBe("changing-speed");
+      expect(
+        pureCall({
+          assetRow: {
+            status: "working",
+            meta: { kind: "change_speed", queued: false },
+          },
+        }),
+      ).toBe("changing-speed");
     });
 
     it("replacing-audio: working row with kind=replace_audio", () => {
-      expect(pureCall({
-        assetRow: { status: "working", meta: { kind: "replace_audio", queued: false } },
-      })).toBe("replacing-audio");
+      expect(
+        pureCall({
+          assetRow: {
+            status: "working",
+            meta: { kind: "replace_audio", queued: false },
+          },
+        }),
+      ).toBe("replacing-audio");
     });
 
     it("error: row.status=error wins over meta.kind", () => {
-      expect(pureCall({
-        assetRow: { status: "error", meta: { kind: "generate" } },
-      })).toBe("error");
+      expect(
+        pureCall({
+          assetRow: { status: "error", meta: { kind: "generate" } },
+        }),
+      ).toBe("error");
     });
 
     it("orphan error: pending row with no kind and no deadline falls through to file rules (no media)", () => {
       // No kind → mapKindToStatus returns null → falls through. With no files
       // and no live deadline, the orphan rule returns "error". A row without a
       // kind is just "I exist" and the file rules take over.
-      expect(pureCall({
-        assetRow: { status: "pending", meta: {} },
-      })).toBe("error");
+      expect(
+        pureCall({
+          assetRow: { status: "pending", meta: {} },
+        }),
+      ).toBe("error");
     });
 
     it("loading: kindless pending row with live deadline and no media (createAsset→enqueue window)", () => {
-      expect(pureCall({
-        assetRow: {
-          status: "pending",
-          meta: {},
-          deadlineAt: Date.now() / 1000 + 60,
-        },
-      })).toBe("loading");
+      expect(
+        pureCall({
+          assetRow: {
+            status: "pending",
+            meta: {},
+            deadlineAt: Date.now() / 1000 + 60,
+          },
+        }),
+      ).toBe("loading");
     });
 
     it("orphan error: kindless pending row with expired deadline and no media", () => {
-      expect(pureCall({
-        assetRow: {
-          status: "pending",
-          meta: {},
-          deadlineAt: Date.now() / 1000 - 60,
-        },
-      })).toBe("error");
+      expect(
+        pureCall({
+          assetRow: {
+            status: "pending",
+            meta: {},
+            deadlineAt: Date.now() / 1000 - 60,
+          },
+        }),
+      ).toBe("error");
     });
 
     it("file rules beat the kindless-pending loading rescue (media present → ready)", () => {
-      expect(pureCall({
-        assetId: "vid-files",
-        fileNames: new Set([
-          "original.mp4", ".original.json", ".original.analysis.json",
-        ]),
-        primaryMediaName: "original.mp4",
-        assetRow: {
-          status: "pending",
-          meta: {},
-          deadlineAt: Date.now() / 1000 + 60,
-        },
-      })).toBe("ready");
+      expect(
+        pureCall({
+          assetId: "vid-files",
+          fileNames: new Set([
+            "original.mp4",
+            ".original.json",
+            ".original.analysis.json",
+          ]),
+          primaryMediaName: "original.mp4",
+          assetRow: {
+            status: "pending",
+            meta: {},
+            deadlineAt: Date.now() / 1000 + 60,
+          },
+        }),
+      ).toBe("ready");
     });
 
     it("part-file error beats the kindless-pending loading rescue", () => {
-      expect(pureCall({
-        fileNames: new Set(["original.mp4.part"]),
-        hasPartFile: true,
-        assetRow: {
-          status: "pending",
-          meta: {},
-          deadlineAt: Date.now() / 1000 + 60,
-        },
-      })).toBe("error");
+      expect(
+        pureCall({
+          fileNames: new Set(["original.mp4.part"]),
+          hasPartFile: true,
+          assetRow: {
+            status: "pending",
+            meta: {},
+            deadlineAt: Date.now() / 1000 + 60,
+          },
+        }),
+      ).toBe("error");
     });
+
+    it.each(["char-x", "nb-x"])(
+      "ready: free-form asset %s has no required primary media",
+      (assetId) => {
+        expect(pureCall({ assetId })).toBe("ready");
+      },
+    );
+
+    it.each(["char-x", "nb-x"])(
+      "error: partial download beats free-form ready fallback for %s",
+      (assetId) => {
+        expect(
+          pureCall({
+            assetId,
+            fileNames: new Set(["original.mp4.part"]),
+            hasPartFile: true,
+          }),
+        ).toBe("error");
+      },
+    );
+
+    it.each(["char-x", "nb-x"])(
+      "error: recorded generation failure beats free-form ready fallback for %s",
+      (assetId) => {
+        expect(
+          pureCall({
+            assetId,
+            generationError: {
+              assetId,
+              message: "provider failed",
+              failedAt: Date.now() / 1000,
+            },
+          }),
+        ).toBe("error");
+      },
+    );
 
     it("file-derived ready: pending row without kind, with all media files", () => {
       // The file-based cascade still runs when meta.kind is missing — important
       // for assets created by createAsset and then populated directly (e.g. the
       // test scenario for expired-lock fall-through).
-      expect(pureCall({
-        assetId: "vid-files",
-        fileNames: new Set([
-          "original.mp4", ".original.json", ".original.analysis.json",
-        ]),
-        primaryMediaName: "original.mp4",
-        assetRow: { status: "pending", meta: {} },
-      })).toBe("ready");
+      expect(
+        pureCall({
+          assetId: "vid-files",
+          fileNames: new Set([
+            "original.mp4",
+            ".original.json",
+            ".original.analysis.json",
+          ]),
+          primaryMediaName: "original.mp4",
+          assetRow: { status: "pending", meta: {} },
+        }),
+      ).toBe("ready");
     });
 
     it("active lock beats assets row precedence", () => {
-      expect(pureCall({
-        lockData: {
-          owner_id: "x",
-          acquired_at: Date.now() / 1000 - 1,
-          timeout_at: Date.now() / 1000 + 60,
-          state: "rendering-square",
-        } as never,
-        assetRow: { status: "pending", meta: { kind: "generate", queued: true } },
-      })).toBe("rendering-square");
+      expect(
+        pureCall({
+          lockData: {
+            owner_id: "x",
+            acquired_at: Date.now() / 1000 - 1,
+            timeout_at: Date.now() / 1000 + 60,
+            state: "rendering-square",
+          } as never,
+          assetRow: {
+            status: "pending",
+            meta: { kind: "generate", queued: true },
+          },
+        }),
+      ).toBe("rendering-square");
     });
 
     it("isolating: working row with kind=isolate", () => {
-      expect(pureCall({
-        assetRow: { status: "working", meta: { kind: "isolate", queued: false } },
-      })).toBe("isolating");
+      expect(
+        pureCall({
+          assetRow: {
+            status: "working",
+            meta: { kind: "isolate", queued: false },
+          },
+        }),
+      ).toBe("isolating");
     });
 
     it("downloading: pending row with kind=download", () => {
-      expect(pureCall({
-        assetRow: { status: "pending", meta: { kind: "download", queued: true } },
-      })).toBe("downloading");
+      expect(
+        pureCall({
+          assetRow: {
+            status: "pending",
+            meta: { kind: "download", queued: true },
+          },
+        }),
+      ).toBe("downloading");
     });
 
     it("archiving: pending row with kind=archive", () => {
-      expect(pureCall({
-        assetRow: { status: "pending", meta: { kind: "archive", queued: true } },
-      })).toBe("archiving");
+      expect(
+        pureCall({
+          assetRow: {
+            status: "pending",
+            meta: { kind: "archive", queued: true },
+          },
+        }),
+      ).toBe("archiving");
     });
   });
 });

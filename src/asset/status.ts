@@ -86,31 +86,54 @@ function mapKindToStatus(meta: AssetMeta, queued: boolean): AssetStatus | null {
       const orient =
         o === "portrait" || o === "landscape" || o === "square" ? o : null;
       if (queued) {
-        return orient ? (`render-queued-${orient}` as AssetStatus) : "render-queued";
+        return orient
+          ? (`render-queued-${orient}` as AssetStatus)
+          : "render-queued";
       }
       return orient ? (`rendering-${orient}` as AssetStatus) : "rendering";
     }
-    case "generate":       return "generating";
-    case "transcribe":     return "transcribing";
-    case "isolate":        return "isolating";
-    case "download":       return "downloading";
-    case "archive":        return "archiving";
-    case "upload":         return "uploading";
-    case "trim":           return "trimming";
-    case "crop":           return "cropping";
-    case "splice":         return "splicing";
-    case "reverse":        return "reversing";
-    case "change_speed":   return "changing-speed";
-    case "replace_audio":  return "replacing-audio";
-    case "process":        return "processing";
-    case "analyze":        return "analyzing";
-    case "delete":         return "deleting";
-    case "describe":       return "analyzing";
-    case "rewrite_script": return "generating";
-    case "extract":        return "processing";
-    case "apply_cuts":     return "processing";
-    case "apply_sfx":      return "processing";
-    case "final":          return "rendering";
+    case "generate":
+      return "generating";
+    case "transcribe":
+      return "transcribing";
+    case "isolate":
+      return "isolating";
+    case "download":
+      return "downloading";
+    case "archive":
+      return "archiving";
+    case "upload":
+      return "uploading";
+    case "trim":
+      return "trimming";
+    case "crop":
+      return "cropping";
+    case "splice":
+      return "splicing";
+    case "reverse":
+      return "reversing";
+    case "change_speed":
+      return "changing-speed";
+    case "replace_audio":
+      return "replacing-audio";
+    case "process":
+      return "processing";
+    case "analyze":
+      return "analyzing";
+    case "delete":
+      return "deleting";
+    case "describe":
+      return "analyzing";
+    case "rewrite_script":
+      return "generating";
+    case "extract":
+      return "processing";
+    case "apply_cuts":
+      return "processing";
+    case "apply_sfx":
+      return "processing";
+    case "final":
+      return "rendering";
     default: {
       const _exhaustive: never = kind;
       void _exhaustive;
@@ -134,18 +157,19 @@ function mapKindToStatus(meta: AssetMeta, queued: boolean): AssetStatus | null {
  *      (status='ready' or no kind falls through)
  *   5. Legacy `.processing.json` marker        → "processing"
  *   6. Legacy `.analyzing.json` marker         → "analyzing"
- *   7. vid- with .part file but no real video  → "error"
- *   8. Has primary media:
- *      a. Generation error recorded            → "error"
- *      b. id === "final"                       → "ready"
- *      c. vid- without .original.json          → "processing"
- *      d. otherwise                            → "ready"
- *   9. Has part file (any kind)                → "error"
- *  10. Kindless pending row, live deadline     → "loading"
+ *   7. Generation error recorded               → "error"
+ *   8. vid- with .part file but no real video  → "error"
+ *   9. Has primary media:
+ *      a. id === "final"                       → "ready"
+ *      b. vid- without .original.json          → "processing"
+ *      c. otherwise                            → "ready"
+ *  10. Has part file (any kind)                → "error"
+ *  11. Free-form nb-/char- asset               → "ready"
+ *  12. Kindless pending row, live deadline     → "loading"
  *      (createAsset co-writes a kindless pending row before the job enqueue
  *      stamps meta.kind; without this the createAsset→enqueue window reads
  *      as orphan "error")
- *  11. Otherwise                               → "error" (orphan)
+ *  13. Otherwise                               → "error" (orphan)
  */
 export function computeAssetStatus(input: AssetStatusInput): AssetStatus {
   const {
@@ -188,6 +212,8 @@ export function computeAssetStatus(input: AssetStatusInput): AssetStatus {
   if (fileNames.has(".processing.json")) return "processing";
   if (fileNames.has(".analyzing.json")) return "analyzing";
 
+  if (generationError !== null) return "error";
+
   const isVideo = assetId.startsWith("vid-");
   const mediaIsImageLike =
     primaryMediaName !== null && IMAGE_LIKE_MEDIA_RE.test(primaryMediaName);
@@ -201,17 +227,16 @@ export function computeAssetStatus(input: AssetStatusInput): AssetStatus {
   }
 
   if (primaryMediaName !== null) {
-    if (generationError !== null) return "error";
     if (assetId === "final") return "ready";
     if (isVideo && !fileNames.has(".original.json")) return "processing";
     return "ready";
   }
 
+  if (hasPartFile) return "error";
+
   // Notebook and character assets have no required primary media.
   // Treat as ready.
   if (assetId.startsWith("nb-") || assetId.startsWith("char-")) return "ready";
-
-  if (hasPartFile) return "error";
 
   const pendingRowLive =
     assetRow !== null &&
@@ -265,18 +290,20 @@ export async function getAssetStatus(
     : null;
 
   const assetRowResult = readAssetRow(projectDir, assetId);
-  const assetRow = assetRowResult.ok && assetRowResult.value
-    ? {
-        status: assetRowResult.value.status,
-        meta: assetRowResult.value.meta,
-        deadlineAt: assetRowResult.value.deadlineAt,
-      }
-    : null;
+  const assetRow =
+    assetRowResult.ok && assetRowResult.value
+      ? {
+          status: assetRowResult.value.status,
+          meta: assetRowResult.value.meta,
+          deadlineAt: assetRowResult.value.deadlineAt,
+        }
+      : null;
 
   const primaryMediaName =
     options?.primaryMediaName !== undefined
       ? options.primaryMediaName
-      : (files.find((f) => DEFAULT_PRIMARY_MEDIA_RE.test(f.name))?.name ?? null);
+      : (files.find((f) => DEFAULT_PRIMARY_MEDIA_RE.test(f.name))?.name ??
+        null);
 
   const status = computeAssetStatus({
     assetId,
