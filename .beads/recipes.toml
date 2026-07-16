@@ -1,0 +1,8 @@
+[recipes]
+  [recipes.grok]
+    name = "grok"
+    path = ".cursor/rules/beads.md"
+    type = "file"
+    description = ""
+    global_path = ""
+    project_path = ""

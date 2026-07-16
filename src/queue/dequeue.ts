@@ -48,6 +48,16 @@ export function dequeue(
                AND assets.owner_kind = 'provider'
              )
            )
+           AND (
+             pending_jobs.asset_id IS NULL
+             OR NOT EXISTS (
+               SELECT 1
+               FROM pending_jobs AS active_jobs
+               WHERE active_jobs.asset_id = pending_jobs.asset_id
+                 AND active_jobs.id != pending_jobs.id
+                 AND active_jobs.state IN ('running','completing')
+             )
+           )
          ORDER BY pending_jobs.enqueued_at, pending_jobs.id
          LIMIT  1
        )
