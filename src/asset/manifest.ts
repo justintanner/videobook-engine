@@ -10,6 +10,7 @@ import {
   err,
 } from "../types.js";
 import { isSafePath, isValidAssetId, invalidInput } from "../validation.js";
+import { resolveAssetDir } from "../file/resolve.js";
 
 export async function getManifest(
   projectDir: string,
@@ -19,13 +20,9 @@ export async function getManifest(
   if (!isSafePath(assetId)) return invalidInput(`Invalid asset ID: ${assetId}`);
   if (!isValidAssetId(assetId))
     return invalidInput(`Invalid asset ID format: ${assetId}`);
-  const assetDir = path.join(projectDir, assetId);
-
-  try {
-    await fs.access(assetDir);
-  } catch {
-    return err({ code: "NOT_FOUND", message: `Asset not found: ${assetId}` });
-  }
+  const dirRes = await resolveAssetDir(projectDir, assetId);
+  if (!dirRes.ok) return dirRes;
+  const assetDir = dirRes.value;
 
   const entries = await fs.readdir(assetDir, { withFileTypes: true });
   const files: AssetManifestFile[] = [];

@@ -8,6 +8,7 @@ import {
   isWithinDir,
   invalidInput,
 } from "../validation.js";
+import { resolveAssetDir } from "./resolve.js";
 
 export async function readFile(
   projectDir: string,
@@ -17,7 +18,10 @@ export async function readFile(
   if (!isSafePath(assetId)) return invalidInput(`Invalid asset ID: ${assetId}`);
   if (!isSafeFilename(filename))
     return invalidInput(`Invalid filename: ${filename}`);
-  const filePath = path.join(projectDir, assetId, filename);
+
+  const dirRes = await resolveAssetDir(projectDir, assetId);
+  if (!dirRes.ok) return dirRes;
+  const filePath = path.join(dirRes.value, filename);
   if (!isWithinDir(projectDir, filePath))
     return invalidInput("Path escapes project directory");
 

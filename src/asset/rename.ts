@@ -144,6 +144,12 @@ export async function renameAsset(
         db.prepare(
           "UPDATE generation_errors SET asset_id = ? WHERE asset_id = ?",
         ).run(result.value.new_asset_id, result.value.old_asset_id);
+        db.prepare(
+          "INSERT OR REPLACE INTO asset_aliases (old_asset_id, current_asset_id) VALUES (?, ?)"
+        ).run(result.value.old_asset_id, result.value.new_asset_id);
+        db.prepare(
+          "UPDATE asset_aliases SET current_asset_id = ? WHERE current_asset_id = ?"
+        ).run(result.value.new_asset_id, result.value.old_asset_id);
       });
       tx();
     } catch {

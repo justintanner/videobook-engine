@@ -3,6 +3,7 @@
  */
 import type { VideocityFs } from "../index.js";
 import type { AssetType } from "../types.js";
+import { getStateDb } from "../db/client.js";
 
 type ResolvedAsset = {
   tag: string;         // "@img-sunset"
@@ -41,7 +42,22 @@ async function resolveAllAssets(
   for (const tag of tags) {
     // Try exact match first, then prefixed variants
     const candidates = [tag, `img-${tag}`, `vid-${tag}`, `aud-${tag}`, `script-${tag}`];
-    const matchedId = candidates.find((c) => assetIds.has(c));
+    let matchedId = candidates.find((c) => assetIds.has(c));
+    if (!matchedId) {
+      const projectDir = await fs.resolveProjectDir(projectSlug);
+      if (projectDir) {
+        try {
+          const db = getStateDb(projectDir);
+          for (const c of candidates) {
+            const row = db.prepare("SELECT current_asset_id FROM asset_aliases WHERE old_asset_id = ?").get(c) as { current_asset_id: string } | undefined;
+            if (row && assetIds.has(row.current_asset_id)) {
+              matchedId = row.current_asset_id;
+              break;
+            }
+          }
+        } catch (e) {}
+      }
+    }
 
     if (!matchedId) {
       unresolved.push(tag);
