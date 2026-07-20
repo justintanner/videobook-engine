@@ -3,7 +3,7 @@ import * as path from "node:path";
 
 import { type FsError, type Result, ok, err } from "../types.js";
 
-export const PROJECT_LOCK_KEY = "__PROJECT__";
+const PROJECT_LOCK_KEY = "__PROJECT__";
 
 const SLUG_PATTERN = /^[a-zA-Z0-9._-]+$/;
 
@@ -12,7 +12,7 @@ function isValidSlug(slug: string): boolean {
   return SLUG_PATTERN.test(slug);
 }
 
-export interface ResolvedLock {
+interface ResolvedLock {
   projectDir: string;
   assetKey: string;
 }

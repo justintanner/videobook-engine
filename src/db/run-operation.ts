@@ -8,11 +8,11 @@ import { VIDEOCITY_DIR, getStateDb } from "./client.js";
 import { getMetadataDb } from "./metadata-client.js";
 import { commitOperation, type CommitResult } from "../git/commit.js";
 
-export const EXPORT_DIR = "export";
+const EXPORT_DIR = "export";
 
-export type OperationScope = "project" | "asset" | "file" | "schema";
+type OperationScope = "project" | "asset" | "file" | "schema";
 
-export interface OperationContext {
+interface OperationContext {
   operationId: string;
   intent: string;
   scope: OperationScope;
@@ -22,14 +22,14 @@ export interface OperationContext {
   appendEvent: (event: AssetEvent) => void;
 }
 
-export interface AssetEvent {
+interface AssetEvent {
   subjectType: "asset" | "timeline" | "project" | "render";
   subjectId: string;
   kind: string;
   detail?: unknown;
 }
 
-export interface RunOperationOptions {
+interface RunOperationOptions {
   intent: string;
   scope: OperationScope;
   target?: string | null;
@@ -97,7 +97,7 @@ function writeJournal(
   }
 }
 
-export interface OperationResult {
+interface OperationResult {
   operationId: string;
   /** Files rebuilt under .videocity/export/ relative to projectDir. */
   exportFilesWritten: string[];
@@ -234,7 +234,7 @@ export async function runOperation(
  * Mark an operation as fully complete (typically called by the caller after
  * the paired git commit succeeds). Pass git_hash if you have it.
  */
-export function finalizeOperation(
+function finalizeOperation(
   projectDir: string,
   operationId: string,
   gitHash?: string,
@@ -246,7 +246,7 @@ export function finalizeOperation(
   });
 }
 
-export interface CommitOperationResultOptions {
+interface CommitOperationResultOptions {
   operation: string;
   assetId?: string;
   details?: Record<string, unknown>;

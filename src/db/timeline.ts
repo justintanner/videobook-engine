@@ -2,17 +2,17 @@ import type { Database as DatabaseType } from "better-sqlite3";
 
 import { canonicalJson } from "./canonical-json.js";
 
-export type Orientation = "landscape" | "portrait" | "square";
-export type ViewerOrientation = Orientation | "original";
+type Orientation = "landscape" | "portrait" | "square";
+type ViewerOrientation = Orientation | "original";
 
-export interface TimelineSlot {
+interface TimelineSlot {
   slug: string;
   volume?: number;
   audioFadeIn?: number;
   audioFadeOut?: number;
 }
 
-export interface TimelineAudioClip {
+interface TimelineAudioClip {
   id: string;
   slug: string;
   startFrame: number;

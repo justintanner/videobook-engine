@@ -26,7 +26,7 @@ export type {
   JobState,
 } from "./types.js";
 export type { ListOptions } from "./list.js";
-export type { ReconcileOptions, MappedSidecar, SidecarRecord } from "./reconcile.js";
+export type { ReconcileOptions } from "./reconcile.js";
 export type { RunnerConfig } from "./runner.js";
 export { canonicalize, dedupeKey } from "./canonicalize.js";
 export { QueueRunner } from "./runner.js";

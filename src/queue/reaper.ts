@@ -21,7 +21,7 @@ function isProcessAlive(pid: number): boolean {
   }
 }
 
-export interface ReapResult {
+interface ReapResult {
   requeued: number;
   failed: number;
   inspected: number;

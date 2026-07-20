@@ -31,7 +31,7 @@ export interface MappedSidecar {
   isQueuedSentinel: boolean;
 }
 
-export const QUEUED_SIDECAR_SENTINEL = "queued";
+const QUEUED_SIDECAR_SENTINEL = "queued";
 
 interface ReconcileResult {
   insertedQueued: number;

@@ -17,7 +17,7 @@ import { VIDEOCITY_DIR, getStateDb } from "./client.js";
 import { getMetadataDb } from "./metadata-client.js";
 import { exportTimeline, readTimeline } from "./timeline.js";
 
-export interface RecoveryResult {
+interface RecoveryResult {
   inspected: number;
   aborted: number;
   completed: number;

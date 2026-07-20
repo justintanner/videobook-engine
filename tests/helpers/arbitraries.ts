@@ -2,7 +2,7 @@ import fc from 'fast-check';
 
 // --- Path traversal arbitraries ---
 
-export const pathTraversalArb = fc.oneof(
+const pathTraversalArb = fc.oneof(
   fc.constant('../'),
   fc.constant('../../'),
   fc.constant('../../../etc/passwd'),

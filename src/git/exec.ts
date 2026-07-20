@@ -3,12 +3,12 @@ import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
 
-export interface GitExecResult {
+interface GitExecResult {
   stdout: string;
   stderr: string;
 }
 
-export interface GitExecOptions {
+interface GitExecOptions {
   cwd: string;
   gitPath?: string;
   timeoutMs?: number;
