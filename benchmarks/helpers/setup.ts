@@ -9,7 +9,7 @@ import { createFs, type VideocityFs } from "../../src/index.js";
 
 const execFileAsync = promisify(execFile);
 
-export interface BenchSandbox {
+interface BenchSandbox {
   dir: string;
   outputDir: string;
   fs: VideocityFs;
@@ -56,10 +56,6 @@ let counter = 0;
 export function uniqueName(prefix: string): string {
   counter += 1;
   return `${prefix}-${counter}`;
-}
-
-export function resetCounter(): void {
-  counter = 0;
 }
 
 /** Default bench options for slow async operations (git/fs I/O) */

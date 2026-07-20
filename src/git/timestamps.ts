@@ -1,28 +1,6 @@
 import { gitExecSafe } from "./exec.js";
 
-export interface ProjectTimestamps {
-  created: number;
-  lastActivity: number;
-}
-
-export async function getProjectTimestamps(
-  projectDir: string,
-  gitPath?: string,
-): Promise<ProjectTimestamps | null> {
-  const result = await gitExecSafe(["log", "--format=%at", "--reverse"], {
-    cwd: projectDir,
-    gitPath,
-  });
-  if (result.exitCode !== 0 || !result.stdout.trim()) return null;
-
-  const lines = result.stdout.trim().split("\n");
-  const created = parseInt(lines[0]!, 10);
-  const lastActivity = parseInt(lines[lines.length - 1]!, 10);
-  if (isNaN(created) || isNaN(lastActivity)) return null;
-
-  return { created, lastActivity };
-}
-
+/** Build a map of assetId → creation epoch from git create commits. */
 export async function getAssetCreationTimestamps(
   projectDir: string,
   gitPath?: string,

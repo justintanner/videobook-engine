@@ -7,7 +7,7 @@ import { migrateState } from "./migrate.js";
 import { closeAllMetadataDbs, closeMetadataDb } from "./metadata-client.js";
 
 export const VIDEOCITY_DIR = ".videocity";
-export const STATE_DB_FILENAME = "state.sqlite";
+const STATE_DB_FILENAME = "state.sqlite";
 
 const cache = new Map<string, DatabaseType>();
 
@@ -15,7 +15,7 @@ function videocityDir(projectDir: string): string {
   return path.join(projectDir, VIDEOCITY_DIR);
 }
 
-export function stateDbPath(projectDir: string): string {
+function stateDbPath(projectDir: string): string {
   return path.join(videocityDir(projectDir), STATE_DB_FILENAME);
 }
 
@@ -61,8 +61,4 @@ export function closeAllStateDbs(): void {
   }
   cache.clear();
   closeAllMetadataDbs();
-}
-
-export function purgeStateCacheForTesting(): void {
-  closeAllStateDbs();
 }

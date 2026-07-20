@@ -48,7 +48,7 @@ export interface BeginAssetWorkInput {
   meta?: Partial<AssetMeta>;
 }
 
-export interface AssetRow {
+interface AssetRow {
   asset_id: string;
   status: AssetStatus;
   meta: string;
@@ -363,27 +363,3 @@ export function upsertAssetRow(
   );
 }
 
-/**
- * Recovery-internal: drop the row entirely (deleteAsset path). Engine consumers
- * use this from asset/delete.ts inside the deletion txn.
- */
-export function deleteAssetRow(projectDir: string, assetId: string): void {
-  const db = getStateDb(projectDir);
-  db.prepare(`DELETE FROM assets WHERE asset_id=?`).run(assetId);
-}
-
-/**
- * Atomic asset_id rename for the assets row. Used by renameAsset after the
- * gate passes (status NOT IN pending/working).
- */
-export function renameAssetRow(
-  projectDir: string,
-  oldAssetId: string,
-  newAssetId: string,
-): void {
-  const db = getStateDb(projectDir);
-  db.prepare(`UPDATE assets SET asset_id=? WHERE asset_id=?`).run(
-    newAssetId,
-    oldAssetId,
-  );
-}

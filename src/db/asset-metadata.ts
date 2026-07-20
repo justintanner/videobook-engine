@@ -42,16 +42,6 @@ export function readAssetMetadata<T>(
   }
 }
 
-export function deleteAssetMetadata(
-  db: DatabaseType,
-  assetId: string,
-  key: string,
-): void {
-  db.prepare(
-    `DELETE FROM asset_metadata WHERE asset_id = ? AND meta_key = ?`,
-  ).run(assetId, key);
-}
-
 export function exportAssetMetadata(db: DatabaseType): string {
   const rows = db
     .prepare(
