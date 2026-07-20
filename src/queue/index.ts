@@ -16,15 +16,6 @@ import {
   type JobHandler,
 } from "./types.js";
 
-export type {
-  EnqueueOptions,
-  EnqueueResult,
-  CompleteOptions,
-  FailOptions,
-  Job,
-  JobHandler,
-  JobState,
-} from "./types.js";
 export type { ListOptions } from "./list.js";
 export type { ReconcileOptions } from "./reconcile.js";
 export type { RunnerConfig } from "./runner.js";

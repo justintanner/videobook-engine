@@ -12,7 +12,7 @@ export interface ReconcileOptions {
   mapper?: (sidecar: SidecarRecord) => MappedSidecar | null;
 }
 
-export interface SidecarRecord {
+interface SidecarRecord {
   assetId: string;
   /** Absolute path to the asset directory containing the sidecar. */
   assetDir: string;
@@ -22,7 +22,7 @@ export interface SidecarRecord {
   data: Record<string, unknown>;
 }
 
-export interface MappedSidecar {
+interface MappedSidecar {
   /** Queue job type to enqueue (defaults to `complete_kie_task` when null). */
   type: string;
   payload: Record<string, unknown>;

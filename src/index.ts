@@ -491,39 +491,39 @@ export interface ProjectScopedGenerationErrors {
 export interface ProjectScopedQueue {
   enqueue(
     projectSlug: string,
-    opts: import("./queue/index.js").EnqueueOptions,
-  ): Promise<import("./queue/index.js").EnqueueResult | null>;
+    opts: import("./queue/types.js").EnqueueOptions,
+  ): Promise<import("./queue/types.js").EnqueueResult | null>;
   enqueueAndWait<T = unknown>(
     projectSlug: string,
-    opts: import("./queue/index.js").EnqueueOptions,
+    opts: import("./queue/types.js").EnqueueOptions,
     timeoutMs?: number,
   ): Promise<T>;
   getJob(
     projectSlug: string,
     id: number,
-  ): Promise<import("./queue/index.js").Job | null>;
+  ): Promise<import("./queue/types.js").Job | null>;
   findByExternal(
     projectSlug: string,
     type: string,
     externalTaskId: string,
-  ): Promise<import("./queue/index.js").Job | null>;
+  ): Promise<import("./queue/types.js").Job | null>;
   list(
     projectSlug: string,
-    opts?: import("./queue/index.js").ListOptions,
-  ): Promise<import("./queue/index.js").Job[]>;
+    opts?: import("./queue/list.js").ListOptions,
+  ): Promise<import("./queue/types.js").Job[]>;
   count(
     projectSlug: string,
-    opts?: import("./queue/index.js").ListOptions,
+    opts?: import("./queue/list.js").ListOptions,
   ): Promise<number>;
   complete(
     projectSlug: string,
     id: number,
-    opts?: import("./queue/index.js").CompleteOptions,
+    opts?: import("./queue/types.js").CompleteOptions,
   ): Promise<void>;
   fail(
     projectSlug: string,
     id: number,
-    opts: import("./queue/index.js").FailOptions,
+    opts: import("./queue/types.js").FailOptions,
   ): Promise<void>;
   abort(projectSlug: string, id: number, reason: string): Promise<void>;
   markCompleting(projectSlug: string, id: number): Promise<void>;
@@ -534,12 +534,12 @@ export interface ProjectScopedQueue {
   listLeased(projectSlug: string): Promise<ReturnType<QueueApi["listLeased"]>>;
   reconcileFromSidecars(
     projectSlug: string,
-    opts?: import("./queue/index.js").ReconcileOptions,
+    opts?: import("./queue/reconcile.js").ReconcileOptions,
   ): Promise<Awaited<ReturnType<QueueApi["reconcileFromSidecars"]>>>;
   createRunner(
     projectSlug: string,
-    config: import("./queue/index.js").RunnerConfig,
-  ): Promise<import("./queue/index.js").QueueRunner | null>;
+    config: import("./queue/runner.js").RunnerConfig,
+  ): Promise<import("./queue/runner.js").QueueRunner | null>;
 }
 
 export function createFs(config: FsConfig): VideocityFs {
@@ -944,7 +944,7 @@ function makeQueue(
     },
     enqueueAndWait: async <T = unknown>(
       slug: string,
-      opts: import("./queue/index.js").EnqueueOptions,
+      opts: import("./queue/types.js").EnqueueOptions,
       timeoutMs = 300_000,
     ): Promise<T> => {
       const dir = await dirOrThrow(slug);

@@ -34,7 +34,7 @@ export interface ProjectMetadata {
 }
 
 // Git commit entry
-export interface GitFileChange {
+interface GitFileChange {
   status: string;
   file: string;
   oldFile?: string;
