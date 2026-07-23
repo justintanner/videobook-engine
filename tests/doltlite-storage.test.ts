@@ -167,4 +167,201 @@ describe("DoltLite catalog and content-addressed storage", () => {
       }),
     ).toThrow(/must not overlap/);
   });
+
+  it("projects lifecycle, lineage, layout, and actor lanes from one DoltLite history", async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "videobook-book-"));
+    const api = createFs({
+      projectsDir: path.join(root, "projects"),
+      dataDir: path.join(root, "data"),
+    });
+    await api.createProject("project-a");
+    const prompt = await api.recordBookAction({
+      projectSlug: "project-a",
+      operation: "create_prompt",
+      scope: "artifact",
+      actor: "jwt",
+      lane: "human",
+      outputArtifactIds: ["prm-dancing-cat"],
+      layout: { stage: 0, column: 0 },
+      details: { prompt: "A white cat in a dance studio" },
+    });
+    expect(prompt.ok).toBe(true);
+    if (!prompt.ok) throw new Error(prompt.error.message);
+
+    const imageActionId = "image-action";
+    const requested = await api.recordBookAction({
+      projectSlug: "project-a",
+      actionId: imageActionId,
+      operation: "generate_google_flow_nano_banana_pro",
+      phase: "requested",
+      scope: "artifact",
+      actor: "agent-one",
+      lane: "agent-one",
+      parentActionIds: [prompt.value.action.id],
+      inputArtifactIds: ["prm-dancing-cat"],
+      layout: { stage: 1, column: 0 },
+    });
+    expect(requested.ok).toBe(true);
+    const completed = await api.recordBookAction({
+      projectSlug: "project-a",
+      actionId: imageActionId,
+      operation: "generate_google_flow_nano_banana_pro",
+      phase: "completed",
+      scope: "artifact",
+      actor: "agent-one",
+      lane: "agent-one",
+      parentActionIds: [prompt.value.action.id],
+      inputArtifactIds: ["prm-dancing-cat"],
+      outputArtifactIds: ["img-dancing-cat"],
+      targetArtifactId: "img-dancing-cat",
+    });
+    expect(completed.ok).toBe(true);
+
+    const moved = await api.recordBookAction({
+      projectSlug: "project-a",
+      operation: "move_entry",
+      scope: "layout",
+      actor: "jwt",
+      lane: "human",
+      targetActionId: imageActionId,
+      layout: { stage: 2, column: 3 },
+      writeSet: [`layout:${imageActionId}`],
+    });
+    expect(moved.ok).toBe(true);
+
+    const book = await api.getProjectBook("project-a", { limit: 100 });
+    expect(book.ok).toBe(true);
+    if (!book.ok) throw new Error(book.error.message);
+    const image = book.value.actions.find(
+      (action) => action.id === imageActionId,
+    );
+    expect(image).toMatchObject({
+      phase: "completed",
+      actor: "agent-one",
+      lane: "agent-one",
+      parentActionIds: [prompt.value.action.id],
+    });
+    expect(image?.events.map((event) => event.phase)).toEqual([
+      "requested",
+      "completed",
+    ]);
+    expect(image?.inputArtifacts[0]).toMatchObject({
+      slug: "@prm-dancing-cat",
+      kind: "prompt",
+    });
+    expect(image?.outputArtifacts[0]).toMatchObject({
+      slug: "@img-dancing-cat",
+      kind: "image",
+    });
+    const movedActionId = moved.ok ? moved.value.action.id : "";
+    expect(
+      book.value.actions.find((action) => action.id === movedActionId),
+    ).toMatchObject({
+      scope: "layout",
+      targetActionId: imageActionId,
+      layout: { stage: 2, column: 3 },
+    });
+    api.close();
+  });
+
+  it("rebases disjoint agent actions and rejects overlapping write sets", async () => {
+    root = await fs.mkdtemp(path.join(os.tmpdir(), "videobook-agents-"));
+    const api = createFs({
+      projectsDir: path.join(root, "projects"),
+      dataDir: path.join(root, "data"),
+    });
+    await api.createProject("project-a");
+    const initial = await api.getProjectBook("project-a");
+    if (!initial.ok) throw new Error(initial.error.message);
+    const baseRevision = initial.value.headRevision;
+
+    const first = await api.recordBookAction({
+      projectSlug: "project-a",
+      operation: "edit_image",
+      actor: "agent-one",
+      lane: "agent-one",
+      baseRevision,
+      writeSet: ["artifact:img-cat"],
+      targetArtifactId: "img-cat",
+    });
+    expect(first.ok).toBe(true);
+
+    const disjoint = await api.recordBookAction({
+      projectSlug: "project-a",
+      operation: "edit_image",
+      actor: "agent-two",
+      lane: "agent-two",
+      baseRevision,
+      writeSet: ["artifact:img-dog"],
+      targetArtifactId: "img-dog",
+    });
+    expect(disjoint.ok).toBe(true);
+    if (disjoint.ok) expect(disjoint.value.action.rebasedOver).toBeTruthy();
+
+    const conflict = await api.recordBookAction({
+      projectSlug: "project-a",
+      operation: "edit_image",
+      actor: "agent-three",
+      lane: "agent-three",
+      baseRevision,
+      writeSet: ["artifact:img-cat"],
+      targetArtifactId: "img-cat",
+    });
+    expect(conflict).toMatchObject({
+      ok: false,
+      error: { code: "ACTION_CONFLICT" },
+    });
+
+    const parallelBase = await api.getProjectBook("project-a");
+    if (!parallelBase.ok) throw new Error(parallelBase.error.message);
+    const disjointParallel = await Promise.all([
+      api.recordBookAction({
+        projectSlug: "project-a",
+        operation: "parallel_edit",
+        actor: "agent-one",
+        lane: "agent-one",
+        baseRevision: parallelBase.value.headRevision,
+        writeSet: ["artifact:img-bird"],
+        targetArtifactId: "img-bird",
+      }),
+      api.recordBookAction({
+        projectSlug: "project-a",
+        operation: "parallel_edit",
+        actor: "agent-two",
+        lane: "agent-two",
+        baseRevision: parallelBase.value.headRevision,
+        writeSet: ["artifact:img-fish"],
+        targetArtifactId: "img-fish",
+      }),
+    ]);
+    expect(disjointParallel.every((result) => result.ok)).toBe(true);
+
+    const overlapBase = await api.getProjectBook("project-a");
+    if (!overlapBase.ok) throw new Error(overlapBase.error.message);
+    const overlappingParallel = await Promise.all([
+      api.recordBookAction({
+        projectSlug: "project-a",
+        operation: "parallel_edit",
+        actor: "agent-one",
+        lane: "agent-one",
+        baseRevision: overlapBase.value.headRevision,
+        writeSet: ["artifact:img-shared"],
+        targetArtifactId: "img-shared",
+      }),
+      api.recordBookAction({
+        projectSlug: "project-a",
+        operation: "parallel_edit",
+        actor: "agent-two",
+        lane: "agent-two",
+        baseRevision: overlapBase.value.headRevision,
+        writeSet: ["artifact:img-shared"],
+        targetArtifactId: "img-shared",
+      }),
+    ]);
+    expect(overlappingParallel.filter((result) => result.ok)).toHaveLength(1);
+    expect(overlappingParallel.filter((result) => !result.ok)).toMatchObject([
+      { error: { code: "ACTION_CONFLICT" } },
+    ]);
+    api.close();
+  });
 });

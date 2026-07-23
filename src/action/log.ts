@@ -1,5 +1,3 @@
-import * as path from "node:path";
-
 import { catalogForProjectDir } from "../storage/context.js";
 import {
   type ActionLogEntry,
@@ -28,22 +26,21 @@ export async function logAction(
   if (!catalog) {
     return err({ code: "STORAGE_ERROR", message: "Catalog not registered" });
   }
-  const revision = await catalog.snapshotProject(projectDir, {
+  const projectSlug = projectDir.split("/").at(-1) ?? "";
+  const recorded = await catalog.recordBookAction({
+    projectSlug,
     operation: `action:${action}`,
+    scope: "project",
     details: {
       payload:
         typeof payload === "string" ? payload : JSON.stringify(payload),
       payloadType: typeof payload,
     },
-    allowEmpty: true,
   });
-  if (!revision) {
-    return err({ code: "STORAGE_ERROR", message: "Action was not recorded" });
-  }
   return ok({
-    hash: revision.hash,
+    hash: recorded.revision.hash,
     action,
     payload,
-    date: revision.date,
+    date: recorded.revision.date,
   });
 }

@@ -1,6 +1,6 @@
 {
   "name": "videobook-engine",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "description": "DoltLite-backed storage engine for Videobook notebooks and media",
   "type": "module",
   "exports": {

@@ -136,11 +136,18 @@ import type {
   NotebookDocument,
   NotebookRun,
 } from "./notebook/types.js";
-import { Catalog } from "./storage/catalog.js";
+import { ActionConflictError, Catalog } from "./storage/catalog.js";
 import {
   acquireCatalog,
   releaseCatalog,
 } from "./storage/context.js";
+import type {
+  BookAction,
+  BookActionRevision,
+  GetProjectBookOptions,
+  ProjectBook,
+  RecordBookActionInput,
+} from "./book/types.js";
 
 export interface VideocityFs {
   // Project
@@ -418,6 +425,17 @@ export interface VideobookFs extends VideocityFs {
     projectSlug: string,
     limit?: number,
   ): Promise<ProjectRevision[]>;
+  getProjectBook(
+    projectSlug: string,
+    options?: GetProjectBookOptions,
+  ): Promise<Result<ProjectBook, FsError>>;
+  getBookAction(
+    projectSlug: string,
+    actionId: string,
+  ): Promise<Result<BookAction, FsError>>;
+  recordBookAction(
+    input: RecordBookActionInput,
+  ): Promise<Result<BookActionRevision, FsError>>;
   readFileAtRevision(
     assetId: string,
     filename: string,
@@ -958,6 +976,40 @@ export function createFs(config: FsConfig): VideobookFs {
       catalog.hasProject(projectSlug)
         ? catalog.history(projectSlug, limit)
         : [],
+    getProjectBook: async (projectSlug, options) => {
+      if (!catalog.hasProject(projectSlug)) {
+        return err({ code: "NOT_FOUND", message: "Project not found" });
+      }
+      return ok(catalog.projectBook(projectSlug, options));
+    },
+    getBookAction: async (projectSlug, actionId) => {
+      if (!catalog.hasProject(projectSlug)) {
+        return err({ code: "NOT_FOUND", message: "Project not found" });
+      }
+      const action = catalog.bookAction(projectSlug, actionId);
+      return action
+        ? ok(action)
+        : err({ code: "NOT_FOUND", message: "Book action not found" });
+    },
+    recordBookAction: async (input) => {
+      if (!catalog.hasProject(input.projectSlug)) {
+        return err({ code: "NOT_FOUND", message: "Project not found" });
+      }
+      try {
+        return ok(await catalog.recordBookAction(input));
+      } catch (error: unknown) {
+        if (error instanceof ActionConflictError) {
+          return err({
+            code: "ACTION_CONFLICT",
+            message: error.message,
+          });
+        }
+        return err({
+          code: "STORAGE_ERROR",
+          message: error instanceof Error ? error.message : String(error),
+        });
+      }
+    },
     readFileAtRevision: (assetId, filename, revision, projectSlug) =>
       api.readFileAtCommit(assetId, filename, revision, projectSlug),
     resolveRevision: async (revision, projectSlug) =>
@@ -1384,6 +1436,19 @@ export type {
   NotebookPosition,
   NotebookRun,
 } from "./notebook/types.js";
+export type {
+  BookAction,
+  BookActionEvent,
+  BookActionPhase,
+  BookActionRevision,
+  BookActionScope,
+  BookArtifactKind,
+  BookArtifactRef,
+  BookLayout,
+  GetProjectBookOptions,
+  ProjectBook,
+  RecordBookActionInput,
+} from "./book/types.js";
 
 export type { ActionLogOptions } from "./action/read.js";
 

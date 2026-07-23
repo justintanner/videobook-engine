@@ -21,7 +21,11 @@ export async function readActionLog(
     Math.max(options?.limit ?? 20, 100),
   );
   const entries = revisions
-    .filter((revision) => revision.operation?.startsWith("action:"))
+    .filter(
+      (revision) =>
+        revision.operation?.startsWith("action:") ||
+        revision.operation?.startsWith("book:action:"),
+    )
     .filter(
       (revision) =>
         !options?.since ||
@@ -36,7 +40,10 @@ export async function readActionLog(
           : raw;
       return {
         hash: revision.hash,
-        action: revision.operation?.slice("action:".length) ?? "",
+        action:
+          revision.operation
+            ?.replace(/^book:/, "")
+            .slice("action:".length) ?? "",
         payload,
         date: revision.date,
       };

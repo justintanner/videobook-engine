@@ -11,6 +11,14 @@ import type {
   ProjectRevision,
   StorageStatus,
 } from "../types.js";
+import { projectBookFromRevisions } from "../book/project-book.js";
+import type {
+  BookAction,
+  BookActionRevision,
+  GetProjectBookOptions,
+  ProjectBook,
+  RecordBookActionInput,
+} from "../book/types.js";
 
 interface ProjectRow {
   project_id: string;
@@ -42,18 +50,31 @@ interface PendingObjectRow {
 }
 
 export interface SnapshotInput {
+  operationId?: string;
   operation: string;
   assetId?: string;
   details?: Record<string, unknown>;
   author?: string;
   allowEmpty?: boolean;
   paths?: string[];
+  baseRevision?: string;
+  writeSet?: string[];
 }
 
 export interface ImportResult {
   hash: string;
   size: number;
   path: string;
+}
+
+export class ActionConflictError extends Error {
+  readonly resources: string[];
+
+  constructor(resources: string[]) {
+    super(`Action conflicts with newer changes: ${resources.join(", ")}`);
+    this.name = "ActionConflictError";
+    this.resources = resources;
+  }
 }
 
 const SKIPPED_DIRECTORIES = new Set([".git"]);
@@ -202,6 +223,16 @@ export class Catalog {
     return this.serial(async () => {
       const slug = path.basename(projectDir);
       const project = this.requiredProject(slug);
+      const currentHead = this.head;
+      const rebasedOver = this.validateActionBase(
+        slug,
+        input.baseRevision,
+        input.writeSet ?? [],
+      );
+      const details = {
+        ...(input.details ?? {}),
+        ...(rebasedOver ? { book_rebased_over: currentHead } : {}),
+      };
       const previous = this.currentFiles(project.project_id);
       const scanned = await this.scanWorkspace(projectDir, input.paths);
       const files = input.paths
@@ -209,7 +240,7 @@ export class Catalog {
         : scanned;
       const changed = fileSetsDiffer(previous, files);
       if (!changed && !input.allowEmpty) return null;
-      const operationId = randomUUID();
+      const operationId = input.operationId ?? randomUUID();
       this.transaction(() => {
         this.db
           .prepare("DELETE FROM project_files WHERE project_id = ?")
@@ -226,13 +257,16 @@ export class Catalog {
             file.mtime_ms,
           );
         }
-        this.insertOperation(project.project_id, operationId, input);
+        this.insertOperation(project.project_id, operationId, {
+          ...input,
+          details,
+        });
       });
       const revision = this.commitRevision(
         slug,
         operationId,
         input.operation,
-        input.details,
+        details,
         input.assetId,
         input.author,
       );
@@ -283,6 +317,76 @@ export class Catalog {
     return revisions;
   }
 
+  projectBook(
+    slug: string,
+    options: GetProjectBookOptions = {},
+  ): ProjectBook {
+    const project = this.requiredProject(slug);
+    const revisions = this.history(slug, 10_000);
+    return projectBookFromRevisions(
+      project.project_id,
+      slug,
+      revisions[0]?.hash ?? this.head,
+      revisions,
+      options,
+    );
+  }
+
+  bookAction(slug: string, actionId: string): BookAction | null {
+    return (
+      this.projectBook(slug, { limit: 10_000 }).actions.find(
+        (action) => action.id === actionId,
+      ) ?? null
+    );
+  }
+
+  async recordBookAction(
+    input: RecordBookActionInput,
+  ): Promise<BookActionRevision> {
+    const actionId = input.actionId ?? randomUUID();
+    const eventId = randomUUID();
+    const details: Record<string, unknown> = {
+      ...(input.details ?? {}),
+      book_action_id: actionId,
+      book_phase: input.phase ?? "completed",
+      book_scope: input.scope ?? "project",
+      book_lane: input.lane ?? input.actor ?? "videobook",
+      book_parent_action_ids: input.parentActionIds ?? [],
+      book_input_artifact_ids: input.inputArtifactIds ?? [],
+      book_output_artifact_ids: input.outputArtifactIds ?? [],
+      book_write_set: input.writeSet ?? [],
+      ...(input.baseRevision
+        ? { book_base_revision: input.baseRevision }
+        : {}),
+      ...(input.targetArtifactId
+        ? { book_target_artifact_id: input.targetArtifactId }
+        : {}),
+      ...(input.targetActionId
+        ? { book_target_action_id: input.targetActionId }
+        : {}),
+      ...(input.layout ? { book_layout: input.layout } : {}),
+    };
+    const revision = await this.snapshotProject(
+      path.join(this.projectsDir, input.projectSlug),
+      {
+        operationId: eventId,
+        operation: `book:${input.operation}`,
+        ...(input.targetArtifactId
+          ? { assetId: input.targetArtifactId }
+          : {}),
+        details,
+        author: input.actor ?? "videobook",
+        allowEmpty: true,
+        ...(input.baseRevision ? { baseRevision: input.baseRevision } : {}),
+        writeSet: input.writeSet ?? [],
+      },
+    );
+    if (!revision) throw new Error("Book action did not create a revision");
+    const action = this.bookAction(input.projectSlug, actionId);
+    if (!action) throw new Error("Book action projection was not found");
+    return { action, revision };
+  }
+
   async readFileAtRevision(
     slug: string,
     relativePath: string,
@@ -326,6 +430,11 @@ export class Catalog {
     revision: string,
   ): Promise<ProjectRevision | null> {
     const project = this.requiredProject(slug);
+    const history = this.history(slug, 10_000);
+    const targetRevision = history.find(
+      (item) => item.hash === revision || item.hash.startsWith(revision),
+    );
+    const currentRevision = history[0];
     const rows = this.filesAtRevision(project.project_id, revision);
     const projectDir = path.join(this.projectsDir, slug);
     const current = await fs.readdir(projectDir, { withFileTypes: true });
@@ -340,7 +449,27 @@ export class Catalog {
     await this.materializeRows(projectDir, rows);
     return this.snapshotProject(projectDir, {
       operation: "rewind",
-      details: { from_revision: revision },
+      details: {
+        from_revision: revision,
+        book_action_id: randomUUID(),
+        book_phase: "completed",
+        book_scope: "project",
+        book_lane: "videobook",
+        book_parent_action_ids: [
+          ...new Set([
+            currentRevision?.details?.book_action_id,
+            currentRevision?.operationId,
+            targetRevision?.details?.book_action_id,
+            targetRevision?.operationId,
+          ].filter((value): value is string => typeof value === "string")),
+        ],
+        ...(targetRevision
+          ? { book_target_action_id:
+              typeof targetRevision.details?.book_action_id === "string"
+                ? targetRevision.details.book_action_id
+                : targetRevision.operationId }
+          : {}),
+      },
       allowEmpty: true,
     });
   }
@@ -482,6 +611,39 @@ export class Catalog {
     const project = this.projectBySlug(slug);
     if (!project) throw new Error(`Project not found: ${slug}`);
     return project;
+  }
+
+  private validateActionBase(
+    slug: string,
+    baseRevision: string | undefined,
+    writeSet: string[],
+  ): boolean {
+    if (!baseRevision || baseRevision === this.head) return false;
+    const revisions = this.history(slug, 10_000);
+    const baseIndex = revisions.findIndex(
+      (revision) =>
+        revision.hash === baseRevision ||
+        revision.hash.startsWith(baseRevision),
+    );
+    if (baseIndex < 0) throw new ActionConflictError(["project:head"]);
+    const requested = new Set(writeSet);
+    if (requested.size === 0) return true;
+    const changed = new Set<string>();
+    for (const revision of revisions.slice(0, baseIndex)) {
+      if (revision.assetId) changed.add(`artifact:${revision.assetId}`);
+      for (const file of revision.files ?? []) changed.add(`file:${file}`);
+      const recorded = revision.details?.book_write_set;
+      if (Array.isArray(recorded)) {
+        for (const resource of recorded) {
+          if (typeof resource === "string") changed.add(resource);
+        }
+      }
+    }
+    const conflicts = [...requested].filter((resource) =>
+      changed.has(resource),
+    );
+    if (conflicts.length > 0) throw new ActionConflictError(conflicts);
+    return true;
   }
 
   private insertOperation(
