@@ -1,22 +1,25 @@
 /**
- * Git integration: track changes, view history, and restore to a previous state.
+ * DoltLite revisions: track changes, view history, and restore to a previous state.
  *
- * Run: npx tsx examples/git-history.ts
+ * Run: npx tsx examples/revision-history.ts
  */
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { createFs } from "vc-engine";
+import { createFs } from "videobook-engine";
 
-const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "videocity-git-"));
+const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "videobook-revision-"));
 const outputDir = path.join(tmpDir, "output");
 await fs.mkdir(outputDir);
 
 try {
-  const cfs = createFs({ outputDir });
+  const cfs = createFs({
+    projectsDir: outputDir,
+    dataDir: path.join(tmpDir, "data"),
+  });
 
   // --- Setup: create project and asset ---
-  const projectResult = await cfs.createProject("git-demo");
+  const projectResult = await cfs.createProject("revision-demo");
   if (!projectResult.ok) throw new Error(projectResult.error.message);
   const slug = projectResult.value.slug;
 

@@ -1,6 +1,7 @@
 {
-  "name": "videocity-engine",
-  "version": "0.5.2",
+  "name": "videobook-engine",
+  "version": "0.1.0",
+  "description": "DoltLite-backed storage engine for Videobook notebooks and media",
   "type": "module",
   "exports": {
     ".": {
@@ -22,16 +23,15 @@
     "test:watch": "vitest",
     "example:basic": "tsx examples/basic-usage.ts",
     "example:projects": "tsx examples/project-management.ts",
-    "example:git": "tsx examples/git-history.ts",
-    "examples": "tsx examples/basic-usage.ts && tsx examples/project-management.ts && tsx examples/git-history.ts",
-    "bench": "vitest bench --config vitest.config.bench.ts",
-    "bench:scale": "vitest bench --config vitest.config.bench.ts benchmarks/git-scale-10k.bench.ts benchmarks/git-scale-100k.bench.ts",
-    "bench:scale:full": "BENCH_100M=1 vitest bench --config vitest.config.bench.ts benchmarks/git-scale-*.bench.ts"
+    "example:history": "tsx examples/revision-history.ts",
+    "examples": "tsx examples/basic-usage.ts && tsx examples/project-management.ts && tsx examples/revision-history.ts",
+    "bench": "vitest bench --config vitest.config.bench.ts"
   },
   "engines": {
     "node": ">=20"
   },
   "dependencies": {
+    "@dolthub/doltlite": "^0.11.37",
     "better-sqlite3": "^11.10.0",
     "proper-lockfile": "^4.1.2",
     "uuid": "^14.0.0"

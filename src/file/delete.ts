@@ -56,8 +56,8 @@ export async function deleteFile(
   });
   if (commit.status === "failed") {
     return err({
-      code: "GIT_ERROR",
-      message: `Failed to commit file deletion: ${commit.message}`,
+      code: "STORAGE_ERROR",
+      message: `Failed to create file deletion revision: ${commit.message}`,
     });
   }
 

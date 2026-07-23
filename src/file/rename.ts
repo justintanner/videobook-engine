@@ -80,8 +80,8 @@ export async function renameFile(
   const commit = locked.value;
   if (commit.status === "failed") {
     return err({
-      code: "GIT_ERROR",
-      message: `Failed to commit file rename: ${commit.message}`,
+      code: "STORAGE_ERROR",
+      message: `Failed to create file rename revision: ${commit.message}`,
     });
   }
 

@@ -1,12 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 
 import { createSandbox, type Sandbox } from "./helpers/sandbox.js";
-
-const execFileAsync = promisify(execFile);
 
 describe("project metadata", () => {
   let sandbox: Sandbox;
@@ -58,18 +54,12 @@ describe("project metadata", () => {
     if (result.ok) expect(result.value.v).toBe(2);
   });
 
-  it("write produces git commit with key in message", async () => {
+  it("write produces a project revision with the metadata file", async () => {
     await sandbox.fs.writeProjectMeta("scratch", { a: 1 }, projectSlug);
 
-    const projectResult = await sandbox.fs.getProject(projectSlug);
-    if (!projectResult.ok) throw new Error("Failed to get project");
-    const projectDir = projectResult.value.path;
-
-    const { stdout } = await execFileAsync("git", ["log", "--oneline", "-1"], {
-      cwd: projectDir,
-    });
-    expect(stdout).toContain(".scratch.json");
-    expect(stdout).toContain("write");
+    const revision = (await sandbox.fs.getProjectHistory(projectSlug, 1))[0];
+    expect(revision?.operation).toBe("write");
+    expect(revision?.files).toContain(".scratch.json");
   });
 
   it("returns INVALID_INPUT for uppercase key", async () => {

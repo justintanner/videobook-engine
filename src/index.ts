@@ -8,8 +8,10 @@ import {
   type AssetManifest,
   type ProjectMetadata,
   type GitCommit,
+  type ProjectRevision,
   type LockData,
   type ActionLogEntry,
+  type StorageStatus,
   type Result,
   ok,
   err,
@@ -128,6 +130,17 @@ import {
   type VersionCheckResult,
 } from "./db/version-guard.js";
 import { highestMigrationVersion as highestStateVersion } from "./db/migrate.js";
+import type {
+  EntityDocument,
+  EntityType,
+  NotebookDocument,
+  NotebookRun,
+} from "./notebook/types.js";
+import { Catalog } from "./storage/catalog.js";
+import {
+  acquireCatalog,
+  releaseCatalog,
+} from "./storage/context.js";
 
 export interface VideocityFs {
   // Project
@@ -385,6 +398,83 @@ export interface VideocityFs {
   close(): void;
 }
 
+export interface RunOperationInput {
+  projectSlug: string;
+  operation: string;
+  assetId?: string;
+  details?: Record<string, unknown>;
+  author?: string;
+}
+
+export interface VideobookFs extends VideocityFs {
+  runOperation<T>(
+    input: RunOperationInput,
+    mutate: (projectDir: string) => Promise<T>,
+  ): Promise<Result<{ value: T; revision: ProjectRevision }, FsError>>;
+  importFile(sourcePath: string): Promise<
+    Result<{ hash: string; size: number; path: string }, FsError>
+  >;
+  getProjectHistory(
+    projectSlug: string,
+    limit?: number,
+  ): Promise<ProjectRevision[]>;
+  readFileAtRevision(
+    assetId: string,
+    filename: string,
+    revision: string,
+    projectSlug: string,
+  ): Promise<Result<string, FsError>>;
+  resolveRevision(
+    revision: string,
+    projectSlug: string,
+  ): Promise<ProjectRevision | null>;
+  getStorageStatus(): Promise<StorageStatus>;
+  sync(): Promise<StorageStatus>;
+  createNotebook(
+    name: string,
+    projectSlug: string,
+  ): Promise<Result<NotebookDocument, FsError>>;
+  listNotebooks(projectSlug: string): Promise<NotebookDocument[]>;
+  readNotebook(
+    notebookId: string,
+    projectSlug: string,
+  ): Promise<Result<NotebookDocument, FsError>>;
+  writeNotebook(
+    notebook: NotebookDocument,
+    projectSlug: string,
+  ): Promise<Result<ProjectRevision, FsError>>;
+  deleteNotebook(
+    notebookId: string,
+    projectSlug: string,
+  ): Promise<Result<{ deleted_at: string }, FsError>>;
+  recordNotebookRun(
+    run: NotebookRun,
+    projectSlug: string,
+  ): Promise<Result<ProjectRevision, FsError>>;
+  createEntity(
+    type: EntityType,
+    name: string,
+    projectSlug: string,
+    input?: Partial<EntityDocument>,
+  ): Promise<Result<EntityDocument, FsError>>;
+  listEntities(
+    projectSlug: string,
+    type?: EntityType,
+  ): Promise<EntityDocument[]>;
+  readEntity(
+    entityId: string,
+    projectSlug: string,
+  ): Promise<Result<EntityDocument, FsError>>;
+  writeEntity(
+    entity: EntityDocument,
+    projectSlug: string,
+  ): Promise<Result<ProjectRevision, FsError>>;
+  deleteEntity(
+    entityId: string,
+    projectSlug: string,
+  ): Promise<Result<{ deleted_at: string }, FsError>>;
+}
+
 export interface ProjectScopedPendingTasks {
   write(
     projectSlug: string,
@@ -542,8 +632,21 @@ export interface ProjectScopedQueue {
   ): Promise<import("./queue/runner.js").QueueRunner | null>;
 }
 
-export function createFs(config: FsConfig): VideocityFs {
-  const { projectsDir, gitPath } = config;
+export function createFs(config: FsConfig): VideobookFs {
+  const { projectsDir, objectStore, objectPrefix, branch, gitPath } = config;
+  const dataDir = config.dataDir ?? `${projectsDir}.data`;
+  const catalog = acquireCatalog(
+    projectsDir,
+    () =>
+      new Catalog({
+        projectsDir,
+        dataDir,
+        ...(objectStore ? { objectStore } : {}),
+        ...(objectPrefix ? { objectPrefix } : {}),
+        ...(branch ? { branch } : {}),
+      }),
+  );
+  void catalog.prepare();
 
   async function resolve(projectSlug: string): Promise<string | null> {
     return resolveProjectDir(projectsDir, projectSlug);
@@ -558,15 +661,36 @@ export function createFs(config: FsConfig): VideocityFs {
     return fn(dir);
   }
 
-  return {
+  const api: VideobookFs = {
     // Project
-    createProject: (slug) => createProject(projectsDir, slug, gitPath),
+    createProject: async (slug) => {
+      const result = await createProject(projectsDir, slug, gitPath);
+      if (!result.ok) return result;
+      await catalog.createProject(result.value.slug);
+      await catalog.snapshotProject(result.value.path, {
+        operation: "initialize_project",
+        allowEmpty: true,
+      });
+      return result;
+    },
     listProjects: (options) => listProjects(projectsDir, gitPath, options),
     getProject: (slug) => getProject(projectsDir, slug, gitPath),
     switchProject: (slug) => switchProject(projectsDir, slug),
-    renameProject: (oldSlug, newSlug) =>
-      renameProject(projectsDir, oldSlug, newSlug, gitPath),
-    deleteProject: (slug) => deleteProject(projectsDir, slug, gitPath),
+    renameProject: async (oldSlug, newSlug) => {
+      const result = await renameProject(
+        projectsDir,
+        oldSlug,
+        newSlug,
+        gitPath,
+      );
+      if (result.ok) await catalog.renameProject(oldSlug, result.value.newSlug);
+      return result;
+    },
+    deleteProject: async (slug) => {
+      const result = await deleteProject(projectsDir, slug, gitPath);
+      if (result.ok) await catalog.deleteProject(slug);
+      return result;
+    },
 
     // Asset
     createAsset: (prefix, name, projectSlug) =>
@@ -792,8 +916,219 @@ export function createFs(config: FsConfig): VideocityFs {
       );
     },
 
-    close: () => closeAllStateDbs(),
+    runOperation: async (input, mutate) => {
+      const dir = await resolve(input.projectSlug);
+      if (!dir) {
+        return err({ code: "NOT_FOUND", message: "Project not found" });
+      }
+      try {
+        const value = await mutate(dir);
+        const revision = await catalog.snapshotProject(dir, {
+          operation: input.operation,
+          ...(input.assetId ? { assetId: input.assetId } : {}),
+          ...(input.details ? { details: input.details } : {}),
+          ...(input.author ? { author: input.author } : {}),
+          allowEmpty: true,
+        });
+        if (!revision) {
+          return err({
+            code: "STORAGE_ERROR",
+            message: "Operation did not create a revision",
+          });
+        }
+        return ok({ value, revision });
+      } catch (error: unknown) {
+        return err({
+          code: "STORAGE_ERROR",
+          message: (error as Error).message,
+        });
+      }
+    },
+    importFile: async (sourcePath) => {
+      try {
+        return ok(await catalog.importFile(sourcePath));
+      } catch (error: unknown) {
+        return err({
+          code: "STORAGE_ERROR",
+          message: (error as Error).message,
+        });
+      }
+    },
+    getProjectHistory: async (projectSlug, limit) =>
+      catalog.hasProject(projectSlug)
+        ? catalog.history(projectSlug, limit)
+        : [],
+    readFileAtRevision: (assetId, filename, revision, projectSlug) =>
+      api.readFileAtCommit(assetId, filename, revision, projectSlug),
+    resolveRevision: async (revision, projectSlug) =>
+      catalog
+        .history(projectSlug, 10_000)
+        .find(
+          (item) =>
+            item.hash === revision || item.hash.startsWith(revision),
+        ) ?? null,
+    getStorageStatus: () => catalog.getStorageStatus(),
+    sync: () => catalog.syncObjects(),
+    createNotebook: async (name, projectSlug) => {
+      const created = await api.createAsset("nb", name, projectSlug);
+      if (!created.ok) return created;
+      const now = new Date().toISOString();
+      const notebook: NotebookDocument = {
+        id: created.value.assetId,
+        name,
+        version: 2,
+        cells: [],
+        edges: [],
+        createdAt: now,
+        updatedAt: now,
+      };
+      const written = await api.writeFile(
+        notebook.id,
+        "notebook.json",
+        JSON.stringify(notebook, null, 2),
+        projectSlug,
+      );
+      return written.ok ? ok(notebook) : written;
+    },
+    listNotebooks: async (projectSlug) => {
+      const assets = await api.listAssets(projectSlug);
+      const notebooks: NotebookDocument[] = [];
+      for (const asset of assets.filter((item) => item.id.startsWith("nb-"))) {
+        const notebook = await api.readNotebook(asset.id, projectSlug);
+        if (notebook.ok) notebooks.push(notebook.value);
+      }
+      return notebooks;
+    },
+    readNotebook: async (notebookId, projectSlug) => {
+      const result = await api.readFile(
+        notebookId,
+        "notebook.json",
+        projectSlug,
+      );
+      if (!result.ok) return result;
+      try {
+        return ok(
+          JSON.parse(result.value.toString("utf8")) as NotebookDocument,
+        );
+      } catch (error: unknown) {
+        return err({
+          code: "STORAGE_ERROR",
+          message: (error as Error).message,
+        });
+      }
+    },
+    writeNotebook: async (notebook, projectSlug) => {
+      const next = { ...notebook, updatedAt: new Date().toISOString() };
+      const result = await api.writeFile(
+        notebook.id,
+        "notebook.json",
+        JSON.stringify(next, null, 2),
+        projectSlug,
+      );
+      if (!result.ok) return result;
+      const revision = (
+        await api.getAssetHistory(notebook.id, projectSlug, 1)
+      )[0];
+      return revision
+        ? ok(revision)
+        : err({ code: "STORAGE_ERROR", message: "Revision not found" });
+    },
+    deleteNotebook: (notebookId, projectSlug) =>
+      api.deleteAsset(notebookId, projectSlug),
+    recordNotebookRun: async (run, projectSlug) => {
+      const result = await api.writeFile(
+        run.notebookId,
+        `run-${run.id}.json`,
+        JSON.stringify(run, null, 2),
+        projectSlug,
+      );
+      if (!result.ok) return result;
+      const revision = (
+        await api.getAssetHistory(run.notebookId, projectSlug, 1)
+      )[0];
+      return revision
+        ? ok(revision)
+        : err({ code: "STORAGE_ERROR", message: "Revision not found" });
+    },
+    createEntity: async (type, name, projectSlug, input) => {
+      const prefix = entityPrefix(type);
+      const created = await api.createAsset(prefix, name, projectSlug);
+      if (!created.ok) return created;
+      const now = new Date().toISOString();
+      const entity: EntityDocument = {
+        id: created.value.assetId,
+        type,
+        name,
+        ...(input?.description ? { description: input.description } : {}),
+        ...(input?.prompt ? { prompt: input.prompt } : {}),
+        data: input?.data ?? {},
+        createdAt: now,
+        updatedAt: now,
+      };
+      const written = await api.writeFile(
+        entity.id,
+        "entity.json",
+        JSON.stringify(entity, null, 2),
+        projectSlug,
+      );
+      return written.ok ? ok(entity) : written;
+    },
+    listEntities: async (projectSlug, type) => {
+      const prefixes = type
+        ? [entityPrefix(type)]
+        : ["prm", "char", "scn"];
+      const assets = await api.listAssets(projectSlug);
+      const entities: EntityDocument[] = [];
+      for (const asset of assets.filter((item) =>
+        prefixes.some((prefix) => item.id.startsWith(`${prefix}-`)),
+      )) {
+        const entity = await api.readEntity(asset.id, projectSlug);
+        if (entity.ok) entities.push(entity.value);
+      }
+      return entities;
+    },
+    readEntity: async (entityId, projectSlug) => {
+      const result = await api.readFile(entityId, "entity.json", projectSlug);
+      if (!result.ok) return result;
+      try {
+        return ok(JSON.parse(result.value.toString("utf8")) as EntityDocument);
+      } catch (error: unknown) {
+        return err({
+          code: "STORAGE_ERROR",
+          message: (error as Error).message,
+        });
+      }
+    },
+    writeEntity: async (entity, projectSlug) => {
+      const next = { ...entity, updatedAt: new Date().toISOString() };
+      const result = await api.writeFile(
+        entity.id,
+        "entity.json",
+        JSON.stringify(next, null, 2),
+        projectSlug,
+      );
+      if (!result.ok) return result;
+      const revision = (
+        await api.getAssetHistory(entity.id, projectSlug, 1)
+      )[0];
+      return revision
+        ? ok(revision)
+        : err({ code: "STORAGE_ERROR", message: "Revision not found" });
+    },
+    deleteEntity: (entityId, projectSlug) =>
+      api.deleteAsset(entityId, projectSlug),
+    close: () => {
+      closeAllStateDbs();
+      if (releaseCatalog(projectsDir, catalog)) catalog.close();
+    },
   };
+  return api;
+}
+
+function entityPrefix(type: EntityType): string {
+  if (type === "prompt") return "prm";
+  if (type === "character") return "char";
+  return "scn";
 }
 
 function makePendingTasks(
@@ -1026,13 +1361,29 @@ export type {
   AssetManifestFile,
   ProjectMetadata,
   GitCommit,
+  ProjectRevision,
+  RevisionFileChange,
   LockData,
   ActionLogEntry,
   AssetEntry,
   FsError,
   FsErrorCode,
   FsConfig,
+  ContentStore,
+  ContentStoreHead,
+  StorageStatus,
+  StorageSyncState,
 } from "./types.js";
+export type {
+  EntityDocument,
+  EntityType,
+  NotebookCell,
+  NotebookCellType,
+  NotebookDocument,
+  NotebookEdge,
+  NotebookPosition,
+  NotebookRun,
+} from "./notebook/types.js";
 
 export type { ActionLogOptions } from "./action/read.js";
 

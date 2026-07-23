@@ -8,15 +8,6 @@ import { createSandbox, type Sandbox } from "./helpers/sandbox.js";
 
 const execFileAsync = promisify(execFile);
 
-async function gitConfig(repoDir: string, key: string): Promise<string> {
-  const { stdout } = await execFileAsync(
-    "git",
-    ["config", "--local", "--get", key],
-    { cwd: repoDir },
-  );
-  return stdout.trim();
-}
-
 async function gitLfsAvailable(): Promise<boolean> {
   try {
     await execFileAsync("git", ["lfs", "version"]);
@@ -45,9 +36,8 @@ describe("project operations", () => {
     expect(result.value.slug).toMatch(/^[a-z]+-[a-z]+-\d+$/);
     expect(result.value.is_default).toBe(true);
 
-    // Git repo initialized
-    const gitDir = path.join(result.value.path, ".git");
-    await expect(fs.access(gitDir)).resolves.toBeUndefined();
+    const marker = path.join(result.value.path, ".videobook");
+    await expect(fs.access(marker)).resolves.toBeUndefined();
   });
 
   it("creates a project with custom slug", async () => {
@@ -57,15 +47,12 @@ describe("project operations", () => {
     expect(result.value.slug).toBe("my-project");
   });
 
-  it("disables git auto-gc on the project repo (vc-147)", async () => {
-    const result = await sandbox.fs.createProject("gc-test");
+  it("reports a DoltLite storage head after project creation", async () => {
+    const result = await sandbox.fs.createProject("catalog-test");
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-
-    // Rapid engine commits otherwise spawn detached `git gc --auto` that can
-    // corrupt the repo on a near-full disk; init must turn it off.
-    expect(await gitConfig(result.value.path, "gc.auto")).toBe("0");
-    expect(await gitConfig(result.value.path, "gc.autoDetach")).toBe("false");
+    const status = await sandbox.fs.getStorageStatus();
+    expect(status.head).toMatch(/^[a-f0-9]{40}$/);
   });
 
   it("only writes LFS filter patterns when git-lfs is installed (vc-cqh)", async () => {

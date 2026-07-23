@@ -96,8 +96,8 @@ export async function copyFile(
   const commit = locked.value;
   if (commit.status === "failed") {
     return err({
-      code: "GIT_ERROR",
-      message: `Failed to commit file copy: ${commit.message}`,
+      code: "STORAGE_ERROR",
+      message: `Failed to create file copy revision: ${commit.message}`,
     });
   }
 

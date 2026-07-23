@@ -49,8 +49,8 @@ export async function writeFile(
   });
   if (commit.status === "failed") {
     return err({
-      code: "GIT_ERROR",
-      message: `Failed to commit file write: ${commit.message}`,
+      code: "STORAGE_ERROR",
+      message: `Failed to create file revision: ${commit.message}`,
     });
   }
 

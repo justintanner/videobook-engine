@@ -3,7 +3,6 @@ import * as path from "node:path";
 
 import { type FsError, type Result, ok, err } from "../types.js";
 import { commitOperation } from "../git/commit.js";
-import { gitExecSafe } from "../git/exec.js";
 import { withGitLock } from "../git/mutex.js";
 import { isValidAssetId, isWithinDir, invalidInput } from "../validation.js";
 import { isLocked } from "../lock/query.js";
@@ -124,14 +123,6 @@ export async function deleteAsset(
       paths,
     );
     if (result.status === "failed") {
-      // Commit failed — HEAD still has the asset, so restore the working tree
-      // from it and undo the metadata cleanup. Untracked files in the asset
-      // dir are not recoverable (they were never committed). Best-effort: if
-      // the restore itself fails, the GIT_ERROR below still surfaces.
-      await gitExecSafe(["checkout", "HEAD", "--", assetId], {
-        cwd: projectDir,
-        gitPath,
-      });
       await cleanup.rollback();
     }
     return result;
@@ -141,8 +132,8 @@ export async function deleteAsset(
 
   if (commit.status === "failed") {
     return err({
-      code: "GIT_ERROR",
-      message: `Git commit failed for asset deletion (rolled back): ${assetId}: ${commit.message}`,
+      code: "STORAGE_ERROR",
+      message: `Revision failed for asset deletion: ${assetId}: ${commit.message}`,
     });
   }
 

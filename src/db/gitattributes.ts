@@ -1,7 +1,6 @@
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 
-import { gitExecSafe } from "../git/exec.js";
 import { VIDEOCITY_DIR } from "./client.js";
 
 const METADATA_PATH = `${VIDEOCITY_DIR}/metadata.sqlite`;
@@ -47,8 +46,6 @@ export async function ensureMergeOursDriver(
   projectDir: string,
   gitPath?: string,
 ): Promise<void> {
-  await gitExecSafe(["config", "merge.ours.driver", "true"], {
-    cwd: projectDir,
-    gitPath,
-  });
+  void projectDir;
+  void gitPath;
 }

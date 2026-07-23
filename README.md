@@ -1,271 +1,110 @@
-# videocity-engine
+# videobook-engine
 
-[![CI](https://github.com/justintanner/videocity-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/justintanner/videocity-engine/actions/workflows/ci.yml)
-[![Node.js](https://img.shields.io/badge/node-%3E%3D20-brightgreen)](https://nodejs.org)
-[![TypeScript](https://img.shields.io/badge/TypeScript-5.5-blue)](https://www.typescriptlang.org)
-
-TypeScript/Node.js filesystem abstraction for managing video, image, audio, script, character, and notebook asset projects. Each project is a git repo with a sidecar `.videocity/` directory holding two SQLite databases: `state.sqlite` for ephemeral coordination (locks, job queue, recovery journal) and `metadata.sqlite` for content metadata (timeline, asset metadata, audio waveforms). Every mutation produces an atomic git commit; metadata changes are mirrored to canonical JSON exports under `.videocity/export/` so git stays diffable.
+DoltLite-backed local storage for multimodal notebooks, prompts, characters, scenes, images, video, and audio.
 
 ## Install
 
 ```bash
-npm install videocity-engine
+npm install videobook-engine
 ```
 
-## Quick Start
+## Storage model
+
+- `dataDir/videobook.db` is the versioned DoltLite catalog.
+- `dataDir/objects/sha256/` is the immutable local content-addressed cache.
+- `projectsDir/<project>/` contains materialized workspaces for media tools.
+- `.videocity/state.sqlite` remains runtime-only queue, lease, lock, and recovery state.
+- An optional `ContentStore` publishes immutable objects to B2 or another remote object store.
+
+`projectsDir` and `dataDir` must not overlap. Existing Git repositories are not imported. Every restore and project rewind is forward-only: historical content is restored into the workspace and recorded as a new revision.
+
+## Quick start
 
 ```typescript
-import { createFs } from 'videocity-engine';
+import { createFs } from "videobook-engine";
 
-const fs = createFs({ projectsDir: '/path/to/projects' });
-
-// Create a project (auto-generated slug)
-const project = await fs.createProject();
-if (!project.ok) {
-  console.error(project.error.code, project.error.message);
-  process.exit(1);
-}
-const slug = project.value.slug; // "bright-falcon-42"
-
-// Create a video asset inside the project
-const asset = await fs.createAsset('vid', 'intro-clip', slug);
-if (asset.ok) {
-  console.log(asset.value.assetId); // "vid-intro-clip"
-}
-
-// Write and read files (each write is an atomic git commit)
-await fs.writeFile('vid-intro-clip', 'thumbnail.png', imageBuffer, slug);
-const file = await fs.readFile('vid-intro-clip', 'thumbnail.png', slug);
-if (file.ok) {
-  console.log(file.value.length);
-}
-```
-
-## Result Pattern
-
-All mutating methods return `Result<T, FsError>` instead of throwing exceptions:
-
-```typescript
-type Result<T, E> = { ok: true; value: T } | { ok: false; error: E };
-
-interface FsError {
-  code: FsErrorCode;
-  message: string;
-}
-```
-
-**Error codes:** `NOT_FOUND` | `ALREADY_EXISTS` | `GIT_ERROR` | `INVALID_INPUT` | `IO_ERROR` | `LOCKED`
-
-## Asset prefixes
-
-Assets live as prefixed directories at the project root. Valid prefixes:
-
-| Prefix | Type |
-|--------|------|
-| `vid-` | video |
-| `img-` | image |
-| `aud-` | audio |
-| `script-` | script |
-| `char-` | character (free-form) |
-| `nb-` | notebook |
-
-The asset id `final` is reserved as a project-level singleton.
-
-## API
-
-All methods are available on the object returned by `createFs(config)`. Unless noted otherwise, every method that takes a `projectSlug` requires a project that already exists.
-
-### Project
-
-| Method | Return Type |
-|--------|------------|
-| `createProject(slug?)` | `Promise<Result<{ slug, path, is_default }, FsError>>` |
-| `listProjects(options?)` | `Promise<ProjectMetadata[]>` |
-| `getProject(slug?)` | `Promise<Result<{ metadata, path }, FsError>>` |
-| `switchProject(slug)` | `Promise<Result<string, FsError>>` |
-| `renameProject(oldSlug, newSlug)` | `Promise<Result<{ oldSlug, newSlug, path }, FsError>>` |
-| `resolveProjectDir(slug?)` | `Promise<string \| null>` |
-
-### Asset
-
-| Method | Return Type |
-|--------|------------|
-| `createAsset(prefix, name, projectSlug)` | `Promise<Result<{ assetId, path }, FsError>>` |
-| `listAssets(projectSlug, options?)` | `Promise<AssetEntry[]>` |
-| `deleteAsset(assetId, projectSlug)` | `Promise<Result<{ deleted_at }, FsError>>` |
-| `renameAsset(assetId, newName, projectSlug)` | `Promise<Result<{ old_asset_id, new_asset_id }, FsError>>` |
-| `getManifest(assetId, projectSlug, options?)` | `Promise<Result<AssetManifest, FsError>>` |
-| `getAssetStatus(assetId, projectSlug, options?)` | `Promise<Result<AssetStatus, FsError>>` |
-| `listAssetSubdir(assetId, subdirName, projectSlug)` | `Promise<Result<string[], FsError>>` |
-| `slugTaken(slug, projectSlug)` | `Promise<boolean>` |
-
-### File
-
-| Method | Return Type |
-|--------|------------|
-| `writeFile(assetId, filename, data, projectSlug)` | `Promise<Result<string, FsError>>` |
-| `readFile(assetId, filename, projectSlug)` | `Promise<Result<Buffer, FsError>>` |
-| `deleteFile(assetId, filename, projectSlug)` | `Promise<Result<string, FsError>>` |
-| `renameFile(assetId, oldFilename, newFilename, projectSlug)` | `Promise<Result<{ oldPath, newPath }, FsError>>` |
-| `copyFile(assetId, filename, destAssetId, destFilename, projectSlug)` | `Promise<Result<string, FsError>>` |
-| `resolveAssetDir(assetId, projectSlug)` | `Promise<Result<string, FsError>>` |
-
-### Metadata
-
-`writeMetadata(assetId, 'character', record, ...)` writes to the generic `asset_metadata` table like any other key. A `.{key}.json` sidecar is also written next to the asset and the operation produces a single git commit covering the SQLite file, the canonical export, and the sidecar. The `char-` asset type is a free-form folder supporting arbitrary files and free-form metadata.
-
-`writeProjectMeta(key, data, ...)` with `key === 'timeline'` is also special-cased and **strict**: `data` must be `{ slots: [{ slug, ... }, ...], render: 'landscape' | 'portrait' | 'square' }` (an optional `currentOrientation` and an optional `audio` array are accepted). Non-conforming payloads return `INVALID_INPUT`. Reads come from SQLite only — there is no sidecar fallback. Other project-meta keys are written as plain `.{key}.json` sidecars.
-
-| Method | Return Type |
-|--------|------------|
-| `writeMetadata(assetId, key, data, projectSlug)` | `Promise<Result<string, FsError>>` |
-| `readMetadata<T>(assetId, key, projectSlug)` | `Promise<Result<T, FsError>>` |
-| `writeAudioWaveform(assetId, peaks, projectSlug)` | `Promise<Result<string, FsError>>` |
-| `readAudioWaveform(assetId, projectSlug)` | `Promise<Result<AudioWaveformRecord, FsError>>` |
-| `writeProjectMeta(key, data, projectSlug)` | `Promise<Result<string, FsError>>` |
-| `readProjectMeta<T>(key, projectSlug)` | `Promise<Result<T, FsError>>` |
-
-### Git
-
-| Method | Return Type |
-|--------|------------|
-| `commitOperation(operation, assetId?, details?, projectSlug)` | `Promise<string \| null>` |
-| `getHistory(projectSlug, limit?)` | `Promise<GitCommit[]>` |
-| `getAssetHistory(assetId, projectSlug, limit?)` | `Promise<GitCommit[]>` |
-| `restoreAsset(assetId, commitHash, projectSlug)` | `Promise<string \| null>` |
-| `readFileAtCommit(assetId, filename, commitHash, projectSlug)` | `Promise<Result<string, FsError>>` |
-| `rewindProject(commitHash, projectSlug)` | `Promise<string \| null>` |
-
-### Lock
-
-Locks are SQLite rows in `state.sqlite`, one per asset directory (or one project-level lock keyed by `__PROJECT__`). The `assetDir` argument is an absolute filesystem path; the lock module resolves it back to `(projectDir, assetKey)`.
-
-| Method | Return Type |
-|--------|------------|
-| `acquireLock(assetDir, options)` | `Promise<Result<LockData, FsError>>` |
-| `releaseLock(assetDir)` | `Promise<Result<boolean, FsError>>` |
-| `isLocked(assetDir)` | `Promise<boolean>` |
-| `getLockData(assetDir)` | `Promise<LockData \| null>` |
-| `cleanStaleLock(assetDir)` | `Promise<boolean>` |
-
-`LockOptions` is `{ durationMs, data?, state? }`. `acquireLock` returns `LOCKED` if a non-expired lock is already held; expired or dead-pid locks are reaped automatically on the next acquire (or explicitly via `cleanStaleLock`).
-
-### Action log
-
-Append-only audit trail backed by git commits with structured payloads.
-
-| Method | Return Type |
-|--------|------------|
-| `logAction(action, payload, projectSlug)` | `Promise<Result<ActionLogEntry, FsError>>` |
-| `getActionLog(options?, projectSlug)` | `Promise<ActionLogEntry[]>` |
-
-### Generic JSONL log
-
-Per-project append-only logs under `logs/{name}.jsonl`. Not committed to git.
-
-| Method | Return Type |
-|--------|------------|
-| `appendLog(name, line, projectSlug)` | `Promise<Result<string, FsError>>` |
-| `readLog(name, projectSlug, options?)` | `Promise<Record<string, unknown>[]>` |
-
-### Queue
-
-A persistent job queue lives in `state.sqlite` (`pending_jobs`). Jobs are dedupe-keyed, support external task ids, and are leased with heartbeats so a `QueueRunner` can be coordinated across multiple processes. `fs.queue` exposes the project-scoped surface; the standalone `queueApi` and `QueueRunner` are also exported for callers that want the raw `Database` handle.
-
-```typescript
-const enq = await fs.queue.enqueue(slug, {
-  type: 'transcode',
-  assetId: 'vid-intro-clip',
-  payload: { preset: '1080p' },
+const fs = createFs({
+  projectsDir: "/srv/videobook/projects",
+  dataDir: "/srv/videobook/data",
 });
 
-const result = await fs.queue.enqueueAndWait<RenderResult>(slug, {
-  type: 'render',
-  payload: { orientation: 'portrait' },
-});
+await fs.createProject("story");
+const notebook = await fs.createNotebook("Scratch", "story");
+const character = await fs.createEntity(
+  "character",
+  "Pilot",
+  "story",
+  { prompt: "A calm pilot in a silver flight suit" },
+);
+
+if (notebook.ok && character.ok) {
+  notebook.value.cells.push({
+    id: "cell-pilot",
+    type: "character",
+    title: "Pilot",
+    position: { x: 120, y: 80 },
+    entityId: character.value.id,
+  });
+  await fs.writeNotebook(notebook.value, "story");
+}
+
+console.log(await fs.getProjectHistory("story"));
+fs.close();
 ```
 
-### Pending tasks
+## Core APIs
 
-Tracks external long-running provider jobs (transcription, generation, etc.) in the `pending_tasks` table of `state.sqlite`. Each row is keyed by `assetId`; `taskId` is the provider's task identifier (or `QUEUED_TASK_ID` for jobs that haven't been submitted yet). `createdAt` is **epoch seconds**.
+Project and asset compatibility:
 
-```typescript
-import { QUEUED_TASK_ID } from 'videocity-engine';
+- `createProject`, `listProjects`, `getProject`, `renameProject`, `deleteProject`
+- `createAsset`, `listAssets`, `renameAsset`, `deleteAsset`
+- `writeFile`, `readFile`, `copyFile`, `renameFile`, `deleteFile`
+- `writeMetadata`, `readMetadata`, `writeProjectMeta`, `readProjectMeta`
 
-await fs.pendingTasks.write(slug, {
-  assetId: 'vid-clip-1',
-  taskId: QUEUED_TASK_ID,
-  taskType: 'fal_seedance2_t2v',
-  assetDir: '/path/to/projects/proj-x/vid-clip-1',
-  meta: { prompt: 'sunset over ocean' },
-});
+Revision-native storage:
 
-// Atomic: write a generation_errors row + delete the pending_tasks row.
-await fs.pendingTasks.fail(slug, 'vid-clip-1', { message: 'provider rejected', failCode: 'NSFW' });
-```
+- `runOperation`
+- `importFile`
+- `getProjectHistory`
+- `resolveRevision`
+- `readFileAtRevision`
+- `restoreAsset`
+- `rewindProject`
+- `getStorageStatus`
+- `sync`
 
-| Method | Return Type |
-|--------|------------|
-| `pendingTasks.write(projectSlug, input)` | `Promise<Result<PendingTask, FsError>>` |
-| `pendingTasks.read(projectSlug, assetId)` | `Promise<Result<PendingTask \| null, FsError>>` |
-| `pendingTasks.delete(projectSlug, assetId)` | `Promise<Result<boolean, FsError>>` |
-| `pendingTasks.markCompleting(projectSlug, assetId)` | `Promise<Result<boolean, FsError>>` |
-| `pendingTasks.clearCompleting(projectSlug, assetId)` | `Promise<Result<boolean, FsError>>` |
-| `pendingTasks.findAll(projectSlug)` | `Promise<Result<PendingTask[], FsError>>` |
-| `pendingTasks.findByExternalId(projectSlug, taskId)` | `Promise<Result<PendingTask \| null, FsError>>` |
-| `pendingTasks.fail(projectSlug, assetId, info)` | `Promise<Result<GenerationError, FsError>>` |
+Notebook-native data:
 
-### Generation errors
+- `createNotebook`, `listNotebooks`, `readNotebook`, `writeNotebook`, `deleteNotebook`
+- `recordNotebookRun`
+- `createEntity`, `listEntities`, `readEntity`, `writeEntity`, `deleteEntity`
 
-Sibling table to `pending_tasks` for terminal failures. `failedAt` is **epoch seconds**.
+The legacy `getHistory`, `readFileAtCommit`, and `GitCommit` names remain aliases so fork-time Videocity callers can move without a flag day. They operate on DoltLite revisions and never execute Git.
 
-| Method | Return Type |
-|--------|------------|
-| `generationErrors.write(projectSlug, assetId, info)` | `Promise<Result<GenerationError, FsError>>` |
-| `generationErrors.read(projectSlug, assetId)` | `Promise<Result<GenerationError \| null, FsError>>` |
-| `generationErrors.clear(projectSlug, assetId)` | `Promise<Result<boolean, FsError>>` |
-| `generationErrors.findAll(projectSlug)` | `Promise<Result<GenerationError[], FsError>>` |
-
-### Lifecycle
-
-| Method | Return Type |
-|--------|------------|
-| `ensureProjectInitialized(slug)` | `Promise<void>` — idempotently create `.videocity/`, open the state DB, apply gitignore patterns. Safe to call on every boot or enqueue. |
-| `recoverIncompleteOperations(slug)` | `Promise<number>` — drain the recovery journal at startup |
-| `checkSchemaVersion(slug)` | `Promise<VersionCheckResult>` — refuse to open a project written by a newer build |
-| `close()` | `void` — close all SQLite handles before process exit |
-
-## Atomic operations & recovery
-
-Every metadata write follows the same shape:
-
-1. Acquire the per-project git mutex (`proper-lockfile` on `.videocity/.project.lock`).
-2. Open a `recovery_journal` row, run the SQLite work in a transaction, and rebuild the affected canonical JSON exports under `.videocity/export/`.
-3. Stage the SQLite file, exports, and any sidecars in a single `git commit` whose body includes `op-id: <uuid>`.
-4. Mark the journal row complete.
-
-If the process dies mid-operation, `recoverIncompleteOperations()` replays the journal at startup: it re-derives the exports from `metadata.sqlite`, writes any missing sidecars, and produces a fresh `recover` commit. Sentinel `op-id` lookups in `git log` ensure idempotency. Schema migrations are checksummed in `schema_migrations`; mismatches are fatal.
-
-## Configuration
+## Content store
 
 ```typescript
-interface FsConfig {
-  projectsDir: string;  // Root directory for all projects
-  gitPath?: string;     // Custom git binary path (default: "git")
+interface ContentStore {
+  head(key: string): Promise<{ exists: boolean; size?: number }>;
+  uploadFile(key: string, sourcePath: string): Promise<void>;
+  downloadFile(key: string, destinationPath: string): Promise<void>;
 }
 ```
+
+Objects are addressed as:
+
+```text
+superlzy-media/videobook/sha256/<first-two-hash-chars>/<sha256>
+```
+
+A catalog revision can be created offline. `getStorageStatus()` reports `ahead` until every referenced object has been uploaded and verified.
 
 ## Development
 
 ```bash
-npm run build        # Compile TypeScript
-npm run typecheck    # Type-check without emitting
-npm test             # Run tests
-npm run test:watch   # Run tests in watch mode
-npm run bench        # Run vitest benches
+npm run typecheck
+npm test
+npm run build
 ```
 
-## Requirements
-
-- Node.js >= 20
-- Git
+Integration tests use real DoltLite databases and verify exact-byte historical reads, forward restore, project-isolated rewind, object publication and hydration, notebook/entity revisions, and path isolation.

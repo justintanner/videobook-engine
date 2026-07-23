@@ -225,8 +225,8 @@ export async function writeProjectMeta(
   });
   if (commit.status === "failed") {
     return err({
-      code: "GIT_ERROR",
-      message: `Failed to commit project metadata: ${commit.message}`,
+      code: "STORAGE_ERROR",
+      message: `Failed to create project metadata revision: ${commit.message}`,
     });
   }
 

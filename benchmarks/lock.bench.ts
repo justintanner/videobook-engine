@@ -9,7 +9,10 @@ import { FAST_BENCH_OPTS } from "./helpers/setup.js";
 const dir = await fs.mkdtemp(path.join(os.tmpdir(), "videocity-lock-bench-"));
 const outputDir = path.join(dir, "output");
 await fs.mkdir(outputDir, { recursive: true });
-const instance = createFs({ outputDir });
+const instance = createFs({
+  projectsDir: outputDir,
+  dataDir: path.join(dir, "data"),
+});
 
 const assetDir = path.join(dir, "asset-unlocked");
 await fs.mkdir(assetDir, { recursive: true });

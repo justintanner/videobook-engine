@@ -4,8 +4,8 @@ import * as path from "node:path";
 import type { Database as DatabaseType } from "better-sqlite3";
 
 import { commitOperation } from "../git/commit.js";
-import { gitExecSafe } from "../git/exec.js";
 import { withGitLock } from "../git/mutex.js";
+import { catalogForProjectDir } from "../storage/context.js";
 import { exportAssetMetadata, readAssetMetadata } from "./asset-metadata.js";
 import { exportAssetEvents } from "./asset-events.js";
 import {
@@ -51,20 +51,17 @@ async function findGitHash(
   projectDir: string,
   operationId: string,
 ): Promise<string | null> {
-  const result = await gitExecSafe(
-    [
-      "log",
-      "--format=%H",
-      "--fixed-strings",
-      "--grep",
-      `op-id: ${operationId}`,
-      "-1",
-    ],
-    { cwd: projectDir },
+  const catalog = catalogForProjectDir(projectDir);
+  if (!catalog) return null;
+  return (
+    catalog
+      .history(path.basename(projectDir), 10_000)
+      .find(
+        (revision) =>
+          revision.operationId === operationId ||
+          revision.details?.["op-id"] === operationId,
+      )?.hash ?? null
   );
-  if (result.exitCode !== 0) return null;
-  const hash = result.stdout.trim().split("\n")[0];
-  return hash || null;
 }
 
 function markComplete(

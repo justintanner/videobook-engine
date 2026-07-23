@@ -1,19 +1,22 @@
 /**
- * Basic usage of vc-engine: create a project, add assets, write/read files.
+ * Basic usage of videobook-engine: create a project, add assets, write/read files.
  *
  * Run: npx tsx examples/basic-usage.ts
  */
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { createFs } from "vc-engine";
+import { createFs } from "videobook-engine";
 
-const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "videocity-basic-"));
+const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "videobook-basic-"));
 const projectsDir = path.join(tmpDir, "projects");
 await fs.mkdir(projectsDir);
 
 try {
-  const cfs = createFs({ projectsDir });
+  const cfs = createFs({
+    projectsDir,
+    dataDir: path.join(tmpDir, "data"),
+  });
 
   // --- Create a project ---
   const projectResult = await cfs.createProject();

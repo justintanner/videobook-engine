@@ -1,8 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 
 import { createSandbox, type Sandbox } from "./helpers/sandbox.js";
 import { getStateDb } from "../src/db/client.js";
@@ -12,8 +10,6 @@ import {
   commitAndFinalizeOperation,
   runOperation,
 } from "../src/db/run-operation.js";
-
-const execFileAsync = promisify(execFile);
 
 interface JournalRow {
   operation_id: string;
@@ -102,12 +98,8 @@ describe("journal survives export-write failure (vce-91h)", () => {
       fs.access(path.join(dir, ".videocity", "export", "timeline.json")),
     ).resolves.toBeUndefined();
 
-    const { stdout } = await execFileAsync(
-      "git",
-      ["-C", dir, "log", "-1", "--format=%B"],
-      { env: { ...process.env, HOME: sandbox.dir } },
-    );
-    expect(stdout).toContain(`op-id: ${row.operation_id}`);
+    const revision = (await sandbox.fs.getProjectHistory("test-proj", 1))[0];
+    expect(revision?.details?.["op-id"]).toBe(row.operation_id);
   });
 
   it("still aborts when the work itself fails before COMMIT", async () => {

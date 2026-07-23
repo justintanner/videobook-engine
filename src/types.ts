@@ -1,4 +1,3 @@
-// Asset type discriminator
 export type AssetType =
   | "video"
   | "image"
@@ -8,7 +7,6 @@ export type AssetType =
   | "character"
   | "notebook";
 
-// Asset manifest types
 export interface AssetManifestFile {
   name: string;
   size_bytes: number;
@@ -24,7 +22,6 @@ export interface AssetManifest {
   directories?: Record<string, string[]>;
 }
 
-// Project metadata derived from git history and directory name
 export interface ProjectMetadata {
   slug: string;
   created: number;
@@ -33,23 +30,28 @@ export interface ProjectMetadata {
   last_activity?: number;
 }
 
-// Git commit entry
-interface GitFileChange {
+export interface RevisionFileChange {
   status: string;
   file: string;
   oldFile?: string;
 }
 
-export interface GitCommit {
+export interface ProjectRevision {
   hash: string;
   message: string;
   date: string;
   author?: string;
+  projectId?: string;
+  operationId?: string;
+  operation?: string;
+  assetId?: string;
+  details?: Record<string, unknown>;
   files?: string[];
-  fileChanges?: GitFileChange[];
+  fileChanges?: RevisionFileChange[];
 }
 
-// Lock data stored in lock files
+export type GitCommit = ProjectRevision;
+
 export interface LockData {
   created_at: number;
   timeout_at: number;
@@ -57,7 +59,6 @@ export interface LockData {
   [key: string]: unknown;
 }
 
-// Asset listing entry
 export interface AssetEntry {
   id: string;
   type: AssetType;
@@ -65,11 +66,14 @@ export interface AssetEntry {
   path: string;
 }
 
-// Error codes for FsError
 export type FsErrorCode =
   | "NOT_FOUND"
   | "ALREADY_EXISTS"
   | "GIT_ERROR"
+  | "STORAGE_ERROR"
+  | "OBJECT_UNAVAILABLE"
+  | "LEGACY_DATA_FOUND"
+  | "SYNC_DIVERGED"
   | "INVALID_INPUT"
   | "IO_ERROR"
   | "LOCKED";
@@ -79,7 +83,6 @@ export interface FsError {
   message: string;
 }
 
-// Action log entry from git commit
 export interface ActionLogEntry {
   hash: string;
   action: string;
@@ -87,13 +90,41 @@ export interface ActionLogEntry {
   date: string;
 }
 
-// Config for createFs
+export interface ContentStoreHead {
+  exists: boolean;
+  size?: number;
+}
+
+export interface ContentStore {
+  head(key: string): Promise<ContentStoreHead>;
+  uploadFile(key: string, sourcePath: string): Promise<void>;
+  downloadFile(key: string, destinationPath: string): Promise<void>;
+}
+
+export type StorageSyncState =
+  | "synced"
+  | "ahead"
+  | "offline"
+  | "syncing"
+  | "diverged"
+  | "blocked";
+
+export interface StorageStatus {
+  state: StorageSyncState;
+  head: string;
+  pendingObjects: number;
+  lastError?: string;
+}
+
 export interface FsConfig {
   projectsDir: string;
+  dataDir?: string;
+  objectStore?: ContentStore;
+  objectPrefix?: string;
+  branch?: string;
   gitPath?: string;
 }
 
-// Discriminated union for Result<T, E>
 export type Result<T, E> = { ok: true; value: T } | { ok: false; error: E };
 
 export function ok<T>(value: T): Result<T, never> {

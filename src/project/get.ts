@@ -9,7 +9,6 @@ import {
   err,
 } from "../types.js";
 import { readCreatedAt } from "../timestamps.js";
-import { gitExecSafe } from "../git/exec.js";
 import { getDefaultProject } from "./switch.js";
 
 // Resolve a slug (or the default project when omitted) to its canonical form.
@@ -23,10 +22,9 @@ async function normalizeSlug(
   return projectSlug.includes("/") ? path.basename(projectSlug) : projectSlug;
 }
 
-// True when the project directory exists (identified by its .git dir).
 async function projectDirExists(projectDir: string): Promise<boolean> {
   try {
-    await fs.access(path.join(projectDir, ".git"));
+    await fs.access(path.join(projectDir, ".videobook"));
     return true;
   } catch {
     return false;
@@ -53,16 +51,8 @@ export async function getProject(
 
   const created = await readCreatedAt(projectDir);
 
-  // O(1) last_activity: just read the most recent commit timestamp
-  let lastActivity: number | undefined;
-  const logResult = await gitExecSafe(["log", "-1", "--format=%at"], {
-    cwd: projectDir,
-    gitPath,
-  });
-  if (logResult.exitCode === 0 && logResult.stdout.trim()) {
-    const ts = parseInt(logResult.stdout.trim(), 10);
-    if (!isNaN(ts)) lastActivity = ts;
-  }
+  void gitPath;
+  const lastActivity = Math.floor((await fs.stat(projectDir)).mtimeMs / 1000);
 
   const metadata: ProjectMetadata = {
     slug: normalizedSlug,

@@ -33,10 +33,10 @@ export async function listProjects(
     if (!entry.isDirectory() || !isProjectSlug(entry.name)) continue;
     const dir = path.join(projectsDir, entry.name);
     try {
-      await fs.access(path.join(dir, ".git"));
+      await fs.access(path.join(dir, ".videobook"));
       candidates.push({ name: entry.name, dir });
     } catch {
-      // Not a git-initialized project — skip
+      // Not a Videobook project
     }
   }
 

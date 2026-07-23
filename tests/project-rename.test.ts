@@ -15,7 +15,7 @@ describe("renameProject", () => {
     await sandbox.cleanup();
   });
 
-  it("renames a project — old dir gone, new dir has .git", async () => {
+  it("renames a project and preserves the Videobook marker", async () => {
     await sandbox.fs.createProject("old-proj");
 
     const result = await sandbox.fs.renameProject("old-proj", "new-proj");
@@ -32,7 +32,7 @@ describe("renameProject", () => {
 
     // New dir has .git
     await expect(
-      fs.access(path.join(sandbox.projectsDir, "new-proj", ".git")),
+      fs.access(path.join(sandbox.projectsDir, "new-proj", ".videobook")),
     ).resolves.toBeUndefined();
   });
 

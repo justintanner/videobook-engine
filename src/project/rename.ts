@@ -59,7 +59,7 @@ export async function renameProject(
 
   // Check source exists
   try {
-    await fs.access(path.join(oldDir, ".git"));
+    await fs.access(path.join(oldDir, ".videobook"));
   } catch {
     return err({ code: "NOT_FOUND", message: `Project not found: ${oldSlug}` });
   }
@@ -88,7 +88,7 @@ export async function renameProject(
     return await withGitLock(oldDir, async () => {
       // TOCTOU re-check: source still exists?
       try {
-        await fs.access(path.join(oldDir, ".git"));
+        await fs.access(path.join(oldDir, ".videobook"));
       } catch {
         return err({
           code: "NOT_FOUND",

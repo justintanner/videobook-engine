@@ -49,7 +49,7 @@ export async function deleteProject(
   const projectDir = path.join(projectsDir, slug);
 
   try {
-    await fs.access(path.join(projectDir, ".git"));
+    await fs.access(path.join(projectDir, ".videobook"));
   } catch {
     return err({ code: "NOT_FOUND", message: `Project not found: ${slug}` });
   }
@@ -65,7 +65,7 @@ export async function deleteProject(
       projectDir,
       async (): Promise<Result<{ deleted_at: string }, FsError>> => {
         try {
-          await fs.access(path.join(projectDir, ".git"));
+          await fs.access(path.join(projectDir, ".videobook"));
         } catch {
           return err({
             code: "NOT_FOUND",

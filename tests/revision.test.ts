@@ -4,7 +4,7 @@ import * as path from 'node:path';
 
 import { createSandbox, type Sandbox } from './helpers/sandbox.js';
 
-describe('git operations', () => {
+describe('revision operations', () => {
   let sandbox: Sandbox;
   let projectSlug: string;
 
@@ -108,7 +108,7 @@ describe('git operations', () => {
     expect(content).toBe('version-1');
   });
 
-  it('restoreAsset succeeds when the target version is already current', async () => {
+  it('restoreAsset always records a new forward revision', async () => {
     const projectDir = path.join(sandbox.projectsDir, projectSlug);
     const assetDir = path.join(projectDir, 'vid-test');
     await fs.mkdir(assetDir, { recursive: true });
@@ -124,7 +124,7 @@ describe('git operations', () => {
     expect(firstRestoreHash).toBeTruthy();
 
     const secondRestoreHash = await sandbox.fs.restoreAsset('vid-test', hash1!, projectSlug);
-    expect(secondRestoreHash).toBe(firstRestoreHash);
+    expect(secondRestoreHash).not.toBe(firstRestoreHash);
 
     const content = await fs.readFile(path.join(assetDir, 'original.mp4'), 'utf-8');
     expect(content).toBe('version-1');

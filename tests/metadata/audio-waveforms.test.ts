@@ -108,7 +108,7 @@ describe("audio waveform primitive", () => {
     expect(r.error.code).toBe("NOT_FOUND");
   });
 
-  it("commits only .videocity paths even when the asset worktree is dirty", async () => {
+  it("revisions only waveform paths even when the asset workspace is dirty", async () => {
     // Drop a stray uncommitted file inside the asset dir, simulating
     // process_video's mid-job state where original_frames/ are dirty.
     const framesDir = path.join(projectDir, "vid-alpha", "original_frames");
@@ -118,25 +118,12 @@ describe("audio waveform primitive", () => {
     const r = await cfs.writeAudioWaveform("vid-alpha", [0.5, 0.5], "p");
     expect(r.ok).toBe(true);
 
-    // The frames dir should still be untracked / uncommitted afterwards.
-    const { spawnSync } = await import("node:child_process");
-    const status = spawnSync("git", ["status", "--porcelain"], {
-      cwd: projectDir,
-      encoding: "utf-8",
-    });
-    expect(status.stdout).toContain("vid-alpha/original_frames");
-
-    // The latest commit should NOT touch the frames dir.
-    const lastCommitFiles = spawnSync(
-      "git",
-      ["show", "--name-only", "--format=", "HEAD"],
-      { cwd: projectDir, encoding: "utf-8" },
-    ).stdout;
-    expect(lastCommitFiles).toContain(".videocity/metadata.sqlite");
-    expect(lastCommitFiles).toContain(
+    const revision = (await cfs.getProjectHistory("p", 1))[0]!;
+    expect(revision.files).toContain(".videocity/metadata.sqlite");
+    expect(revision.files).toContain(
       ".videocity/export/audio_waveforms/vid-alpha.json",
     );
-    expect(lastCommitFiles).not.toContain("vid-alpha/original_frames");
+    expect(revision.files).not.toContain("vid-alpha/original_frames/0.00.jpg");
   });
 
   it("deleteAsset removes the waveform row and per-asset export in the same commit", async () => {

@@ -2,12 +2,8 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as os from "node:os";
 import * as crypto from "node:crypto";
-import { execFile } from "node:child_process";
-import { promisify } from "node:util";
 
 import { createFs, type VideocityFs } from "../../src/index.js";
-
-const execFileAsync = promisify(execFile);
 
 interface BenchSandbox {
   dir: string;
@@ -21,22 +17,10 @@ export async function createBenchSandbox(): Promise<BenchSandbox> {
   const outputDir = path.join(dir, "output");
   await fs.mkdir(outputDir, { recursive: true });
 
-  await execFileAsync(
-    "git",
-    ["config", "--global", "user.email", "bench@videocity.test"],
-    {
-      env: { ...process.env, HOME: dir },
-    },
-  ).catch(() => {});
-  await execFileAsync(
-    "git",
-    ["config", "--global", "user.name", "Bench User"],
-    {
-      env: { ...process.env, HOME: dir },
-    },
-  ).catch(() => {});
-
-  const instance = createFs({ projectsDir: outputDir });
+  const instance = createFs({
+    projectsDir: outputDir,
+    dataDir: path.join(dir, "data"),
+  });
 
   return {
     dir,

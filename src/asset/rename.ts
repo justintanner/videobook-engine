@@ -118,8 +118,8 @@ export async function renameAsset(
           // Rollback
           await gitMv(projectDir, newSlug, cleanId, gitPath);
           return err({
-            code: "GIT_ERROR" as const,
-            message: "Git commit failed, rename rolled back",
+            code: "STORAGE_ERROR" as const,
+            message: "Revision failed, rename rolled back",
           });
         }
 

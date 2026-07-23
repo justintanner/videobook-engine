@@ -74,8 +74,8 @@ export async function createAsset(
       // best-effort; the pending deadline sweeps the stray row
     }
     return err({
-      code: "GIT_ERROR",
-      message: `Failed to commit asset creation: ${commit.message}`,
+      code: "STORAGE_ERROR",
+      message: `Failed to create asset revision: ${commit.message}`,
     });
   }
 
