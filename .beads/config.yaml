@@ -9,7 +9,7 @@
 # issue-prefix: ""
 issue-prefix: vce
 sync:
-    remote: "git+https://github.com/justintanner/videocity-engine.git"
+    remote: "git+https://github.com/justintanner/videobook-engine.git"
 
 # Use no-db mode: JSONL-only, no Dolt database
 # When true, bd will use .beads/issues.jsonl as the source of truth
