@@ -41,7 +41,17 @@ async function resolveAllAssets(
 
   for (const tag of tags) {
     // Try exact match first, then prefixed variants
-    const candidates = [tag, `img-${tag}`, `vid-${tag}`, `aud-${tag}`, `script-${tag}`];
+    const candidates = [
+      tag,
+      `img-${tag}`,
+      `vid-${tag}`,
+      `aud-${tag}`,
+      `script-${tag}`,
+      `char-${tag}`,
+      `prm-${tag}`,
+      `scn-${tag}`,
+      `nb-${tag}`,
+    ];
     let matchedId = candidates.find((c) => assetIds.has(c));
     if (!matchedId) {
       const projectDir = await fs.resolveProjectDir(projectSlug);

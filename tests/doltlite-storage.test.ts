@@ -109,7 +109,21 @@ describe("DoltLite catalog and content-addressed storage", () => {
       "project-a",
       { prompt: "Silver suit, calm expression" },
     );
-    if (!notebook.ok || !character.ok) throw new Error("Entity creation failed");
+    const prompt = await api.createEntity(
+      "prompt",
+      "Moon garden",
+      "project-a",
+      { prompt: "Emerald plants beneath lunar light" },
+    );
+    const scene = await api.createEntity(
+      "scene",
+      "Arrival",
+      "project-a",
+      { description: "The astronaut enters the garden" },
+    );
+    if (!notebook.ok || !character.ok || !prompt.ok || !scene.ok) {
+      throw new Error("Entity creation failed");
+    }
     const changed: NotebookDocument = {
       ...notebook.value,
       cells: [
@@ -126,6 +140,21 @@ describe("DoltLite catalog and content-addressed storage", () => {
     expect(written.ok).toBe(true);
     expect((await api.listNotebooks("project-a"))[0]?.cells).toHaveLength(1);
     expect((await api.listEntities("project-a", "character"))[0]?.prompt).toContain("Silver suit");
+    expect((await api.listEntities("project-a", "prompt"))[0]?.id).toBe(
+      prompt.value.id,
+    );
+    const updated = await api.writeEntity(
+      { ...scene.value, description: "Revised arrival" },
+      "project-a",
+    );
+    expect(updated.ok).toBe(true);
+    expect(
+      (await api.readEntity(scene.value.id, "project-a")).ok,
+    ).toBe(true);
+    expect((await api.deleteEntity(prompt.value.id, "project-a")).ok).toBe(
+      true,
+    );
+    expect(await api.listEntities("project-a", "prompt")).toHaveLength(0);
     api.close();
   });
 

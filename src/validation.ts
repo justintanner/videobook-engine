@@ -8,6 +8,8 @@ const VALID_PREFIXES = [
   "aud-",
   "script-",
   "char-",
+  "prm-",
+  "scn-",
   "nb-",
 ] as const;
 const SINGLETON_ASSETS = ["final"] as const;

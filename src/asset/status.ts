@@ -236,7 +236,14 @@ export function computeAssetStatus(input: AssetStatusInput): AssetStatus {
 
   // Notebook and character assets have no required primary media.
   // Treat as ready.
-  if (assetId.startsWith("nb-") || assetId.startsWith("char-")) return "ready";
+  if (
+    assetId.startsWith("nb-") ||
+    assetId.startsWith("char-") ||
+    assetId.startsWith("prm-") ||
+    assetId.startsWith("scn-")
+  ) {
+    return "ready";
+  }
 
   const pendingRowLive =
     assetRow !== null &&

@@ -5,6 +5,8 @@ export type AssetType =
   | "final"
   | "audio"
   | "character"
+  | "prompt"
+  | "scene"
   | "notebook";
 
 export interface AssetManifestFile {

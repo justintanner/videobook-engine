@@ -379,14 +379,14 @@ describe("asset status derivation", () => {
       ).toBe("error");
     });
 
-    it.each(["char-x", "nb-x"])(
+    it.each(["char-x", "prm-x", "scn-x", "nb-x"])(
       "ready: free-form asset %s has no required primary media",
       (assetId) => {
         expect(pureCall({ assetId })).toBe("ready");
       },
     );
 
-    it.each(["char-x", "nb-x"])(
+    it.each(["char-x", "prm-x", "scn-x", "nb-x"])(
       "error: partial download beats free-form ready fallback for %s",
       (assetId) => {
         expect(
@@ -399,7 +399,7 @@ describe("asset status derivation", () => {
       },
     );
 
-    it.each(["char-x", "nb-x"])(
+    it.each(["char-x", "prm-x", "scn-x", "nb-x"])(
       "error: recorded generation failure beats free-form ready fallback for %s",
       (assetId) => {
         expect(

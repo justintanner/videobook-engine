@@ -38,9 +38,9 @@ describe("parseAssetTags", () => {
     expect(result).toEqual(["img-my_photo-2"]);
   });
 
-  it("parses aud- and script- prefixed tags", () => {
-    const result = parseAssetTags("@aud-track1 @script-notes");
-    expect(result).toEqual(["aud-track1", "script-notes"]);
+  it("parses first-class entity tags", () => {
+    const result = parseAssetTags("@char-astronaut @prm-moon @scn-garden");
+    expect(result).toEqual(["char-astronaut", "prm-moon", "scn-garden"]);
   });
 
   it("deduplicates repeated tags", () => {
