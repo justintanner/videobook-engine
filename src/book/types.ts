@@ -1,4 +1,7 @@
-import type { ProjectRevision, RevisionFileChange } from "../types.js";
+import type {
+  Revision,
+  RevisionFileChange,
+} from "../engine-types.js";
 
 export type BookActionPhase =
   | "requested"
@@ -104,5 +107,5 @@ export interface RecordBookActionInput {
 
 export interface BookActionRevision {
   action: BookAction;
-  revision: ProjectRevision;
+  revision: Revision;
 }

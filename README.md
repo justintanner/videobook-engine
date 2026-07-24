@@ -1,103 +1,107 @@
 # videobook-engine
 
-DoltLite-backed local storage for multimodal notebooks, prompts, characters, scenes, images, video, and audio.
-
-## Install
-
-```bash
-npm install videobook-engine
-```
+A Dolt-native, local-first storage engine for Videobook projects, media,
+notebooks, and runtime coordination.
 
 ## Storage model
 
-- `dataDir/videobook.db` is the versioned DoltLite catalog.
-- `dataDir/objects/sha256/` is the immutable local content-addressed cache.
-- `projectsDir/<project>/` contains materialized workspaces for media tools.
-- `.videocity/state.sqlite` remains runtime-only queue, lease, lock, and recovery state.
-- An optional `ContentStore` publishes immutable objects to B2 or another remote object store.
+Each engine instance owns one embedded database:
 
-`projectsDir` and `dataDir` must not overlap. Existing Git repositories are not imported. Every restore and project rewind is forward-only: historical content is restored into the workspace and recorded as a new revision.
+```text
+dataDir/
+  videobook.db          # Dolt catalog: semantic + runtime tables
+  objects/sha256/       # immutable local CAS
+
+workspaceDir/
+  <project UUID>/
+    <artifact UUID>/    # disposable materialized tool workspace
+```
+
+Semantic tables are selectively staged and committed to Dolt. Runtime tables
+live in the same `videobook.db` but are never staged. There are no project Git
+repositories, JSON sidecars, `state.sqlite`, `metadata.sqlite`, or
+`runtime.sqlite` files.
+
+Projects and artifacts have stable UUIDv7 identities. Slugs are active names:
+deleting an artifact releases its slug immediately, and a replacement may use
+that exact slug with a new UUID and an isolated workspace.
 
 ## Quick start
 
-```typescript
-import { createFs } from "videobook-engine";
+```ts
+import { createEngine } from "videobook-engine";
 
-const fs = createFs({
-  projectsDir: "/srv/videobook/projects",
+const engine = createEngine({
   dataDir: "/srv/videobook/data",
+  workspaceDir: "/srv/videobook/workspaces",
 });
+await engine.ready;
 
-await fs.createProject("story");
-const notebook = await fs.createNotebook("Scratch", "story");
-const character = await fs.createEntity(
-  "character",
-  "Pilot",
-  "story",
-  { prompt: "A calm pilot in a silver flight suit" },
+const project = await engine.projects.create("story");
+if (!project.ok) throw new Error(project.error.message);
+
+const video = await engine.artifacts.create({
+  project: project.value.projectId,
+  kind: "video",
+  slug: "vid-cat",
+});
+if (!video.ok) throw new Error(video.error.message);
+
+await engine.files.write(
+  video.value.artifactId,
+  "original.mp4",
+  videoBytes,
+  project.value.projectId,
 );
 
-if (notebook.ok && character.ok) {
-  notebook.value.cells.push({
-    id: "cell-pilot",
-    type: "character",
-    title: "Pilot",
-    position: { x: 120, y: 80 },
-    entityId: character.value.id,
-  });
-  await fs.writeNotebook(notebook.value, "story");
-}
+await engine.artifacts.delete(
+  video.value.artifactId,
+  project.value.projectId,
+);
 
-console.log(await fs.getProjectHistory("story"));
-fs.close();
+const replacement = await engine.artifacts.create({
+  project: project.value.projectId,
+  kind: "video",
+  slug: "vid-cat",
+});
+
+engine.close();
 ```
 
-## Core APIs
+`replacement.value.artifactId` differs from the deleted artifact’s identity.
+No files, jobs, leases, failures, or history leak across that reused slug.
 
-Project and asset compatibility:
+## API
 
-- `createProject`, `listProjects`, `getProject`, `renameProject`, `deleteProject`
-- `createAsset`, `listAssets`, `renameAsset`, `deleteAsset`
-- `writeFile`, `readFile`, `copyFile`, `renameFile`, `deleteFile`
-- `writeMetadata`, `readMetadata`, `writeProjectMeta`, `readProjectMeta`
+`createEngine()` returns a namespaced `Engine`. Await `engine.ready` during
+application startup to finish recovery of any terminal runtime jobs:
 
-Revision-native storage:
+- `projects` — create, list, get, switch, rename, and tombstone projects
+- `artifacts` — lifecycle, stable-ID lookup, active-slug resolution and reuse
+- `files` — CAS-backed reads/writes, explicit workspace ingest, historical reads
+- `workspaces` — UUID workspace materialization and eviction
+- `metadata` — project/artifact metadata, timelines, and waveforms
+- `entities` and `notebooks` — normalized domain records
+- `history` — Dolt revisions and forward-only artifact/project restores
+- `jobs` — runtime queue, leases, pending providers, failures, and recovery
+- `settings` — unversioned application/runtime state in the main Dolt database
+- `prompts`, `messages`, and `logs` — semantic conversation data and runtime logs
+- `resolver` and `status` — active artifact resolution and derived UI status
+- `storage` — publish CAS objects, then push the Dolt catalog backup
 
-- `runOperation`
-- `importFile`
-- `getProjectHistory`
-- `resolveRevision`
-- `readFileAtRevision`
-- `restoreAsset`
-- `rewindProject`
-- `getStorageStatus`
-- `sync`
+All public domain mutations return a discriminated `Result`. Runtime queue and
+lease primitives return direct values and use fencing where ownership matters.
 
-Notebook-native data:
+## Backups
 
-- `createNotebook`, `listNotebooks`, `readNotebook`, `writeNotebook`, `deleteNotebook`
-- `recordNotebookRun`
-- `createEntity`, `listEntities`, `readEntity`, `writeEntity`, `deleteEntity`
+Configure `remoteObjects` with a `ContentStore` and `catalogBackup` with a Dolt
+remote. `engine.storage.backup()` verifies and publishes every referenced CAS
+object before it pushes `main`.
 
-The legacy `getHistory`, `readFileAtCommit`, and `GitCommit` names remain aliases so fork-time Videocity callers can move without a flag day. They operate on DoltLite revisions and never execute Git.
-
-## Content store
-
-```typescript
-interface ContentStore {
-  head(key: string): Promise<{ exists: boolean; size?: number }>;
-  uploadFile(key: string, sourcePath: string): Promise<void>;
-  downloadFile(key: string, destinationPath: string): Promise<void>;
-}
-```
-
-Objects are addressed as:
-
-```text
-superlzy-media/videobook/sha256/<first-two-hash-chars>/<sha256>
-```
-
-A catalog revision can be created offline. `getStorageStatus()` reports `ahead` until every referenced object has been uploaded and verified.
+The engine does not pull a live catalog into an open database. Restore or
+bootstrap a closed `videobook.db` snapshot into `dataDir` before opening the
+engine. Configure the same `remoteObjects` store and missing CAS objects hydrate
+on demand.
 
 ## Development
 
@@ -105,6 +109,10 @@ A catalog revision can be created offline. `getStorageStatus()` reports `ahead` 
 npm run typecheck
 npm test
 npm run build
+npm run examples
 ```
 
-Integration tests use real DoltLite databases and verify exact-byte historical reads, forward restore, project-isolated rewind, object publication and hydration, notebook/entity revisions, and path isolation.
+Tests use real DoltLite databases and cover runtime/semantic separation,
+concurrent slug claims, exact slug reuse, forward restores, terminal job audit,
+interrupted-commit recovery, snapshot bootstrap, and object-before-catalog
+backup ordering.

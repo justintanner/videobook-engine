@@ -2,6 +2,7 @@ export type NotebookCellType =
   | "prompt"
   | "character"
   | "scene"
+  | "asset"
   | "image"
   | "video";
 
@@ -33,6 +34,7 @@ export interface NotebookDocument {
   id: string;
   name: string;
   version: 2;
+  properties?: Record<string, unknown>;
   cells: NotebookCell[];
   edges: NotebookEdge[];
   createdAt: string;

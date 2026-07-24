@@ -1,7 +1,7 @@
 {
   "name": "videobook-engine",
-  "version": "0.2.0",
-  "description": "DoltLite-backed storage engine for Videobook notebooks and media",
+  "version": "1.0.0",
+  "description": "Dolt-native local-first storage engine for Videobook",
   "type": "module",
   "exports": {
     ".": {
@@ -17,29 +17,23 @@
   "scripts": {
     "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
     "build": "npm run clean && tsc",
+    "prepare": "npm run build",
     "prepack": "npm run build",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
     "test:watch": "vitest",
     "example:basic": "tsx examples/basic-usage.ts",
-    "example:projects": "tsx examples/project-management.ts",
-    "example:history": "tsx examples/revision-history.ts",
-    "examples": "tsx examples/basic-usage.ts && tsx examples/project-management.ts && tsx examples/revision-history.ts",
-    "bench": "vitest bench --config vitest.config.bench.ts"
+    "examples": "tsx examples/basic-usage.ts"
   },
   "engines": {
     "node": ">=20"
   },
   "dependencies": {
     "@dolthub/doltlite": "^0.11.37",
-    "better-sqlite3": "^11.10.0",
-    "proper-lockfile": "^4.1.2",
     "uuid": "^14.0.0"
   },
   "devDependencies": {
-    "@types/better-sqlite3": "^7.6.13",
     "@types/node": "^20.0.0",
-    "@types/proper-lockfile": "^4.1.4",
     "fast-check": "^4.5.3",
     "knip": "^6.11.0",
     "tsx": "^4.19.0",
