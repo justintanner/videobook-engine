@@ -291,7 +291,7 @@ describe("audio similarity API", () => {
     }
   });
 
-  it("upgrades the legacy runtime table without losing visual embeddings", async () => {
+  it("uses the v4 audio-capable runtime schema without an upgrade path", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "videobook-audio-upgrade-"));
     roots.push(root);
     const dataDir = path.join(root, "data");
@@ -317,38 +317,21 @@ describe("audio similarity API", () => {
 
     const catalog = new DatabaseSync(path.join(dataDir, "videobook.db"));
     try {
-      catalog.exec(`
-        DROP INDEX IF EXISTS runtime_similarity_kind;
-        DROP INDEX IF EXISTS runtime_similarity_object;
-        ALTER TABLE runtime_similarity_embeddings
-          RENAME TO runtime_similarity_embeddings_current;
-        CREATE TABLE runtime_similarity_embeddings (
-          id INTEGER PRIMARY KEY AUTOINCREMENT,
-          artifact_id TEXT NOT NULL,
-          kind TEXT NOT NULL CHECK (kind IN ('image', 'video')),
-          source_path TEXT NOT NULL,
-          object_hash TEXT NOT NULL,
-          embedding_space TEXT NOT NULL,
-          dimensions INTEGER NOT NULL,
-          vector_blob BLOB NOT NULL,
-          frame_count INTEGER,
-          updated_at INTEGER NOT NULL,
-          UNIQUE(artifact_id, embedding_space)
-        );
-        INSERT INTO runtime_similarity_embeddings(
-          id, artifact_id, kind, source_path, object_hash,
-          embedding_space, dimensions, vector_blob, frame_count, updated_at
+      const table = catalog
+        .prepare(
+          `SELECT sql FROM sqlite_master
+           WHERE type='table' AND name='runtime_similarity_embeddings'`,
         )
-        SELECT
-          id, artifact_id, kind, source_path, object_hash,
-          embedding_space, dimensions, vector_blob, frame_count, updated_at
-        FROM runtime_similarity_embeddings_current;
-        DROP TABLE runtime_similarity_embeddings_current;
-        CREATE INDEX runtime_similarity_kind
-          ON runtime_similarity_embeddings(kind, embedding_space, updated_at);
-        CREATE INDEX runtime_similarity_object
-          ON runtime_similarity_embeddings(object_hash, embedding_space);
-      `);
+        .get() as { sql: string };
+      expect(table.sql).toContain("'audio'");
+      expect(
+        catalog
+          .prepare(
+            `SELECT 1 AS present FROM sqlite_master
+             WHERE type='table' AND name='runtime_engine_leases'`,
+          )
+          .get(),
+      ).toBeUndefined();
     } finally {
       catalog.close();
     }

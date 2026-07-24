@@ -31,8 +31,8 @@ async function renameBook(
       ["book"],
       () => {
         context.store.db
-          .prepare("UPDATE book SET slug=? WHERE singleton=1")
-          .run(slug);
+          .prepare("UPDATE book SET slug=? WHERE book_id=?")
+          .run(slug, current.book_id);
       },
     );
     return ok(context.book(), mutation.revision);

@@ -2,10 +2,10 @@
 
 ## Project
 
-`videobook-engine` is an ESM TypeScript package for Node.js 22+. Version 2 is
-Dolt-native and deliberately has no compatibility or migration layer for the
-former multi-project catalog or the earlier Git/project-directory/SQLite-sidecar
-engine.
+`videobook-engine` is an ESM TypeScript package for Node.js 22+. Catalog
+schema v4 is Dolt-native and deliberately has no compatibility or migration
+layer for v3, the former multi-project catalog, or the earlier
+Git/project-directory/SQLite-sidecar engine.
 
 ## Commands
 
@@ -23,21 +23,27 @@ npx knip
 `src/engine.ts` exports the `createEngine(config)` factory and the namespaced
 `Engine` API. A new catalog requires `initialBookSlug`; subsequent opens use
 the singleton book stored in the catalog. Configuration accepts either
-`rootDir` or separate `dataDir` and `workspaceDir` paths.
+`rootDir` or separate `dataDir` and `workspaceDir` paths. The `book` table has
+one stable UUIDv7 row; it does not use a synthetic singleton column.
 
 - `dataDir/videobook.db` is the only database.
 - Semantic and runtime tables share that database.
 - Semantic tables are explicitly allowlisted, staged, and committed to Dolt.
-- `runtime_*` tables are never staged or versioned.
+- `runtime_*` tables are covered by the committed `dolt_ignore` policy and are
+  never staged or versioned.
 - `dataDir/objects/sha256/` is the immutable local content-addressed store.
 - `workspaceDir/<artifact UUID>/` is disposable materialization.
-- The singleton Book and artifact UUIDv7 identities are stable; active artifact
-  slugs are reusable.
-- Deletes tombstone semantic records, abort jobs, revoke leases, and invalidate
-  runtime/workspace state.
+- Book, artifact, entity, notebook, cell, edge, run, prompt, message, action,
+  timeline-slot, and timeline-audio surrogate identities are UUIDv7 values.
+- Deletes are hard deletes. Owned children cascade; referenced live artifacts
+  and entities return `IN_USE`; immutable CAS objects and Dolt history remain.
+- Timeline state is normalized across `timeline`, `timeline_slots`, and
+  `timeline_audio` and is only exposed through `engine.timeline`.
 - Restores are forward-only commits. The engine never rewinds a live branch.
 - Backup publishes referenced CAS objects before pushing the Dolt `main` branch.
 - An open engine never pulls or merges a live catalog.
+- Future collaboration uses DoltHub-native catalog forks with the same
+  `book_id`; fork/user/origin/PR APIs are deferred.
 
 Core modules are flat and single-purpose:
 
@@ -45,13 +51,16 @@ Core modules are flat and single-purpose:
 - `store.ts` — SQL transactions, Dolt staging/commit, outbox recovery, push
 - `books.ts` and `artifacts.ts` — singleton book and artifact lifecycle rules
 - `cas.ts`, `files.ts`, `media.ts` — objects, mappings, materialization
-- `domain.ts`, `metadata.ts`, `communications.ts` — normalized semantic data
+- `domain.ts`, `metadata.ts`, `timeline.ts`, `communications.ts` — normalized
+  semantic data
+- `ids.ts` — UUIDv7 generation and caller-ID validation
 - `job-queue.ts`, `runtime-services.ts`, `status.ts` — runtime coordination
 - `history.ts` — Dolt projections, generic action graph, forward restores
 - `storage.ts` — object publication and catalog backup
 
-Public domain operations return `Result<T, EngineError>`. Queue and lease
-primitives return direct runtime values and use owner IDs/fences for CAS.
+Public domain operations return `Result<T, EngineError>`. `IN_USE` errors
+include stable `{kind, id}` references. Queue and lease primitives return
+direct runtime values and use owner IDs/fences for CAS.
 
 ## Testing
 

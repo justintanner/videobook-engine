@@ -38,9 +38,9 @@ try {
     if (!manifest.ok) throw new Error(manifest.error.message);
     console.log(`Stored files: ${manifest.value.files.map((file) => file.name).join(", ")}`);
 
-    const timeline = await engine.metadata.book.write("timeline", {
+    const timeline = await engine.timeline.set({
       render: "landscape",
-      slots: [{ id: "opening", artifactId: script.artifactId }],
+      slots: [{ artifactId: script.artifactId }],
       audio: [],
     });
     if (!timeline.ok) throw new Error(timeline.error.message);

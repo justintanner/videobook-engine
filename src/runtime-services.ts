@@ -578,8 +578,8 @@ async function writeFailure(
         details: { ...info },
         writeSet: [`artifact-runtime:${artifact.artifact_id}`],
       },
-      ["artifact_events", "job_runs"],
-      (operationId, now) => {
+      ["job_runs"],
+      (_operationId, now) => {
         context.store.db
           .prepare(
             `INSERT INTO runtime_generation_errors(
@@ -613,13 +613,6 @@ async function writeFailure(
             }),
             now,
           );
-        context.store.db
-          .prepare(
-            `INSERT INTO artifact_events(
-              event_id, artifact_id, operation_id, event, details_json, created_at
-            ) VALUES (?, ?, ?, 'failed', ?, ?)`,
-          )
-          .run(uuidv7(), artifact.artifact_id, operationId, canonicalJson(info), now);
         context.store.db
           .prepare(
             `INSERT INTO job_runs(
@@ -661,8 +654,8 @@ async function clearFailure(
         artifactId: artifact.artifact_id,
         writeSet: [`artifact-runtime:${artifact.artifact_id}`],
       },
-      ["artifact_events"],
-      (operationId, now) => {
+      [],
+      (_operationId, now) => {
         context.store.db
           .prepare("DELETE FROM runtime_generation_errors WHERE artifact_id=?")
           .run(artifact.artifact_id);
@@ -673,13 +666,6 @@ async function clearFailure(
                  pid=NULL, deadline_at=NULL, updated_at=? WHERE artifact_id=?`,
           )
           .run(now, artifact.artifact_id);
-        context.store.db
-          .prepare(
-            `INSERT INTO artifact_events(
-              event_id, artifact_id, operation_id, event, details_json, created_at
-            ) VALUES (?, ?, ?, 'failure_cleared', '{}', ?)`,
-          )
-          .run(uuidv7(), artifact.artifact_id, operationId, now);
       },
     );
     return ok(true, mutation.revision);
@@ -723,7 +709,7 @@ function recoverArtifact(
 function recoverAll(context: EngineContext): Result<{ recovered: number }, EngineError> {
   return syncResultOf(() => {
     const artifacts = context.store.db
-      .prepare("SELECT artifact_id FROM artifacts WHERE deleted_at IS NULL")
+      .prepare("SELECT artifact_id FROM artifacts")
       .all() as unknown as Array<{ artifact_id: string }>;
     const recovered = context.store.runtime((now) => {
       let count = 0;

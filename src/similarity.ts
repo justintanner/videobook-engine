@@ -299,11 +299,9 @@ class LocalSimilarityApi implements SimilarityApi {
       );
       const artifactRows = this.context.store.db
         .prepare(
-          `SELECT artifact_id, slug, kind, data_json,
-                  created_at, updated_at, deleted_at
+          `SELECT artifact_id, slug, kind, created_at
            FROM artifacts
-           WHERE deleted_at IS NULL
-             AND kind IN (${artifactKinds.map(() => "?").join(", ")})
+           WHERE kind IN (${artifactKinds.map(() => "?").join(", ")})
            ORDER BY created_at, artifact_id`,
         )
         .all(...artifactKinds) as unknown as ArtifactRow[];
@@ -417,8 +415,7 @@ class LocalSimilarityApi implements SimilarityApi {
             `SELECT COUNT(*) AS count
              FROM runtime_text_similarity_documents d
              JOIN artifacts a ON a.artifact_id=d.artifact_id
-             WHERE d.embedding_space=?
-               AND a.deleted_at IS NULL`,
+             WHERE d.embedding_space=?`,
           )
           .get(this.textProvider.embeddingSpace) as unknown as {
           count: number;
@@ -1068,11 +1065,12 @@ class LocalSimilarityApi implements SimilarityApi {
   ): SelectedSource {
     const rows = this.context.store.db
       .prepare(
-        `SELECT artifact_id, path, object_hash, size_bytes, mime_type,
-                mtime_ms, created_at
-         FROM artifact_files
-         WHERE artifact_id=?
-         ORDER BY path`,
+        `SELECT f.artifact_id, f.path, f.object_hash, o.size_bytes,
+                f.mtime_ms, f.created_at
+         FROM artifact_files f
+         JOIN objects o ON o.object_hash=f.object_hash
+         WHERE f.artifact_id=?
+         ORDER BY f.path`,
       )
       .all(artifact.artifact_id) as unknown as FileRow[];
     const extension = kind === "image"
@@ -1185,7 +1183,6 @@ class LocalSimilarityApi implements SimilarityApi {
          FROM runtime_similarity_embeddings e
          JOIN artifacts a ON a.artifact_id=e.artifact_id
          WHERE e.kind=? AND e.embedding_space=?
-           AND a.deleted_at IS NULL
            AND e.id IN (${placeholders})`,
       )
       .all(kind, embeddingSpace, ...ids) as unknown as EmbeddingRow[];
@@ -1206,7 +1203,7 @@ class LocalSimilarityApi implements SimilarityApi {
        FROM runtime_similarity_embeddings e
        JOIN artifacts a ON a.artifact_id=e.artifact_id
        WHERE e.kind=? AND e.embedding_space=?
-         AND e.dimensions=? AND a.deleted_at IS NULL
+         AND e.dimensions=?
        ORDER BY e.id`,
     );
   }
@@ -1236,7 +1233,7 @@ class LocalSimilarityApi implements SimilarityApi {
          FROM runtime_text_similarity_chunks c
          JOIN artifacts a ON a.artifact_id=c.artifact_id
          WHERE c.embedding_space=?
-           AND c.dimensions=? AND a.deleted_at IS NULL
+           AND c.dimensions=?
          ORDER BY c.id`,
       )
       .all(embeddingSpace, dimensions) as unknown as TextChunkRow[];
@@ -1388,7 +1385,6 @@ class LocalSimilarityApi implements SimilarityApi {
          JOIN runtime_text_similarity_documents d ON d.id=c.document_id
          JOIN artifacts a ON a.artifact_id=c.artifact_id
          WHERE c.embedding_space=? AND c.dimensions=?
-           AND a.deleted_at IS NULL
            AND c.id IN (${placeholders})`,
       )
       .all(embeddingSpace, dimensions, ...ids) as unknown as TextChunkRow[];

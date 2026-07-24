@@ -1,8 +1,6 @@
 import { rm } from "node:fs/promises";
 
 import type { DoltDiffRow } from "@dolthub/doltlite";
-import { v7 as uuidv7 } from "uuid";
-
 import type {
   GetHistoryActionsOptions,
   HistoryAction,
@@ -28,10 +26,10 @@ import {
   resultOf,
   syncResultOf,
   type ArtifactRow,
-  type FileRow,
 } from "./context.js";
 import { artifactSlug } from "./artifacts.js";
 import { materializeArtifact } from "./files.js";
+import { assertUuidV7, isUuidV7, newUuidV7 } from "./ids.js";
 import {
   canonicalJson,
   EngineFault,
@@ -62,7 +60,6 @@ interface ActionRow {
   layout_json: string | null;
   details_json: string;
   created_at: number;
-  updated_at: number;
 }
 
 interface ActionEventRow {
@@ -79,7 +76,6 @@ interface HistoricalArtifactRow extends ArtifactRow {}
 interface MetadataSnapshotRow {
   key: string;
   value_json: string;
-  updated_at: number;
 }
 
 interface ArtifactMetadataSnapshotRow extends MetadataSnapshotRow {
@@ -89,7 +85,6 @@ interface ArtifactMetadataSnapshotRow extends MetadataSnapshotRow {
 interface WaveformSnapshotRow {
   artifact_id?: string;
   peaks_json: string;
-  updated_at: number;
 }
 
 interface EntitySnapshotRow {
@@ -100,18 +95,13 @@ interface EntitySnapshotRow {
   prompt: string | null;
   data_json: string;
   created_at: number;
-  updated_at: number;
-  deleted_at: number | null;
 }
 
 interface NotebookSnapshotRow {
   notebook_id: string;
   name: string;
-  version: number;
   properties_json: string;
   created_at: number;
-  updated_at: number;
-  deleted_at: number | null;
 }
 
 interface NotebookCellSnapshotRow {
@@ -126,7 +116,6 @@ interface NotebookCellSnapshotRow {
   model: string | null;
   inputs_json: string;
   output_artifact_id: string | null;
-  ordinal: number;
 }
 
 interface NotebookEdgeSnapshotRow {
@@ -135,7 +124,6 @@ interface NotebookEdgeSnapshotRow {
   source_cell_id: string;
   target_cell_id: string;
   target_input: string;
-  ordinal: number;
 }
 
 interface NotebookRunSnapshotRow {
@@ -143,35 +131,39 @@ interface NotebookRunSnapshotRow {
   notebook_id: string;
   status: string;
   started_at: number;
-  completed_at: number | null;
+  completed_at: number;
   cell_order_json: string;
   outputs_json: string;
   error: string | null;
 }
 
 interface TimelineSnapshotRow {
-  singleton: number;
+  book_id: string;
   render: string;
-  data_json: string;
-  updated_at: number;
 }
 
 interface TimelineSlotSnapshotRow {
   slot_id: string;
-  artifact_id: string | null;
+  artifact_id: string;
   ordinal: number;
-  data_json: string;
+  volume: number | null;
+  audio_fade_in: number | null;
+  audio_fade_out: number | null;
 }
 
 interface TimelineAudioSnapshotRow {
   audio_id: string;
-  artifact_id: string | null;
+  artifact_id: string;
   ordinal: number;
-  data_json: string;
+  start_frame: number;
+  duration_frames: number;
+  volume: number | null;
+  fade_in: number | null;
+  fade_out: number | null;
 }
 
 interface PromptSnapshotRow {
-  prompt_id: number;
+  prompt_id: string;
   surface: string;
   prompt: string;
   context_json: string;
@@ -182,6 +174,14 @@ interface MessageSnapshotRow {
   message_id: string;
   role: string;
   body_json: string;
+  created_at: number;
+}
+
+interface ArtifactFileSnapshotRow {
+  artifact_id: string;
+  path: string;
+  object_hash: string;
+  mtime_ms: number;
   created_at: number;
 }
 
@@ -263,9 +263,26 @@ function artifactHistory(
   artifactReference: string,
   limit: number,
 ): Revision[] {
-  const artifact = context.artifactRow(artifactReference, true);
-  return allRevisions(context)
-    .filter((revision) => revision.artifactId === artifact.artifact_id)
+  const revisions = allRevisions(context);
+  let artifactId: string;
+  if (isUuidV7(artifactReference)) {
+    artifactId = artifactReference;
+  } else {
+    try {
+      artifactId = context.artifactRow(artifactReference).artifact_id;
+    } catch {
+      const historical = revisions.find(
+        (revision) =>
+          revision.artifactSlug === artifactReference ||
+          revision.details?.slug === artifactReference ||
+          revision.details?.oldSlug === artifactReference,
+      );
+      if (!historical?.artifactId) return [];
+      artifactId = historical.artifactId;
+    }
+  }
+  return revisions
+    .filter((revision) => revision.artifactId === artifactId)
     .slice(0, Math.max(0, limit));
 }
 
@@ -400,11 +417,11 @@ async function restoreArtifact(
   replacementSlug?: string,
 ): Promise<Result<Revision, EngineError>> {
   return resultOf(async () => {
+    assertUuidV7(artifactId, "Artifact ID");
     const revision = requiredRevision(context, revisionReference);
     const target = context.store.db
       .prepare(
-        `SELECT artifact_id, slug, kind, data_json,
-                created_at, updated_at, deleted_at
+        `SELECT artifact_id, slug, kind, created_at
          FROM dolt_at_artifacts(?)
          WHERE artifact_id=?`,
       )
@@ -423,7 +440,7 @@ async function restoreArtifact(
     const owner = context.store.db
       .prepare(
         `SELECT artifact_id FROM artifacts
-         WHERE slug=? AND deleted_at IS NULL AND artifact_id<>?`,
+         WHERE slug=? AND artifact_id<>?`,
       )
       .get(desiredSlug, artifactId) as unknown as
       | { artifact_id: string }
@@ -438,13 +455,13 @@ async function restoreArtifact(
     const files = filesAt(context, revision.hash, artifactId);
     const metadata = context.store.db
       .prepare(
-        `SELECT key, value_json, updated_at
+        `SELECT key, value_json
          FROM dolt_at_artifact_metadata(?) WHERE artifact_id=?`,
       )
       .all(revision.hash, artifactId) as unknown as MetadataSnapshotRow[];
     const waveform = context.store.db
       .prepare(
-        `SELECT peaks_json, updated_at
+        `SELECT peaks_json
          FROM dolt_at_audio_waveforms(?) WHERE artifact_id=?`,
       )
       .get(revision.hash, artifactId) as unknown as
@@ -465,29 +482,22 @@ async function restoreArtifact(
         "artifact_files",
         "artifact_metadata",
         "audio_waveforms",
-        "artifact_events",
       ],
-      (operationId, now) => {
+      (_operationId, now) => {
         context.store.db
           .prepare(
             `INSERT INTO artifacts(
-              artifact_id, slug, kind, data_json,
-              created_at, updated_at, deleted_at
-            ) VALUES (?, ?, ?, ?, ?, ?, NULL)
+              artifact_id, slug, kind, created_at
+            ) VALUES (?, ?, ?, ?)
             ON CONFLICT(artifact_id) DO UPDATE SET
               slug=excluded.slug,
-              kind=excluded.kind,
-              data_json=excluded.data_json,
-              updated_at=excluded.updated_at,
-              deleted_at=NULL`,
+              kind=excluded.kind`,
           )
           .run(
             target.artifact_id,
             desiredSlug,
             target.kind,
-            target.data_json,
             target.created_at,
-            now,
           );
         context.store.db
           .prepare("DELETE FROM artifact_files WHERE artifact_id=?")
@@ -501,35 +511,20 @@ async function restoreArtifact(
         insertFiles(context, files);
         const insertMetadata = context.store.db.prepare(
           `INSERT INTO artifact_metadata(
-            artifact_id, key, value_json, updated_at
-          ) VALUES (?, ?, ?, ?)`,
+            artifact_id, key, value_json
+          ) VALUES (?, ?, ?)`,
         );
         for (const row of metadata) {
-          insertMetadata.run(artifactId, row.key, row.value_json, row.updated_at);
+          insertMetadata.run(artifactId, row.key, row.value_json);
         }
         if (waveform) {
           context.store.db
             .prepare(
-              `INSERT INTO audio_waveforms(
-                artifact_id, peaks_json, updated_at
-              ) VALUES (?, ?, ?)`,
+              `INSERT INTO audio_waveforms(artifact_id, peaks_json)
+               VALUES (?, ?)`,
             )
-            .run(artifactId, waveform.peaks_json, waveform.updated_at);
+            .run(artifactId, waveform.peaks_json);
         }
-        context.store.db
-          .prepare(
-            `INSERT INTO artifact_events(
-              event_id, artifact_id, operation_id, event,
-              details_json, created_at
-            ) VALUES (?, ?, ?, 'restored', ?, ?)`,
-          )
-          .run(
-            uuidv7(),
-            artifactId,
-            operationId,
-            canonicalJson({ fromRevision: revision.hash }),
-            now,
-          );
         resetArtifactRuntime(context, artifactId, now);
       },
     );
@@ -546,9 +541,9 @@ async function restoreBook(
   return resultOf(async () => {
     const revision = requiredRevision(context, revisionReference);
     const targetBook = context.store.db
-      .prepare("SELECT book_id, slug FROM dolt_at_book(?) WHERE singleton=1")
+      .prepare("SELECT book_id, slug, created_at FROM dolt_at_book(?)")
       .get(revision.hash) as unknown as
-      | { book_id: string; slug: string }
+      | { book_id: string; slug: string; created_at: number }
       | undefined;
     if (!targetBook) {
       throw new EngineFault({
@@ -556,76 +551,80 @@ async function restoreBook(
         message: `Book did not exist at ${revision.hash}`,
       });
     }
+    const currentBook = context.bookRow();
+    if (targetBook.book_id !== currentBook.book_id) {
+      throw new EngineFault({
+        code: "SCHEMA_INCOMPATIBLE",
+        message: "A restore cannot replace the catalog's stable book ID",
+      });
+    }
 
     const targetArtifacts = context.store.db
       .prepare(
-        `SELECT artifact_id, slug, kind, data_json,
-                created_at, updated_at, deleted_at
+        `SELECT artifact_id, slug, kind, created_at
          FROM dolt_at_artifacts(?)
-         WHERE deleted_at IS NULL ORDER BY artifact_id`,
+         ORDER BY artifact_id`,
       )
       .all(revision.hash) as unknown as HistoricalArtifactRow[];
     const targetIds = targetArtifacts.map((row) => row.artifact_id);
-    const targetFiles = rowsForArtifactIds<FileRow>(
+    const targetFiles = rowsForArtifactIds<ArtifactFileSnapshotRow>(
       context,
       "artifact_files",
-      "artifact_id, path, object_hash, size_bytes, mime_type, mtime_ms, created_at",
+      "artifact_id, path, object_hash, mtime_ms, created_at",
       revision.hash,
       targetIds,
     );
     const bookMetadata = context.store.db
       .prepare(
-        `SELECT key, value_json, updated_at
-         FROM dolt_at_book_metadata(?)`,
+        "SELECT key, value_json FROM dolt_at_book_metadata(?)",
       )
       .all(revision.hash) as unknown as MetadataSnapshotRow[];
     const artifactMetadata = rowsForArtifactIds<ArtifactMetadataSnapshotRow>(
       context,
       "artifact_metadata",
-      "artifact_id, key, value_json, updated_at",
+      "artifact_id, key, value_json",
       revision.hash,
       targetIds,
     );
     const waveforms = rowsForArtifactIds<WaveformSnapshotRow>(
       context,
       "audio_waveforms",
-      "artifact_id, peaks_json, updated_at",
+      "artifact_id, peaks_json",
       revision.hash,
       targetIds,
     );
     const entities = context.store.db
       .prepare(
         `SELECT entity_id, type, name, description, prompt,
-                data_json, created_at, updated_at, deleted_at
-         FROM dolt_at_entities(?) WHERE deleted_at IS NULL`,
+                data_json, created_at
+         FROM dolt_at_entities(?)`,
       )
       .all(revision.hash) as unknown as EntitySnapshotRow[];
     const notebooks = context.store.db
       .prepare(
-        `SELECT notebook_id, name, version, properties_json,
-                created_at, updated_at, deleted_at
-         FROM dolt_at_notebooks(?) WHERE deleted_at IS NULL`,
+        `SELECT notebook_id, name, properties_json, created_at
+         FROM dolt_at_notebooks(?)`,
       )
       .all(revision.hash) as unknown as NotebookSnapshotRow[];
     const notebookIds = notebooks.map((row) => row.notebook_id);
     const notebookCells = rowsForNotebookIds<NotebookCellSnapshotRow>(
       context,
-      "notebook_cells",
+      "cells",
       `notebook_id, cell_id, type, title, position_x, position_y,
-       entity_id, prompt, model, inputs_json, output_artifact_id, ordinal`,
+       entity_id, prompt, model, inputs_json, output_artifact_id`,
       revision.hash,
       notebookIds,
     );
     const notebookEdges = rowsForNotebookIds<NotebookEdgeSnapshotRow>(
       context,
-      "notebook_edges",
-      "notebook_id, edge_id, source_cell_id, target_cell_id, target_input, ordinal",
+      "edges",
+      "notebook_id, edge_id, source_cell_id, target_cell_id, target_input",
       revision.hash,
       notebookIds,
     );
     const notebookRuns = rowsForNotebookIds<NotebookRunSnapshotRow>(
       context,
-      "notebook_runs",
+      "runs",
       `run_id, notebook_id, status, started_at, completed_at,
        cell_order_json, outputs_json, error`,
       revision.hash,
@@ -633,19 +632,20 @@ async function restoreBook(
     );
     const timeline = context.store.db
       .prepare(
-        `SELECT singleton, render, data_json, updated_at
-         FROM dolt_at_timelines(?) WHERE singleton=1`,
+        "SELECT book_id, render FROM dolt_at_timeline(?)",
       )
       .get(revision.hash) as unknown as TimelineSnapshotRow | undefined;
     const timelineSlots = context.store.db
       .prepare(
-        `SELECT slot_id, artifact_id, ordinal, data_json
+        `SELECT slot_id, artifact_id, ordinal, volume,
+                audio_fade_in, audio_fade_out
          FROM dolt_at_timeline_slots(?)`,
       )
       .all(revision.hash) as unknown as TimelineSlotSnapshotRow[];
     const timelineAudio = context.store.db
       .prepare(
-        `SELECT audio_id, artifact_id, ordinal, data_json
+        `SELECT audio_id, artifact_id, ordinal, start_frame, duration_frames,
+                volume, fade_in, fade_out
          FROM dolt_at_timeline_audio(?)`,
       )
       .all(revision.hash) as unknown as TimelineAudioSnapshotRow[];
@@ -662,7 +662,7 @@ async function restoreBook(
       )
       .all(revision.hash) as unknown as MessageSnapshotRow[];
     const currentArtifactIds = context.store.db
-      .prepare("SELECT artifact_id FROM artifacts WHERE deleted_at IS NULL")
+      .prepare("SELECT artifact_id FROM artifacts")
       .all()
       .map((row) => (row as { artifact_id: string }).artifact_id);
 
@@ -681,121 +681,81 @@ async function restoreBook(
         "audio_waveforms",
         "entities",
         "notebooks",
-        "notebook_cells",
-        "notebook_edges",
-        "notebook_runs",
-        "timelines",
+        "cells",
+        "edges",
+        "runs",
+        "timeline",
         "timeline_slots",
         "timeline_audio",
         "prompt_entries",
         "messages",
-        "artifact_events",
         "job_runs",
       ],
-      (operationId, now) => {
+      (_operationId, now) => {
+        context.store.db.prepare("DELETE FROM timeline_slots").run();
+        context.store.db.prepare("DELETE FROM timeline_audio").run();
+        context.store.db.prepare("DELETE FROM edges").run();
+        context.store.db.prepare("DELETE FROM runs").run();
+        context.store.db.prepare("DELETE FROM cells").run();
+        context.store.db.prepare("DELETE FROM notebooks").run();
+        context.store.db.prepare("DELETE FROM artifact_metadata").run();
+        context.store.db.prepare("DELETE FROM audio_waveforms").run();
+        context.store.db.prepare("DELETE FROM artifact_files").run();
+        context.store.db.prepare("DELETE FROM entities").run();
+        context.store.db.prepare("DELETE FROM artifacts").run();
+
         context.store.db
-          .prepare("UPDATE book SET slug=? WHERE singleton=1")
-          .run(targetBook.slug);
-        context.store.db
-          .prepare(
-            `UPDATE artifacts SET deleted_at=?, updated_at=?
-             WHERE deleted_at IS NULL`,
-          )
-          .run(now, now);
-        const upsertArtifact = context.store.db.prepare(
-          `INSERT INTO artifacts(
-            artifact_id, slug, kind, data_json,
-            created_at, updated_at, deleted_at
-          ) VALUES (?, ?, ?, ?, ?, ?, NULL)
-          ON CONFLICT(artifact_id) DO UPDATE SET
-            slug=excluded.slug,
-            kind=excluded.kind,
-            data_json=excluded.data_json,
-            updated_at=excluded.updated_at,
-            deleted_at=NULL`,
-        );
-        const insertArtifactEvent = context.store.db.prepare(
-          `INSERT INTO artifact_events(
-            event_id, artifact_id, operation_id, event,
-            details_json, created_at
-          ) VALUES (?, ?, ?, 'restored', ?, ?)`,
+          .prepare("UPDATE book SET slug=?, created_at=? WHERE book_id=?")
+          .run(targetBook.slug, targetBook.created_at, targetBook.book_id);
+        const insertArtifact = context.store.db.prepare(
+          `INSERT INTO artifacts(artifact_id, slug, kind, created_at)
+           VALUES (?, ?, ?, ?)`,
         );
         for (const row of targetArtifacts) {
-          upsertArtifact.run(
+          insertArtifact.run(
             row.artifact_id,
             row.slug,
             row.kind,
-            row.data_json,
             row.created_at,
-            now,
-          );
-          insertArtifactEvent.run(
-            uuidv7(),
-            row.artifact_id,
-            operationId,
-            canonicalJson({ fromRevision: revision.hash }),
-            now,
           );
         }
 
-        context.store.db.prepare("DELETE FROM artifact_files").run();
-        context.store.db.prepare("DELETE FROM artifact_metadata").run();
-        context.store.db.prepare("DELETE FROM audio_waveforms").run();
         insertFiles(context, targetFiles);
         const insertArtifactMetadata = context.store.db.prepare(
-          `INSERT INTO artifact_metadata(
-            artifact_id, key, value_json, updated_at
-          ) VALUES (?, ?, ?, ?)`,
+          `INSERT INTO artifact_metadata(artifact_id, key, value_json)
+           VALUES (?, ?, ?)`,
         );
         for (const row of artifactMetadata) {
           insertArtifactMetadata.run(
             row.artifact_id,
             row.key,
             row.value_json,
-            row.updated_at,
           );
         }
         const insertWaveform = context.store.db.prepare(
-          `INSERT INTO audio_waveforms(
-            artifact_id, peaks_json, updated_at
-          ) VALUES (?, ?, ?)`,
+          `INSERT INTO audio_waveforms(artifact_id, peaks_json)
+           VALUES (?, ?)`,
         );
         for (const row of waveforms) {
           if (!row.artifact_id) continue;
-          insertWaveform.run(row.artifact_id, row.peaks_json, row.updated_at);
+          insertWaveform.run(row.artifact_id, row.peaks_json);
         }
 
         context.store.db.prepare("DELETE FROM book_metadata").run();
         const insertBookMetadata = context.store.db.prepare(
-          `INSERT INTO book_metadata(key, value_json, updated_at)
-           VALUES (?, ?, ?)`,
+          "INSERT INTO book_metadata(key, value_json) VALUES (?, ?)",
         );
         for (const row of bookMetadata) {
-          insertBookMetadata.run(row.key, row.value_json, row.updated_at);
+          insertBookMetadata.run(row.key, row.value_json);
         }
 
-        context.store.db
-          .prepare(
-            `UPDATE entities SET deleted_at=?, updated_at=?
-             WHERE deleted_at IS NULL`,
-          )
-          .run(now, now);
-        const upsertEntity = context.store.db.prepare(
+        const insertEntity = context.store.db.prepare(
           `INSERT INTO entities(
-            entity_id, type, name, description, prompt,
-            data_json, created_at, updated_at, deleted_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)
-          ON CONFLICT(entity_id) DO UPDATE SET
-            type=excluded.type,
-            name=excluded.name,
-            description=excluded.description,
-            prompt=excluded.prompt,
-            data_json=excluded.data_json,
-            updated_at=excluded.updated_at,
-            deleted_at=NULL`,
+            entity_id, type, name, description, prompt, data_json, created_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
         );
         for (const row of entities) {
-          upsertEntity.run(
+          insertEntity.run(
             row.entity_id,
             row.type,
             row.name,
@@ -803,67 +763,59 @@ async function restoreBook(
             row.prompt,
             row.data_json,
             row.created_at,
-            now,
           );
         }
 
-        context.store.db.prepare("DELETE FROM notebook_edges").run();
-        context.store.db.prepare("DELETE FROM notebook_cells").run();
-        context.store.db.prepare("DELETE FROM notebook_runs").run();
-        context.store.db
-          .prepare(
-            `UPDATE notebooks SET deleted_at=?, updated_at=?
-             WHERE deleted_at IS NULL`,
-          )
-          .run(now, now);
-        const upsertNotebook = context.store.db.prepare(
+        const insertNotebook = context.store.db.prepare(
           `INSERT INTO notebooks(
-            notebook_id, name, version, properties_json,
-            created_at, updated_at, deleted_at
-          ) VALUES (?, ?, ?, ?, ?, ?, NULL)
-          ON CONFLICT(notebook_id) DO UPDATE SET
-            name=excluded.name,
-            version=excluded.version,
-            properties_json=excluded.properties_json,
-            updated_at=excluded.updated_at,
-            deleted_at=NULL`,
+            notebook_id, name, properties_json, created_at
+          ) VALUES (?, ?, ?, ?)`,
         );
         for (const row of notebooks) {
-          upsertNotebook.run(
+          insertNotebook.run(
             row.notebook_id,
             row.name,
-            row.version,
             row.properties_json,
             row.created_at,
-            now,
           );
         }
         insertNotebookChildren(context, notebookCells, notebookEdges, notebookRuns);
 
-        context.store.db.prepare("DELETE FROM timeline_slots").run();
-        context.store.db.prepare("DELETE FROM timeline_audio").run();
-        context.store.db.prepare("DELETE FROM timelines").run();
-        if (timeline) {
-          context.store.db
-            .prepare(
-              `INSERT INTO timelines(singleton, render, data_json, updated_at)
-               VALUES (1, ?, ?, ?)`,
-            )
-            .run(timeline.render, timeline.data_json, timeline.updated_at);
-        }
+        context.store.db
+          .prepare("UPDATE timeline SET render=? WHERE book_id=?")
+          .run(timeline?.render ?? "landscape", targetBook.book_id);
         const insertSlot = context.store.db.prepare(
-          `INSERT INTO timeline_slots(slot_id, artifact_id, ordinal, data_json)
-           VALUES (?, ?, ?, ?)`,
+          `INSERT INTO timeline_slots(
+            slot_id, artifact_id, ordinal, volume, audio_fade_in, audio_fade_out
+          ) VALUES (?, ?, ?, ?, ?, ?)`,
         );
         for (const row of timelineSlots) {
-          insertSlot.run(row.slot_id, row.artifact_id, row.ordinal, row.data_json);
+          insertSlot.run(
+            row.slot_id,
+            row.artifact_id,
+            row.ordinal,
+            row.volume,
+            row.audio_fade_in,
+            row.audio_fade_out,
+          );
         }
         const insertAudio = context.store.db.prepare(
-          `INSERT INTO timeline_audio(audio_id, artifact_id, ordinal, data_json)
-           VALUES (?, ?, ?, ?)`,
+          `INSERT INTO timeline_audio(
+            audio_id, artifact_id, ordinal, start_frame, duration_frames,
+            volume, fade_in, fade_out
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         );
         for (const row of timelineAudio) {
-          insertAudio.run(row.audio_id, row.artifact_id, row.ordinal, row.data_json);
+          insertAudio.run(
+            row.audio_id,
+            row.artifact_id,
+            row.ordinal,
+            row.start_frame,
+            row.duration_frames,
+            row.volume,
+            row.fade_in,
+            row.fade_out,
+          );
         }
 
         context.store.db.prepare("DELETE FROM prompt_entries").run();
@@ -903,6 +855,10 @@ async function restoreBook(
         context.store.db.prepare("DELETE FROM runtime_artifact_views").run();
         context.store.db.prepare("DELETE FROM runtime_pending_tasks").run();
         context.store.db.prepare("DELETE FROM runtime_generation_errors").run();
+        context.store.db.prepare("DELETE FROM runtime_similarity_embeddings").run();
+        context.store.db
+          .prepare("DELETE FROM runtime_text_similarity_documents")
+          .run();
         for (const row of targetArtifacts) {
           resetArtifactRuntime(context, row.artifact_id, now);
         }
@@ -1011,9 +967,19 @@ async function recordAction(
 ): Promise<Result<HistoryActionRevision, EngineError>> {
   return resultOf(async () => {
     assertWriteSet(context, input.baseRevision, input.writeSet ?? []);
-    const actionId = input.actionId ?? uuidv7();
+    const actionId = input.actionId ?? newUuidV7();
+    assertUuidV7(actionId, "Action ID");
     const phase = input.phase ?? "completed";
     const scope = input.scope ?? "book";
+    assertActionPhase(phase);
+    assertActionScope(scope);
+    for (const parentId of input.parentActionIds ?? []) {
+      assertUuidV7(parentId, "Parent action ID");
+      requiredAction(context, parentId);
+    }
+    if (input.targetActionId) {
+      assertUuidV7(input.targetActionId, "Target action ID");
+    }
     const actor = input.actor ?? "videobook";
     const inputArtifacts = resolveArtifactReferences(
       context,
@@ -1053,8 +1019,8 @@ async function recordAction(
             `INSERT INTO actions(
               action_id, operation, scope, actor, lane, phase,
               base_revision, target_artifact_id, target_action_id,
-              layout_json, details_json, created_at, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+              layout_json, details_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(action_id) DO UPDATE SET
               operation=excluded.operation,
               scope=excluded.scope,
@@ -1065,8 +1031,7 @@ async function recordAction(
               target_artifact_id=excluded.target_artifact_id,
               target_action_id=excluded.target_action_id,
               layout_json=excluded.layout_json,
-              details_json=excluded.details_json,
-              updated_at=excluded.updated_at`,
+              details_json=excluded.details_json`,
           )
           .run(
             actionId,
@@ -1081,7 +1046,6 @@ async function recordAction(
             input.layout ? canonicalJson(input.layout) : null,
             canonicalJson(input.details ?? {}),
             now,
-            now,
           );
         context.store.db
           .prepare(
@@ -1091,7 +1055,7 @@ async function recordAction(
             ) VALUES (?, ?, ?, ?, ?, ?)`,
           )
           .run(
-            uuidv7(),
+            newUuidV7(),
             actionId,
             operationId,
             phase,
@@ -1355,7 +1319,7 @@ function abortActiveJobs(
     const errorJson = canonicalJson({ message });
     update.run(errorJson, now, job.id);
     insertRun.run(
-      uuidv7(),
+      newUuidV7(),
       job.artifact_id,
       job.type,
       job.payload_json,
@@ -1371,14 +1335,13 @@ function filesAt(
   context: EngineContext,
   revision: string,
   artifactId: string,
-): FileRow[] {
+): ArtifactFileSnapshotRow[] {
   return context.store.db
     .prepare(
-      `SELECT artifact_id, path, object_hash, size_bytes, mime_type,
-              mtime_ms, created_at
+      `SELECT artifact_id, path, object_hash, mtime_ms, created_at
        FROM dolt_at_artifact_files(?) WHERE artifact_id=? ORDER BY path`,
     )
-    .all(revision, artifactId) as unknown as FileRow[];
+    .all(revision, artifactId) as unknown as ArtifactFileSnapshotRow[];
 }
 
 function rowsForArtifactIds<T>(
@@ -1400,7 +1363,7 @@ function rowsForArtifactIds<T>(
 
 function rowsForNotebookIds<T>(
   context: EngineContext,
-  table: "notebook_cells" | "notebook_edges" | "notebook_runs",
+  table: "cells" | "edges" | "runs",
   columns: string,
   revision: string,
   notebookIds: string[],
@@ -1415,20 +1378,20 @@ function rowsForNotebookIds<T>(
     .all(revision, ...notebookIds) as unknown as T[];
 }
 
-function insertFiles(context: EngineContext, files: FileRow[]): void {
+function insertFiles(
+  context: EngineContext,
+  files: ArtifactFileSnapshotRow[],
+): void {
   const insert = context.store.db.prepare(
     `INSERT INTO artifact_files(
-      artifact_id, path, object_hash, size_bytes, mime_type,
-      mtime_ms, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      artifact_id, path, object_hash, mtime_ms, created_at
+    ) VALUES (?, ?, ?, ?, ?)`,
   );
   for (const row of files) {
     insert.run(
       row.artifact_id,
       row.path,
       row.object_hash,
-      row.size_bytes,
-      row.mime_type,
       row.mtime_ms,
       row.created_at,
     );
@@ -1442,10 +1405,10 @@ function insertNotebookChildren(
   runs: NotebookRunSnapshotRow[],
 ): void {
   const insertCell = context.store.db.prepare(
-    `INSERT INTO notebook_cells(
+    `INSERT INTO cells(
       notebook_id, cell_id, type, title, position_x, position_y,
-      entity_id, prompt, model, inputs_json, output_artifact_id, ordinal
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      entity_id, prompt, model, inputs_json, output_artifact_id
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   for (const row of cells) {
     insertCell.run(
@@ -1460,13 +1423,12 @@ function insertNotebookChildren(
       row.model,
       row.inputs_json,
       row.output_artifact_id,
-      row.ordinal,
     );
   }
   const insertEdge = context.store.db.prepare(
-    `INSERT INTO notebook_edges(
-      notebook_id, edge_id, source_cell_id, target_cell_id, target_input, ordinal
-    ) VALUES (?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO edges(
+      notebook_id, edge_id, source_cell_id, target_cell_id, target_input
+    ) VALUES (?, ?, ?, ?, ?)`,
   );
   for (const row of edges) {
     insertEdge.run(
@@ -1475,11 +1437,10 @@ function insertNotebookChildren(
       row.source_cell_id,
       row.target_cell_id,
       row.target_input,
-      row.ordinal,
     );
   }
   const insertRun = context.store.db.prepare(
-    `INSERT INTO notebook_runs(
+    `INSERT INTO runs(
       run_id, notebook_id, status, started_at, completed_at,
       cell_order_json, outputs_json, error
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -1605,6 +1566,27 @@ function historyArtifactKind(kind: ArtifactRow["kind"]): HistoryArtifactKind {
   return kind;
 }
 
+function assertActionPhase(value: string): asserts value is HistoryActionPhase {
+  if (
+    ![
+      "requested",
+      "started",
+      "completed",
+      "failed",
+      "cancelled",
+      "conflicted",
+    ].includes(value)
+  ) {
+    throw new Error(`Invalid action phase: ${value}`);
+  }
+}
+
+function assertActionScope(value: string): asserts value is HistoryActionScope {
+  if (!["book", "artifact", "layout", "external", "system"].includes(value)) {
+    throw new Error(`Invalid action scope: ${value}`);
+  }
+}
+
 function titleForOperation(operation: string): string {
   return operation.replaceAll("_", " ").replaceAll("-", " ");
 }
@@ -1612,6 +1594,6 @@ function titleForOperation(operation: string): string {
 const ACTION_SELECT = `
   SELECT action_id, operation, scope, actor, lane, phase,
          base_revision, target_artifact_id, target_action_id,
-         layout_json, details_json, created_at, updated_at
+         layout_json, details_json, created_at
   FROM actions
 `;

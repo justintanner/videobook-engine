@@ -16,19 +16,16 @@ import { ObjectStore } from "./cas.js";
 import { DoltStore, EngineFault } from "./store.js";
 
 interface BookRow {
-  singleton: number;
   book_id: string;
   slug: string;
+  created_at: number;
 }
 
 export interface ArtifactRow {
   artifact_id: string;
   slug: string;
   kind: ArtifactKind;
-  data_json: string;
   created_at: number;
-  updated_at: number;
-  deleted_at: number | null;
 }
 
 export interface FileRow {
@@ -36,7 +33,6 @@ export interface FileRow {
   path: string;
   object_hash: string;
   size_bytes: number;
-  mime_type: string | null;
   mtime_ms: number;
   created_at: number;
 }
@@ -106,7 +102,7 @@ export class EngineContext {
 
   bookRow(): BookRow {
     const row = this.store.db
-      .prepare("SELECT singleton, book_id, slug FROM book WHERE singleton=1")
+      .prepare("SELECT book_id, slug, created_at FROM book")
       .get() as unknown as BookRow | undefined;
     if (!row) {
       throw new EngineFault({
@@ -118,22 +114,19 @@ export class EngineContext {
   }
 
   book(row = this.bookRow()): Book {
-    return { bookId: row.book_id, slug: row.slug };
+    return {
+      bookId: row.book_id,
+      slug: row.slug,
+      createdAt: row.created_at,
+    };
   }
 
-  artifactRow(
-    reference: string,
-    includeDeleted = false,
-  ): ArtifactRow {
-    const deletedClause = includeDeleted
-      ? "AND (artifact_id = ? OR (slug = ? AND deleted_at IS NULL))"
-      : "AND deleted_at IS NULL AND (artifact_id = ? OR slug = ?)";
+  artifactRow(reference: string): ArtifactRow {
     const row = this.store.db
       .prepare(
-        `SELECT artifact_id, slug, kind, data_json,
-                created_at, updated_at, deleted_at
+        `SELECT artifact_id, slug, kind, created_at
          FROM artifacts
-         WHERE 1=1 ${deletedClause}
+         WHERE artifact_id = ? OR slug = ?
          ORDER BY CASE WHEN artifact_id = ? THEN 0 ELSE 1 END
          LIMIT 1`,
       )
@@ -152,8 +145,7 @@ export class EngineContext {
   artifactRowById(artifactId: string): ArtifactRow {
     const row = this.store.db
       .prepare(
-        `SELECT artifact_id, slug, kind, data_json,
-                created_at, updated_at, deleted_at
+        `SELECT artifact_id, slug, kind, created_at
          FROM artifacts
          WHERE artifact_id = ?`,
       )
@@ -173,7 +165,6 @@ export class EngineContext {
       slug: row.slug,
       kind: row.kind,
       createdAt: row.created_at,
-      updatedAt: row.updated_at,
       path: this.artifactPath(row.artifact_id),
     };
   }
@@ -218,9 +209,12 @@ function toError(error: unknown): EngineError {
   const message = error instanceof Error ? error.message : String(error);
   if (
     message.includes("artifacts_active_slug") ||
-    message.includes("UNIQUE constraint failed")
+    /UNIQUE constraint failed: artifacts\.slug/i.test(message)
   ) {
     return { code: "SLUG_CONFLICT", message };
+  }
+  if (/UNIQUE constraint failed/i.test(message)) {
+    return { code: "ALREADY_EXISTS", message };
   }
   if (/object unavailable/i.test(message)) {
     return { code: "OBJECT_UNAVAILABLE", message };

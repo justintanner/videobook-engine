@@ -15,7 +15,6 @@ import type {
 } from "./engine-types.js";
 import {
   RUNTIME_SCHEMA_SQL,
-  RUNTIME_SIMILARITY_SCHEMA_SQL,
   RUNTIME_TABLES,
   SCHEMA_VERSION,
   SEMANTIC_SCHEMA_SQL,
@@ -217,18 +216,41 @@ export class DoltStore {
         });
       }
       this.db.exec(SEMANTIC_SCHEMA_SQL);
+      this.db.exec(
+        `CREATE TABLE IF NOT EXISTS dolt_ignore(
+          pattern TEXT NOT NULL,
+          ignored TINYINT NOT NULL,
+          PRIMARY KEY(pattern)
+        )`,
+      );
+      this.db
+        .prepare(
+          `INSERT INTO dolt_ignore(pattern, ignored)
+           VALUES ('runtime_%', 1), ('sqlite_sequence', 1)
+           ON CONFLICT(pattern) DO UPDATE SET ignored=excluded.ignored`,
+        )
+        .run();
+      const now = Date.now();
       this.db
         .prepare(
           "INSERT INTO engine_schema(singleton, version, created_at) VALUES (1, ?, ?)",
         )
-        .run(SCHEMA_VERSION, Date.now());
+        .run(SCHEMA_VERSION, now);
       this.db
         .prepare(
-          "INSERT INTO book(singleton, book_id, slug) VALUES (1, ?, ?)",
+          "INSERT INTO book(book_id, slug, created_at) VALUES (?, ?, ?)",
         )
-        .run(initialBook.bookId, initialBook.slug);
+        .run(initialBook.bookId, initialBook.slug, now);
+      this.db
+        .prepare(
+          "INSERT INTO timeline(book_id, render) VALUES (?, 'landscape')",
+        )
+        .run(initialBook.bookId);
       this.stageTables(SEMANTIC_TABLES);
-      this.assertOnlySemanticStaged();
+      this.db
+        .prepare("SELECT dolt_add('dolt_ignore') AS result")
+        .get();
+      this.assertOnlyVersionedStaged();
       this.sqlCommit("Initialize Videobook book");
     } else {
       const row = this.db
@@ -243,14 +265,14 @@ export class DoltStore {
           message: `Database schema ${row?.version ?? "unknown"} is not supported by engine schema ${SCHEMA_VERSION}`,
         });
       }
-      const book = this.db
-        .prepare("SELECT book_id FROM book WHERE singleton=1")
-        .get() as unknown as { book_id: string } | undefined;
-      if (!book) {
+      const books = this.db
+        .prepare("SELECT book_id FROM book")
+        .all() as unknown as Array<{ book_id: string }>;
+      if (books.length !== 1) {
         this.db.close();
         throw new EngineFault({
           code: "SCHEMA_INCOMPATIBLE",
-          message: "Book catalog is missing its singleton book record",
+          message: `Book catalog must contain exactly one book record; found ${books.length}`,
         });
       }
       if (this.db.doltActiveBranch() !== "main") {
@@ -262,7 +284,6 @@ export class DoltStore {
       }
     }
 
-    this.upgradeRuntimeSimilaritySchema();
     this.db.exec(RUNTIME_SCHEMA_SQL);
     this.db
       .prepare(
@@ -294,42 +315,6 @@ export class DoltStore {
     this.db
       .prepare("SELECT dolt_remote('add', ?, ?) AS result")
       .get(remote.name, remote.url);
-  }
-
-  private upgradeRuntimeSimilaritySchema(): void {
-    const row = this.db
-      .prepare(
-        `SELECT sql FROM sqlite_master
-         WHERE type='table' AND name='runtime_similarity_embeddings'`,
-      )
-      .get() as unknown as { sql: string } | undefined;
-    if (!row || row.sql.includes("'audio'")) return;
-
-    this.begin();
-    try {
-      this.db.exec(`
-        DROP INDEX IF EXISTS runtime_similarity_kind;
-        DROP INDEX IF EXISTS runtime_similarity_object;
-        ALTER TABLE runtime_similarity_embeddings
-          RENAME TO runtime_similarity_embeddings_legacy;
-      `);
-      this.db.exec(RUNTIME_SIMILARITY_SCHEMA_SQL);
-      this.db.exec(`
-        INSERT INTO runtime_similarity_embeddings(
-          id, artifact_id, kind, source_path, object_hash,
-          embedding_space, dimensions, vector_blob, frame_count, updated_at
-        )
-        SELECT
-          id, artifact_id, kind, source_path, object_hash,
-          embedding_space, dimensions, vector_blob, frame_count, updated_at
-        FROM runtime_similarity_embeddings_legacy;
-        DROP TABLE runtime_similarity_embeddings_legacy;
-      `);
-      this.commitSql();
-    } catch (error) {
-      this.rollback();
-      throw error;
-    }
   }
 
   private recoverOutbox(): void {
@@ -374,7 +359,7 @@ export class DoltStore {
       if (changed) changedTables.push(table);
     }
     this.stageTables(changedTables);
-    this.assertOnlySemanticStaged();
+    this.assertOnlyVersionedStaged();
     const hasStaged = this.db
       .doltStatus()
       .some((entry) => entry.staged === 1);
@@ -406,20 +391,23 @@ export class DoltStore {
 
   private stageTables(tables: readonly SemanticTable[]): void {
     const unique = uniqueSemanticTables(tables);
-    if (unique.length === 0) return;
-    const placeholders = unique.map(() => "?").join(", ");
-    this.db
-      .prepare(`SELECT dolt_add(${placeholders}) AS result`)
-      .get(...unique);
+    for (const table of unique) {
+      this.db
+        .prepare("SELECT dolt_add(?) AS result")
+        .get(table);
+    }
   }
 
-  private assertOnlySemanticStaged(): void {
+  private assertOnlyVersionedStaged(): void {
     for (const entry of this.db.doltStatus()) {
       if (entry.staged !== 1) continue;
-      if (!isSemanticTable(entry.table_name)) {
+      if (
+        !isSemanticTable(entry.table_name) &&
+        entry.table_name !== "dolt_ignore"
+      ) {
         throw new EngineFault({
           code: "STORAGE_ERROR",
-          message: `Refusing to commit non-semantic table ${entry.table_name}`,
+          message: `Refusing to commit non-versioned table ${entry.table_name}`,
         });
       }
     }

@@ -62,19 +62,14 @@ async function resolveAllArtifacts(
     }
     const rows = context.store.db
       .prepare(
-        `SELECT artifact_id, slug, kind, data_json,
-                created_at, updated_at, deleted_at
-         FROM artifacts
-         WHERE deleted_at IS NULL`,
+        `SELECT artifact_id, slug, kind, created_at
+         FROM artifacts`,
       )
       .all() as unknown as Array<{
       artifact_id: string;
       slug: string;
       kind: ResolvedArtifact["artifactType"];
-      data_json: string;
       created_at: number;
-      updated_at: number;
-      deleted_at: null;
     }>;
     const bySlug = new Map(rows.map((row) => [row.slug, row]));
     const files = createFilesApi(context);

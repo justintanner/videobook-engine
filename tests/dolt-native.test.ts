@@ -10,10 +10,17 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 
 import { DatabaseSync } from "@dolthub/doltlite";
+import { v7 as uuidv7 } from "uuid";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { createEngine, type Engine } from "../src/engine.js";
 import type { ContentStore } from "../src/engine-types.js";
+import {
+  RUNTIME_TABLES,
+  SCHEMA_VERSION,
+  SEMANTIC_SCHEMA_SQL,
+  SEMANTIC_TABLES,
+} from "../src/schema.js";
 
 const roots: string[] = [];
 
@@ -85,6 +92,20 @@ async function removeRoot(root: string): Promise<void> {
   throw lastError;
 }
 
+function commitTables(
+  db: DatabaseSync,
+  tables: string[],
+  message: string,
+): string {
+  for (const table of tables) {
+    db.prepare("SELECT dolt_add(?) AS result").get(table);
+  }
+  const row = db
+    .prepare("SELECT dolt_commit('-m', ?) AS hash")
+    .get(message) as { hash: string };
+  return row.hash;
+}
+
 describe("single-book Dolt engine", () => {
   it("initializes exactly one book and reopens it without initialization input", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "videobook-book-"));
@@ -111,13 +132,14 @@ describe("single-book Dolt engine", () => {
     const bookColumns = (
       catalog.prepare("PRAGMA table_info(book)").all() as Array<{ name: string }>
     ).map((column) => column.name);
-    expect(bookColumns).toEqual(["singleton", "book_id", "slug"]);
+    expect(bookColumns).toEqual(["book_id", "slug", "created_at"]);
     catalog.close();
 
     const reopened = createEngine({ dataDir, workspaceDir });
     expect(reopened.book.get()).toEqual({
       bookId: first.bookId,
       slug: "renamed-book",
+      createdAt: first.createdAt,
     });
     reopened.close();
 
@@ -130,7 +152,74 @@ describe("single-book Dolt engine", () => {
     suppliedAgain.close();
   });
 
-  it("rejects older catalog schemas instead of migrating projects", async () => {
+  it("creates the exact normalized v4 semantic and runtime schema", async () => {
+    const { engine, dataDir } = await setup();
+    expect(SCHEMA_VERSION).toBe(4);
+    engine.close();
+
+    const db = new DatabaseSync(path.join(dataDir, "videobook.db"));
+    const tables = (
+      db
+        .prepare(
+          `SELECT name FROM sqlite_master
+           WHERE type='table'
+             AND name NOT LIKE 'sqlite_%'
+             AND name NOT LIKE 'dolt_%'
+           ORDER BY name`,
+        )
+        .all() as Array<{ name: string }>
+    ).map((row) => row.name);
+    expect(tables).toEqual(
+      [...SEMANTIC_TABLES, ...RUNTIME_TABLES].sort(),
+    );
+    expect(tables).toHaveLength(39);
+
+    const columns = (table: string) =>
+      (
+        db.prepare(`PRAGMA table_info(${table})`).all() as Array<{
+          name: string;
+        }>
+      ).map((column) => column.name);
+    expect(columns("artifacts")).toEqual([
+      "artifact_id",
+      "slug",
+      "kind",
+      "created_at",
+    ]);
+    expect(columns("artifact_files")).toEqual([
+      "artifact_id",
+      "path",
+      "object_hash",
+      "mtime_ms",
+      "created_at",
+    ]);
+    expect(columns("notebooks")).toEqual([
+      "notebook_id",
+      "name",
+      "properties_json",
+      "created_at",
+    ]);
+    expect(columns("prompt_entries")[0]).toBe("prompt_id");
+    expect(
+      (db
+        .prepare("SELECT version FROM engine_schema WHERE singleton=1")
+        .get() as { version: number }).version,
+    ).toBe(4);
+    expect(
+      db
+        .prepare(
+          `SELECT 1 AS present FROM sqlite_master
+           WHERE name IN (
+             'notebook_cells','notebook_edges','notebook_runs',
+             'timelines','artifact_events','runtime_engine_leases'
+           )`,
+        )
+        .get(),
+    ).toBeUndefined();
+    db.close();
+  });
+
+  it("rejects v3 catalogs instead of migrating them", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "videobook-old-schema-"));
     roots.push(root);
     const dataDir = path.join(root, "data");
@@ -143,7 +232,7 @@ describe("single-book Dolt engine", () => {
         created_at INTEGER NOT NULL
       );
       INSERT INTO engine_schema(singleton, version, created_at)
-      VALUES (1, 2, 0);`,
+      VALUES (1, 3, 0);`,
     );
     db.close();
 
@@ -152,7 +241,7 @@ describe("single-book Dolt engine", () => {
         dataDir,
         workspaceDir: path.join(root, "workspace"),
       }),
-    ).toThrow("Database schema 2 is not supported");
+    ).toThrow("Database schema 3 is not supported");
   });
 
   it("keeps semantic history and runtime state in one database without projects", async () => {
@@ -194,6 +283,369 @@ describe("single-book Dolt engine", () => {
         (row) => row.table_name === "runtime_artifact_views" && row.staged === 1,
       ),
     ).toBe(false);
+    db.close();
+  });
+
+  it("round-trips the typed timeline with stable UUIDv7 row identities", async () => {
+    const { engine } = await setup();
+    const video = value(
+      await engine.artifacts.create({ kind: "video", slug: "vid-timeline" }),
+    );
+    const audio = value(
+      await engine.artifacts.create({ kind: "audio", slug: "aud-score" }),
+    );
+    const written = await engine.timeline.set({
+      render: "portrait",
+      slots: [
+        {
+          artifact: video.slug,
+          volume: 0.8,
+          audioFadeIn: 3,
+          audioFadeOut: 4,
+        },
+      ],
+      audio: [
+        {
+          artifactId: audio.artifactId,
+          startFrame: 12,
+          durationFrames: 96,
+          volume: 0.5,
+          fadeIn: 2,
+          fadeOut: 5,
+        },
+      ],
+    });
+    const timeline = value(written);
+    expect(timeline).toMatchObject({
+      bookId: engine.book.get().bookId,
+      render: "portrait",
+      slots: [{ artifactId: video.artifactId }],
+      audio: [{ artifactId: audio.artifactId, startFrame: 12, durationFrames: 96 }],
+    });
+    expect(timeline.slots[0]?.id).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
+    expect(timeline.audio[0]?.id).toMatch(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
+    );
+    expect(engine.timeline.get()).toEqual(timeline);
+    if (!written.ok || !written.revision) throw new Error("missing timeline revision");
+
+    value(
+      await engine.timeline.set({
+        render: "landscape",
+        slots: timeline.slots.map((slot) => ({
+          id: slot.id,
+          artifactId: slot.artifactId,
+        })),
+        audio: [],
+      }),
+    );
+    expect(value(engine.timeline.getAtRevision(written.revision))).toEqual(
+      timeline,
+    );
+    expect(await engine.metadata.book.write("timeline", {})).toMatchObject({
+      ok: false,
+      error: { code: "INVALID_INPUT" },
+    });
+    expect(await engine.artifacts.delete(video.artifactId)).toMatchObject({
+      ok: false,
+      error: {
+        code: "IN_USE",
+        details: {
+          references: [{ kind: "timeline.slot", id: timeline.slots[0]?.id }],
+        },
+      },
+    });
+
+    const semanticHead = engine.head;
+    expect(
+      engine.settings.set("timeline.viewerOrientation", "portrait").ok,
+    ).toBe(true);
+    expect(engine.head).toBe(semanticHead);
+    expect(value(await engine.timeline.reset())).toEqual({
+      bookId: engine.book.get().bookId,
+      render: "landscape",
+      slots: [],
+      audio: [],
+    });
+    value(await engine.artifacts.delete(video.artifactId));
+    engine.close();
+  });
+
+  it("rejects hard deletion of referenced records and cascades owned rows", async () => {
+    const { engine, dataDir } = await setup();
+    const artifact = value(
+      await engine.artifacts.create({ kind: "image", slug: "img-owned" }),
+    );
+    const fileWrite = await engine.files.write(
+      artifact.artifactId,
+      "original.png",
+      "pixel",
+    );
+    if (!fileWrite.ok || !fileWrite.revision) throw new Error("missing file revision");
+    const entity = value(
+      await engine.entities.create("character", "Referenced"),
+    );
+    const notebook = value(await engine.notebooks.create("Graph"));
+    const cell = engine.notebooks.createCell({
+      type: "image",
+      title: "Image",
+      position: { x: 0, y: 0 },
+      entityId: entity.id,
+      outputArtifactId: artifact.artifactId,
+    });
+    value(
+      await engine.notebooks.write({
+        ...notebook,
+        cells: [cell],
+        edges: [],
+      }),
+    );
+
+    expect(await engine.entities.delete(entity.id)).toMatchObject({
+      ok: false,
+      error: { code: "IN_USE" },
+    });
+    expect(await engine.artifacts.delete(artifact.artifactId)).toMatchObject({
+      ok: false,
+      error: { code: "IN_USE" },
+    });
+    expect(value(await engine.notebooks.delete(notebook.id))).toEqual({
+      notebookId: notebook.id,
+    });
+    expect(engine.notebooks.read(notebook.id)).toMatchObject({
+      ok: false,
+      error: { code: "NOT_FOUND" },
+    });
+    expect(value(await engine.entities.delete(entity.id))).toEqual({
+      entityId: entity.id,
+    });
+    expect(value(await engine.artifacts.delete(artifact.artifactId))).toEqual({
+      artifactId: artifact.artifactId,
+      slug: artifact.slug,
+    });
+    expect(engine.history.artifact(artifact.artifactId)[0]?.operation).toBe(
+      "delete_artifact",
+    );
+    value(
+      await engine.history.restoreArtifact(
+        artifact.artifactId,
+        fileWrite.revision,
+      ),
+    );
+    expect(
+      value(await engine.files.read(artifact.artifactId, "original.png")).toString(),
+    ).toBe("pixel");
+    engine.close();
+
+    const db = new DatabaseSync(path.join(dataDir, "videobook.db"));
+    const objectCount = (
+      db.prepare("SELECT COUNT(*) AS count FROM objects").get() as {
+        count: number;
+      }
+    ).count;
+    expect(objectCount).toBe(1);
+    const manifestColumns = (
+      db.prepare("PRAGMA table_info(artifact_files)").all() as Array<{
+        name: string;
+      }>
+    ).map((column) => column.name);
+    expect(manifestColumns).not.toContain("size_bytes");
+    expect(manifestColumns).not.toContain("mime_type");
+    db.close();
+  });
+
+  it("validates caller-supplied semantic IDs as UUIDv7", async () => {
+    const { engine } = await setup();
+    const notebook = value(await engine.notebooks.create("IDs"));
+    const generatedCell = engine.notebooks.createCell({
+      type: "prompt",
+      title: "Prompt",
+      position: { x: 1, y: 2 },
+    });
+    expect(generatedCell.id[14]).toBe("7");
+    expect(
+      value(await engine.prompts.record({ surface: "test", prompt: "hello" })).id[14],
+    ).toBe("7");
+    expect(
+      value(await engine.messages.append({ role: "user", body: {} })).messageId[14],
+    ).toBe("7");
+
+    expect(
+      await engine.notebooks.write({
+        ...notebook,
+        cells: [{ ...generatedCell, id: "cell-1" }],
+        edges: [],
+      }),
+    ).toMatchObject({ ok: false, error: { code: "INVALID_INPUT" } });
+    expect(
+      await engine.history.recordAction({
+        actionId: "action-1",
+        operation: "invalid",
+      }),
+    ).toMatchObject({ ok: false, error: { code: "INVALID_INPUT" } });
+    engine.close();
+  });
+
+  it("merges independent UUID rows and conflicts only on the same cell", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "videobook-merge-schema-"));
+    roots.push(root);
+    const mergeDatabasePath = path.join(root, "merge.db");
+    const db = new DatabaseSync(mergeDatabasePath);
+    db.exec(SEMANTIC_SCHEMA_SQL);
+    const bookId = uuidv7();
+    const notebookId = uuidv7();
+    const leftEntity = uuidv7();
+    const rightEntity = uuidv7();
+    const leftArtifact = uuidv7();
+    const rightArtifact = uuidv7();
+    db.prepare(
+      "INSERT INTO engine_schema(singleton, version, created_at) VALUES (1, 4, 0)",
+    ).run();
+    db.prepare("INSERT INTO book(book_id, slug, created_at) VALUES (?, 'merge-book', 0)")
+      .run(bookId);
+    db.prepare(
+      `INSERT INTO artifacts(artifact_id, slug, kind, created_at)
+       VALUES (?, 'vid-left', 'video', 0), (?, 'vid-right', 'video', 0)`,
+    ).run(leftArtifact, rightArtifact);
+    db.prepare(
+      `INSERT INTO entities(
+        entity_id, type, name, data_json, created_at
+      ) VALUES (?, 'scene', 'Left', '{}', 0),
+               (?, 'scene', 'Right', '{}', 0)`,
+    ).run(leftEntity, rightEntity);
+    db.prepare(
+      `INSERT INTO notebooks(notebook_id, name, properties_json, created_at)
+       VALUES (?, 'Merge graph', '{}', 0)`,
+    ).run(notebookId);
+    db.prepare(
+      "INSERT INTO timeline(book_id, render) VALUES (?, 'landscape')",
+    ).run(bookId);
+    commitTables(db, [...SEMANTIC_TABLES], "initial merge fixture");
+
+    const leftCell = uuidv7();
+    const rightCell = uuidv7();
+    const leftPrompt = uuidv7();
+    const rightPrompt = uuidv7();
+    const leftAction = uuidv7();
+    const rightAction = uuidv7();
+    const leftSlot = uuidv7();
+    const rightSlot = uuidv7();
+
+    db.doltBranch("fork-left");
+    db.doltCheckout("fork-left");
+    db.prepare("UPDATE entities SET name='Left fork' WHERE entity_id=?")
+      .run(leftEntity);
+    db.prepare(
+      `INSERT INTO cells(
+        notebook_id, cell_id, type, title, position_x, position_y,
+        entity_id, inputs_json
+      ) VALUES (?, ?, 'scene', 'Left cell', 0, 0, ?, '{}')`,
+    ).run(notebookId, leftCell, leftEntity);
+    db.prepare(
+      `INSERT INTO prompt_entries(
+        prompt_id, surface, prompt, context_json, created_at
+      ) VALUES (?, 'merge', 'left', '{}', 1)`,
+    ).run(leftPrompt);
+    db.prepare(
+      `INSERT INTO actions(
+        action_id, operation, scope, actor, lane, phase, details_json, created_at
+      ) VALUES (?, 'left', 'book', 'test', 'left', 'completed', '{}', 1)`,
+    ).run(leftAction);
+    db.prepare(
+      `INSERT INTO timeline_slots(slot_id, artifact_id, ordinal)
+       VALUES (?, ?, 0)`,
+    ).run(leftSlot, leftArtifact);
+    commitTables(
+      db,
+      ["entities", "cells", "prompt_entries", "actions", "timeline_slots"],
+      "left fork",
+    );
+
+    db.doltCheckout("main");
+    db.doltReset("--hard");
+    db.doltBranch("fork-right");
+    db.doltCheckout("fork-right");
+    db.doltReset("--hard");
+    db.prepare("UPDATE entities SET name='Right fork' WHERE entity_id=?")
+      .run(rightEntity);
+    db.prepare(
+      `INSERT INTO cells(
+        notebook_id, cell_id, type, title, position_x, position_y,
+        entity_id, inputs_json
+      ) VALUES (?, ?, 'scene', 'Right cell', 1, 1, ?, '{}')`,
+    ).run(notebookId, rightCell, rightEntity);
+    db.prepare(
+      `INSERT INTO prompt_entries(
+        prompt_id, surface, prompt, context_json, created_at
+      ) VALUES (?, 'merge', 'right', '{}', 2)`,
+    ).run(rightPrompt);
+    db.prepare(
+      `INSERT INTO actions(
+        action_id, operation, scope, actor, lane, phase, details_json, created_at
+      ) VALUES (?, 'right', 'book', 'test', 'right', 'completed', '{}', 2)`,
+    ).run(rightAction);
+    db.prepare(
+      `INSERT INTO timeline_slots(slot_id, artifact_id, ordinal)
+       VALUES (?, ?, 0)`,
+    ).run(rightSlot, rightArtifact);
+    commitTables(
+      db,
+      ["entities", "cells", "prompt_entries", "actions", "timeline_slots"],
+      "right fork",
+    );
+
+    db.doltCheckout("main");
+    db.doltReset("--hard");
+    // DoltLite 0.11 leaves the last checked-out insert in the base working
+    // set for this empty child table; restore the committed base before merge.
+    db.prepare("DELETE FROM timeline_slots").run();
+    commitTables(db, ["timeline_slots"], "restore merge base");
+    expect(db.doltMerge("fork-left").conflicts).toBe(0);
+    expect(db.doltMerge("fork-right").conflicts).toBe(0);
+    expect(
+      (db.prepare("SELECT COUNT(*) AS count FROM cells").get() as {
+        count: number;
+      }).count,
+    ).toBe(2);
+    expect(
+      (db.prepare("SELECT COUNT(*) AS count FROM timeline_slots").get() as {
+        count: number;
+      }).count,
+    ).toBe(2);
+    expect(
+      (
+        db
+          .prepare("SELECT name FROM entities WHERE entity_id=?")
+          .get(leftEntity) as { name: string }
+      ).name,
+    ).toBe("Left fork");
+    expect(
+      (
+        db
+          .prepare("SELECT name FROM entities WHERE entity_id=?")
+          .get(rightEntity) as { name: string }
+      ).name,
+    ).toBe("Right fork");
+
+    db.doltBranch("same-cell-left");
+    db.doltCheckout("same-cell-left");
+    db.prepare("UPDATE cells SET title='Left edit' WHERE cell_id=?")
+      .run(leftCell);
+    commitTables(db, ["cells"], "left edit");
+    db.doltCheckout("main");
+    db.doltReset("--hard");
+    db.doltBranch("same-cell-right");
+    db.doltCheckout("same-cell-right");
+    db.doltReset("--hard");
+    db.prepare("UPDATE cells SET title='Right edit' WHERE cell_id=?")
+      .run(leftCell);
+    commitTables(db, ["cells"], "right edit");
+    db.doltCheckout("main");
+    db.doltReset("--hard");
+    expect(db.doltMerge("same-cell-left").conflicts).toBe(0);
+    expect(() => db.doltMerge("same-cell-right")).toThrow("Merge conflict");
     db.close();
   });
 
@@ -311,9 +763,9 @@ describe("single-book Dolt engine", () => {
     const entity = value(await engine.entities.create("character", "Target Character"));
     value(await engine.notebooks.create("Target Notebook"));
     value(
-      await engine.metadata.book.write("timeline", {
+      await engine.timeline.set({
         render: "portrait",
-        slots: [{ id: "s1", slug: artifact.slug }],
+        slots: [{ artifact: artifact.slug }],
         audio: [],
       }),
     );
@@ -346,9 +798,7 @@ describe("single-book Dolt engine", () => {
     expect(value(engine.messages.list<{ text: string }>()).map((message) => message.body.text)).toEqual([
       "target message",
     ]);
-    expect(value(await engine.metadata.book.read<{ render: string }>("timeline")).render).toBe(
-      "portrait",
-    );
+    expect(engine.timeline.get().render).toBe("portrait");
     engine.close();
   });
 

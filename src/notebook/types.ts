@@ -20,7 +20,7 @@ export interface NotebookCell {
   prompt?: string;
   model?: string;
   inputs?: Record<string, unknown>;
-  outputAssetId?: string;
+  outputArtifactId?: string;
 }
 
 export interface NotebookEdge {
@@ -33,12 +33,10 @@ export interface NotebookEdge {
 export interface NotebookDocument {
   id: string;
   name: string;
-  version: 2;
   properties?: Record<string, unknown>;
   cells: NotebookCell[];
   edges: NotebookEdge[];
   createdAt: string;
-  updatedAt: string;
 }
 
 export type EntityType = "prompt" | "character" | "scene";
@@ -51,15 +49,14 @@ export interface EntityDocument {
   prompt?: string;
   data: Record<string, unknown>;
   createdAt: string;
-  updatedAt: string;
 }
 
 export interface NotebookRun {
   id: string;
   notebookId: string;
-  status: "queued" | "running" | "completed" | "failed" | "aborted";
+  status: "completed" | "failed" | "aborted";
   startedAt: string;
-  completedAt?: string;
+  completedAt: string;
   cellOrder: string[];
   outputs: Record<string, string>;
   error?: string;

@@ -1,7 +1,5 @@
 import { rm } from "node:fs/promises";
 
-import { v7 as uuidv7 } from "uuid";
-
 import type {
   Artifact,
   ArtifactKind,
@@ -18,6 +16,8 @@ import {
   type ArtifactRow,
 } from "./context.js";
 import { canonicalJson } from "./store.js";
+import { EngineFault } from "./store.js";
+import { newUuidV7 } from "./ids.js";
 
 interface ActiveRuntimeJobRow {
   id: number;
@@ -43,10 +43,9 @@ export function createArtifactsApi(context: EngineContext) {
       syncResultOf(() => {
         const row = context.store.db
           .prepare(
-            `SELECT artifact_id, slug, kind, data_json,
-                    created_at, updated_at, deleted_at
+            `SELECT artifact_id, slug, kind, created_at
              FROM artifacts
-             WHERE slug=? AND deleted_at IS NULL`,
+             WHERE slug=?`,
           )
           .get(slug) as unknown as ArtifactRow | undefined;
         if (!row) throw new Error(`Active artifact slug not found: ${slug}`);
@@ -57,7 +56,7 @@ export function createArtifactsApi(context: EngineContext) {
         .prepare(
           `SELECT 1 AS present
            FROM artifacts
-           WHERE slug=? AND deleted_at IS NULL`,
+           WHERE slug=?`,
         )
         .get(slug),
     rename: (
@@ -69,7 +68,7 @@ export function createArtifactsApi(context: EngineContext) {
       artifact: string,
     ): Promise<
       Result<
-        { artifactId: string; slug: string; deletedAt: number },
+        { artifactId: string; slug: string },
         EngineError
       >
     > => deleteArtifact(context, artifact),
@@ -99,7 +98,7 @@ async function createArtifact(
       parsed.explicitSlug === undefined
         ? nextActiveSlug(context, base)
         : base;
-    const artifactId = uuidv7();
+    const artifactId = newUuidV7();
     const mutation = await context.store.semantic(
       {
         operation: "create_artifact",
@@ -110,30 +109,15 @@ async function createArtifact(
           `artifact-slug:${slug}`,
         ],
       },
-      ["artifacts", "artifact_events"],
-      (operationId, now) => {
+      ["artifacts"],
+      (_operationId, now) => {
         context.store.db
           .prepare(
             `INSERT INTO artifacts(
-              artifact_id, slug, kind, data_json,
-              created_at, updated_at, deleted_at
-            ) VALUES (?, ?, ?, '{}', ?, ?, NULL)`,
+              artifact_id, slug, kind, created_at
+            ) VALUES (?, ?, ?, ?)`,
           )
-          .run(artifactId, slug, parsed.kind, now, now);
-        context.store.db
-          .prepare(
-            `INSERT INTO artifact_events(
-              event_id, artifact_id, operation_id, event,
-              details_json, created_at
-            ) VALUES (?, ?, ?, 'created', ?, ?)`,
-          )
-          .run(
-            uuidv7(),
-            artifactId,
-            operationId,
-            canonicalJson({ slug, kind: parsed.kind }),
-            now,
-          );
+          .run(artifactId, slug, parsed.kind, now);
         context.store.db
           .prepare(
             `INSERT INTO runtime_artifact_views(
@@ -162,10 +146,8 @@ function listArtifacts(
   const direction = options.sort === "oldest" ? "ASC" : "DESC";
   const rows = context.store.db
     .prepare(
-      `SELECT artifact_id, slug, kind, data_json,
-              created_at, updated_at, deleted_at
+      `SELECT artifact_id, slug, kind, created_at
        FROM artifacts
-       WHERE deleted_at IS NULL
        ORDER BY created_at ${direction}, artifact_id ${direction}`,
     )
     .all() as unknown as ArtifactRow[];
@@ -196,29 +178,15 @@ async function renameArtifact(
           `artifact-slug:${slug}`,
         ],
       },
-      ["artifacts", "artifact_events"],
-      (operationId, now) => {
+      ["artifacts"],
+      () => {
         context.store.db
           .prepare(
             `UPDATE artifacts
-             SET slug=?, updated_at=?
-             WHERE artifact_id=? AND deleted_at IS NULL`,
+             SET slug=?
+             WHERE artifact_id=?`,
           )
-          .run(slug, now, current.artifact_id);
-        context.store.db
-          .prepare(
-            `INSERT INTO artifact_events(
-              event_id, artifact_id, operation_id, event,
-              details_json, created_at
-            ) VALUES (?, ?, ?, 'renamed', ?, ?)`,
-          )
-          .run(
-            uuidv7(),
-            current.artifact_id,
-            operationId,
-            canonicalJson({ oldSlug: current.slug, newSlug: slug }),
-            now,
-          );
+          .run(slug, current.artifact_id);
       },
     );
     return ok(context.artifact(context.artifactRow(current.artifact_id)), mutation.revision);
@@ -229,10 +197,18 @@ async function deleteArtifact(
   context: EngineContext,
   artifactReference: string,
 ): Promise<
-  Result<{ artifactId: string; slug: string; deletedAt: number }, EngineError>
+  Result<{ artifactId: string; slug: string }, EngineError>
 > {
   return resultOf(async () => {
     const artifact = context.artifactRow(artifactReference);
+    const references = artifactReferences(context, artifact.artifact_id);
+    if (references.length > 0) {
+      throw new EngineFault({
+        code: "IN_USE",
+        message: `Artifact is still referenced: ${artifact.slug}`,
+        details: { references },
+      });
+    }
     const jobs = context.store.db
       .prepare(
         `SELECT id, artifact_id, type, payload_json, result_json, started_at
@@ -241,7 +217,7 @@ async function deleteArtifact(
            AND state IN ('queued','running','completing')`,
       )
       .all(artifact.artifact_id) as unknown as ActiveRuntimeJobRow[];
-    const mutation = await context.store.semantic<number>(
+    const mutation = await context.store.semantic(
       {
         operation: "delete_artifact",
         artifactId: artifact.artifact_id,
@@ -254,29 +230,17 @@ async function deleteArtifact(
           `artifact-slug:${artifact.slug}`,
         ],
       },
-      ["artifacts", "artifact_events", "job_runs"],
-      (operationId, now) => {
+      [
+        "artifacts",
+        "artifact_files",
+        "artifact_metadata",
+        "audio_waveforms",
+        "job_runs",
+      ],
+      (_operationId, now) => {
         context.store.db
-          .prepare(
-            `UPDATE artifacts
-             SET deleted_at=?, updated_at=?
-             WHERE artifact_id=? AND deleted_at IS NULL`,
-          )
-          .run(now, now, artifact.artifact_id);
-        context.store.db
-          .prepare(
-            `INSERT INTO artifact_events(
-              event_id, artifact_id, operation_id, event,
-              details_json, created_at
-            ) VALUES (?, ?, ?, 'deleted', ?, ?)`,
-          )
-          .run(
-            uuidv7(),
-            artifact.artifact_id,
-            operationId,
-            canonicalJson({ slug: artifact.slug }),
-            now,
-          );
+          .prepare("DELETE FROM artifacts WHERE artifact_id=?")
+          .run(artifact.artifact_id);
         for (const job of jobs) {
           const errorJson = canonicalJson({ message: "Artifact deleted" });
           context.store.db
@@ -296,7 +260,7 @@ async function deleteArtifact(
               ) VALUES (?, ?, ?, 'aborted', ?, ?, ?, ?, ?)`,
             )
             .run(
-              uuidv7(),
+              newUuidV7(),
               job.artifact_id,
               job.type,
               job.payload_json,
@@ -314,19 +278,25 @@ async function deleteArtifact(
           )
           .run(now, artifact.artifact_id);
         context.store.db
-          .prepare(
-            `UPDATE runtime_workspace_entries
-             SET invalidated_at=?
-             WHERE artifact_id=?`,
-          )
-          .run(now, artifact.artifact_id);
+          .prepare("DELETE FROM runtime_workspace_entries WHERE artifact_id=?")
+          .run(artifact.artifact_id);
         context.store.db
           .prepare("DELETE FROM runtime_artifact_views WHERE artifact_id=?")
           .run(artifact.artifact_id);
         context.store.db
           .prepare("DELETE FROM runtime_pending_tasks WHERE artifact_id=?")
           .run(artifact.artifact_id);
-        return now;
+        context.store.db
+          .prepare("DELETE FROM runtime_generation_errors WHERE artifact_id=?")
+          .run(artifact.artifact_id);
+        context.store.db
+          .prepare("DELETE FROM runtime_similarity_embeddings WHERE artifact_id=?")
+          .run(artifact.artifact_id);
+        context.store.db
+          .prepare(
+            "DELETE FROM runtime_text_similarity_documents WHERE artifact_id=?",
+          )
+          .run(artifact.artifact_id);
       },
     );
     await rm(context.artifactPath(artifact.artifact_id), {
@@ -337,7 +307,6 @@ async function deleteArtifact(
       {
         artifactId: artifact.artifact_id,
         slug: artifact.slug,
-        deletedAt: mutation.value,
       },
       mutation.revision,
     );
@@ -408,7 +377,7 @@ function nextActiveSlug(context: EngineContext, base: string): string {
       .prepare(
         `SELECT 1 AS present
          FROM artifacts
-         WHERE slug=? AND deleted_at IS NULL`,
+         WHERE slug=?`,
       )
       .get(candidate)
   ) {
@@ -416,6 +385,45 @@ function nextActiveSlug(context: EngineContext, base: string): string {
     candidate = `${base}-${suffix}`;
   }
   return candidate;
+}
+
+function artifactReferences(
+  context: EngineContext,
+  artifactId: string,
+): Array<{ kind: string; id: string }> {
+  const references: Array<{ kind: string; id: string }> = [];
+  const cells = context.store.db
+    .prepare(
+      `SELECT notebook_id, cell_id FROM cells
+       WHERE output_artifact_id=? ORDER BY notebook_id, cell_id`,
+    )
+    .all(artifactId) as unknown as Array<{
+    notebook_id: string;
+    cell_id: string;
+  }>;
+  references.push(
+    ...cells.map((cell) => ({
+      kind: "cell.outputArtifact",
+      id: `${cell.notebook_id}/${cell.cell_id}`,
+    })),
+  );
+  const slots = context.store.db
+    .prepare(
+      "SELECT slot_id FROM timeline_slots WHERE artifact_id=? ORDER BY slot_id",
+    )
+    .all(artifactId) as unknown as Array<{ slot_id: string }>;
+  references.push(
+    ...slots.map((slot) => ({ kind: "timeline.slot", id: slot.slot_id })),
+  );
+  const audio = context.store.db
+    .prepare(
+      "SELECT audio_id FROM timeline_audio WHERE artifact_id=? ORDER BY audio_id",
+    )
+    .all(artifactId) as unknown as Array<{ audio_id: string }>;
+  references.push(
+    ...audio.map((item) => ({ kind: "timeline.audio", id: item.audio_id })),
+  );
+  return references;
 }
 
 function prefixForKind(kind: ArtifactKind): string {

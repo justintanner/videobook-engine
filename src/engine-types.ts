@@ -12,6 +12,7 @@ export type EngineErrorCode =
   | "NOT_FOUND"
   | "ALREADY_EXISTS"
   | "SLUG_CONFLICT"
+  | "IN_USE"
   | "INVALID_INPUT"
   | "IO_ERROR"
   | "STORAGE_ERROR"
@@ -261,6 +262,7 @@ export interface SimilarityApi {
 export interface Book {
   bookId: string;
   slug: string;
+  createdAt: number;
 }
 
 export interface Artifact {
@@ -268,7 +270,6 @@ export interface Artifact {
   slug: string;
   kind: ArtifactKind;
   createdAt: number;
-  updatedAt: number;
   path: string;
 }
 
@@ -361,7 +362,7 @@ export interface ActionLogEntry {
 }
 
 export interface PromptHistoryEntry {
-  id: number;
+  id: string;
   surface: string;
   prompt: string;
   context: Record<string, unknown>;
@@ -627,7 +628,63 @@ export type GetAssetStatusOptions = GetArtifactStatusOptions;
 export interface AudioWaveformRecord {
   artifactId: string;
   peaks: number[];
-  updatedAt: number;
+}
+
+export type TimelineRender = "landscape" | "portrait" | "square";
+
+export interface TimelineSlot {
+  id: string;
+  artifactId: string;
+  volume?: number;
+  audioFadeIn?: number;
+  audioFadeOut?: number;
+}
+
+export interface TimelineAudio {
+  id: string;
+  artifactId: string;
+  startFrame: number;
+  durationFrames: number;
+  volume?: number;
+  fadeIn?: number;
+  fadeOut?: number;
+}
+
+export interface Timeline {
+  bookId: string;
+  render: TimelineRender;
+  slots: TimelineSlot[];
+  audio: TimelineAudio[];
+}
+
+export interface TimelineSlotInput {
+  id?: string;
+  /** Artifact UUID or slug. */
+  artifact?: string;
+  /** Alias for artifact when the caller already has a stable UUID. */
+  artifactId?: string;
+  volume?: number;
+  audioFadeIn?: number;
+  audioFadeOut?: number;
+}
+
+export interface TimelineAudioInput {
+  id?: string;
+  /** Artifact UUID or slug. */
+  artifact?: string;
+  /** Alias for artifact when the caller already has a stable UUID. */
+  artifactId?: string;
+  startFrame: number;
+  durationFrames: number;
+  volume?: number;
+  fadeIn?: number;
+  fadeOut?: number;
+}
+
+export interface TimelineInput {
+  render: TimelineRender;
+  slots?: TimelineSlotInput[];
+  audio?: TimelineAudioInput[];
 }
 
 export interface ChatLogEntry {

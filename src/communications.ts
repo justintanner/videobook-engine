@@ -1,5 +1,3 @@
-import { v7 as uuidv7 } from "uuid";
-
 import type {
   AppendMessageInput,
   EngineError,
@@ -12,9 +10,10 @@ import type {
 import { ok } from "./engine-types.js";
 import { EngineContext, resultOf, syncResultOf } from "./context.js";
 import { canonicalJson, parseJson } from "./store.js";
+import { newUuidV7 } from "./ids.js";
 
 interface PromptRow {
-  prompt_id: number;
+  prompt_id: string;
   surface: string;
   prompt: string;
   context_json: string;
@@ -67,22 +66,29 @@ async function recordPrompt(
     if (!surface || !prompt) {
       throw new Error("Prompt surface and prompt are required");
     }
-    const mutation = await context.store.semantic<number>(
+    const promptId = newUuidV7();
+    const mutation = await context.store.semantic(
       {
         operation: "record_prompt",
         details: { surface },
-        writeSet: [`prompt-history:${surface}`],
+        writeSet: [`prompt:${promptId}`],
       },
       ["prompt_entries"],
       (_operationId, now) => {
-        const inserted = context.store.db
+        context.store.db
           .prepare(
             `INSERT INTO prompt_entries(
-              surface, prompt, context_json, created_at
-            ) VALUES (?, ?, ?, ?)`,
+              prompt_id, surface, prompt, context_json, created_at
+            ) VALUES (?, ?, ?, ?, ?)`,
           )
-          .run(surface, prompt, canonicalJson(input.context ?? {}), now);
-        return Number(inserted.lastInsertRowid);
+          .run(
+            promptId,
+            surface,
+            prompt,
+            canonicalJson(input.context ?? {}),
+            now,
+          );
+        return promptId;
       },
     );
     return ok(promptFromRow(requiredPrompt(context, mutation.value)), mutation.revision);
@@ -135,7 +141,7 @@ async function appendMessage<T extends Record<string, unknown>>(
   return resultOf(async () => {
     const role = input.role.trim();
     if (!role) throw new Error("Message role is required");
-    const messageId = uuidv7();
+    const messageId = newUuidV7();
     const mutation = await context.store.semantic(
       {
         operation: "append_message",
@@ -179,7 +185,7 @@ function listMessages<T>(
   return rows.reverse().map(messageFromRow<T>);
 }
 
-function requiredPrompt(context: EngineContext, promptId: number): PromptRow {
+function requiredPrompt(context: EngineContext, promptId: string): PromptRow {
   const row = context.store.db
     .prepare(
       `SELECT prompt_id, surface, prompt, context_json, created_at

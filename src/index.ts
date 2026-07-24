@@ -52,6 +52,7 @@ export {
   normalizeBookSlug,
 } from "./context.js";
 export { normalizeFilePath } from "./files.js";
+export { isUuidV7 } from "./ids.js";
 export { JobQueue, QueueRunner } from "./job-queue.js";
 export type { StoredObject } from "./cas.js";
 export {

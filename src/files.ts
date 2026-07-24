@@ -14,7 +14,6 @@ interface PreparedFile {
   relativePath: string;
   objectHash: string;
   size: number;
-  mimeType: string | null;
   mtimeMs: number;
 }
 
@@ -126,7 +125,7 @@ async function writeFile(
           `file:${artifact.artifact_id}:${relativePath}`,
         ],
       },
-      ["objects", "artifact_files", "artifacts"],
+      ["objects", "artifact_files"],
       (_operationId, now) => {
         linkObject(
           context,
@@ -135,12 +134,10 @@ async function writeFile(
             relativePath,
             objectHash: object.hash,
             size: object.size,
-            mimeType: mimeTypeFor(relativePath),
             mtimeMs,
           },
           now,
         );
-        touchArtifact(context, artifact.artifact_id, now);
         markWorkspaceReady(context, artifact.artifact_id, now);
       },
     );
@@ -177,7 +174,7 @@ async function writeFromPath(
           `file:${artifact.artifact_id}:${relativePath}`,
         ],
       },
-      ["objects", "artifact_files", "artifacts"],
+      ["objects", "artifact_files"],
       (_operationId, now) => {
         linkObject(
           context,
@@ -186,12 +183,10 @@ async function writeFromPath(
             relativePath,
             objectHash: object.hash,
             size: object.size,
-            mimeType: mimeTypeFor(relativePath),
             mtimeMs: now,
           },
           now,
         );
-        touchArtifact(context, artifact.artifact_id, now);
         markWorkspaceReady(context, artifact.artifact_id, now);
       },
     );
@@ -235,12 +230,11 @@ async function deleteFile(
         details: { path: relativePath },
         writeSet: [`file:${artifact.artifact_id}:${relativePath}`],
       },
-      ["artifact_files", "artifacts"],
-      (_operationId, now) => {
+      ["artifact_files"],
+      () => {
         context.store.db
           .prepare("DELETE FROM artifact_files WHERE artifact_id=? AND path=?")
           .run(artifact.artifact_id, relativePath);
-        touchArtifact(context, artifact.artifact_id, now);
       },
     );
     const destination = path.join(
@@ -280,21 +274,19 @@ async function renameFile(
           `file:${artifact.artifact_id}:${newRelative}`,
         ],
       },
-      ["artifact_files", "artifacts"],
+      ["artifact_files"],
       (_operationId, now) => {
         context.store.db
           .prepare(
-            `UPDATE artifact_files SET path=?, mime_type=?, mtime_ms=?
+            `UPDATE artifact_files SET path=?, mtime_ms=?
              WHERE artifact_id=? AND path=?`,
           )
           .run(
             newRelative,
-            mimeTypeFor(newRelative),
             now,
             artifact.artifact_id,
             oldRelative,
           );
-        touchArtifact(context, artifact.artifact_id, now);
       },
     );
     await rm(oldPath, { force: true });
@@ -331,30 +323,24 @@ async function copyFile(
         },
         writeSet: [`file:${destination.artifact_id}:${destinationPath}`],
       },
-      ["artifact_files", "artifacts"],
+      ["artifact_files"],
       (_operationId, now) => {
         context.store.db
           .prepare(
             `INSERT INTO artifact_files(
-              artifact_id, path, object_hash, size_bytes, mime_type,
-              mtime_ms, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+              artifact_id, path, object_hash, mtime_ms, created_at
+            ) VALUES (?, ?, ?, ?, ?)
             ON CONFLICT(artifact_id, path) DO UPDATE SET
               object_hash=excluded.object_hash,
-              size_bytes=excluded.size_bytes,
-              mime_type=excluded.mime_type,
               mtime_ms=excluded.mtime_ms`,
           )
           .run(
             destination.artifact_id,
             destinationPath,
             row.object_hash,
-            row.size_bytes,
-            mimeTypeFor(destinationPath),
             now,
             now,
           );
-        touchArtifact(context, destination.artifact_id, now);
         markWorkspaceReady(context, destination.artifact_id, now);
       },
     );
@@ -454,7 +440,6 @@ async function ingestWorkspace(
         relativePath,
         objectHash: object.hash,
         size: object.size,
-        mimeType: mimeTypeFor(relativePath),
         mtimeMs: sourceStat.mtimeMs,
       });
     }
@@ -467,10 +452,9 @@ async function ingestWorkspace(
           (item) => `file:${artifact.artifact_id}:${item}`,
         ),
       },
-      ["objects", "artifact_files", "artifacts"],
+      ["objects", "artifact_files"],
       (_operationId, now) => {
         for (const file of prepared) linkObject(context, artifact.artifact_id, file, now);
-        touchArtifact(context, artifact.artifact_id, now);
         markWorkspaceReady(context, artifact.artifact_id, now);
       },
     );
@@ -595,39 +579,27 @@ function linkObject(
 ): void {
   context.store.db
     .prepare(
-      `INSERT INTO objects(object_hash, size_bytes, mime_type, created_at)
-       VALUES (?, ?, ?, ?)
-       ON CONFLICT(object_hash) DO UPDATE SET
-         size_bytes=excluded.size_bytes,
-         mime_type=COALESCE(objects.mime_type, excluded.mime_type)`,
+      `INSERT INTO objects(object_hash, size_bytes, created_at)
+       VALUES (?, ?, ?)
+       ON CONFLICT(object_hash) DO NOTHING`,
     )
-    .run(file.objectHash, file.size, file.mimeType, now);
+    .run(file.objectHash, file.size, now);
   context.store.db
     .prepare(
       `INSERT INTO artifact_files(
-        artifact_id, path, object_hash, size_bytes, mime_type, mtime_ms, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        artifact_id, path, object_hash, mtime_ms, created_at
+      ) VALUES (?, ?, ?, ?, ?)
       ON CONFLICT(artifact_id, path) DO UPDATE SET
         object_hash=excluded.object_hash,
-        size_bytes=excluded.size_bytes,
-        mime_type=excluded.mime_type,
         mtime_ms=excluded.mtime_ms`,
     )
     .run(
       artifactId,
       file.relativePath,
       file.objectHash,
-      file.size,
-      file.mimeType,
       file.mtimeMs,
       now,
     );
-}
-
-function touchArtifact(context: EngineContext, artifactId: string, now: number): void {
-  context.store.db
-    .prepare("UPDATE artifacts SET updated_at=? WHERE artifact_id=?")
-    .run(now, artifactId);
 }
 
 function markWorkspaceReady(
@@ -675,8 +647,11 @@ function requiredFile(
 ): FileRow {
   const row = context.store.db
     .prepare(
-      `SELECT artifact_id, path, object_hash, size_bytes, mime_type, mtime_ms, created_at
-       FROM artifact_files WHERE artifact_id=? AND path=?`,
+      `SELECT f.artifact_id, f.path, f.object_hash, o.size_bytes,
+              f.mtime_ms, f.created_at
+       FROM artifact_files f
+       JOIN objects o ON o.object_hash=f.object_hash
+       WHERE f.artifact_id=? AND f.path=?`,
     )
     .get(artifactId, relativePath) as unknown as FileRow | undefined;
   if (!row) throw new Error(`File not found: ${relativePath}`);
@@ -694,19 +669,23 @@ function fileExists(context: EngineContext, artifactId: string, relativePath: st
 function filesForArtifact(context: EngineContext, artifactId: string): FileRow[] {
   return context.store.db
     .prepare(
-      `SELECT artifact_id, path, object_hash, size_bytes, mime_type, mtime_ms, created_at
-       FROM artifact_files WHERE artifact_id=? ORDER BY path`,
+      `SELECT f.artifact_id, f.path, f.object_hash, o.size_bytes,
+              f.mtime_ms, f.created_at
+       FROM artifact_files f
+       JOIN objects o ON o.object_hash=f.object_hash
+       WHERE f.artifact_id=? ORDER BY f.path`,
     )
     .all(artifactId) as unknown as FileRow[];
 }
 
 function rowToManifestFile(row: FileRow): ArtifactManifestFile {
+  const mimeType = mimeTypeFor(row.path);
   return {
     name: row.path,
     sizeBytes: row.size_bytes,
     extension: path.extname(row.path) || null,
     mtimeMs: row.mtime_ms,
-    ...(row.mime_type ? { mimeType: row.mime_type } : {}),
+    ...(mimeType ? { mimeType } : {}),
     objectHash: row.object_hash,
   };
 }

@@ -4,8 +4,8 @@
 videobook per engine root. It keeps book state, artifacts, files, metadata,
 notebook graphs, revisions, and action history in a single catalog.
 
-This is the 2.0 breaking model: there is no project layer. A fresh engine root
-creates one singleton Book; reopening that root always returns the same book.
+There is no project layer. A fresh engine root creates exactly one Book;
+reopening that root always returns the same book.
 
 ## Quick start
 
@@ -18,7 +18,7 @@ const engine = createEngine({
 });
 
 const book = engine.book.get();
-// { bookId: "…", slug: "my-story" }
+// { bookId: "…", slug: "my-story", createdAt: … }
 
 const script = await engine.artifacts.create({
   kind: "script",
@@ -54,13 +54,28 @@ rootDir/
 ```
 
 Semantic tables are committed as Dolt revisions. Runtime tables (jobs, leases,
-views, caches, settings, and logs) share the same database but are never
-staged. Artifact identity is a UUIDv7; the active slug is its human-facing
-name and can be reused after the prior artifact is deleted.
+views, caches, settings, and logs) share the same database, match the
+versioned `runtime_%` ignore policy, and are never staged. Semantic surrogate
+identities are UUIDv7 values. Artifact slugs are human-facing names and can be
+reused after hard deletion; immutable CAS objects remain available to history.
 
-The current catalog format is schema version 3. It intentionally rejects older
-catalog schemas rather than migrating them; create a fresh engine root for the
-single-book model.
+The current catalog format is schema version 4. It intentionally rejects v3
+and older catalogs rather than migrating them; create a fresh engine root.
+
+The 25 versioned semantic tables are `engine_schema`, `book`, `artifacts`,
+`objects`, `artifact_files`, `book_metadata`, `artifact_metadata`,
+`entities`, `notebooks`, `cells`, `edges`, `runs`, `timeline`,
+`timeline_slots`, `timeline_audio`, `audio_waveforms`, `prompt_entries`,
+`messages`, `operations`, `actions`, `action_events`, `action_parents`,
+`action_artifacts`, `action_write_set`, and `job_runs`. Dolt's versioned
+`dolt_ignore` configuration table carries the local-table policy.
+
+The 14 local-only tables are `runtime_meta`, `runtime_jobs`,
+`runtime_resource_leases`, `runtime_object_publications`,
+`runtime_workspace_entries`, `runtime_artifact_views`,
+`runtime_pending_tasks`, `runtime_generation_errors`, `runtime_settings`,
+`runtime_logs`, `runtime_commit_outbox`, `runtime_similarity_embeddings`,
+`runtime_text_similarity_documents`, and `runtime_text_similarity_chunks`.
 
 ## Artifacts and slugs
 
@@ -88,8 +103,9 @@ graphs remain available separately through `engine.notebooks`.
 - `engine.artifacts` — create, list, get, rename, delete, and resolve slugs
 - `engine.files` and `engine.workspaces` — immutable object-backed files and
   disposable materialization
-- `engine.metadata` — book metadata, artifact metadata, timelines, and audio
-  waveforms
+- `engine.metadata` — book metadata, artifact metadata, and audio waveforms
+- `engine.timeline` — typed timeline reads, revision reads, replacement, and
+  reset
 - `engine.entities` and `engine.notebooks` — normalized characters, prompts,
   scenes, and notebook graph documents
 - `engine.prompts` and `engine.messages` — semantic prompt and message history
@@ -102,6 +118,10 @@ graphs remain available separately through `engine.notebooks`.
 
 All APIs operate in the engine's one book. No method accepts or returns a
 project ID.
+
+Deleting an artifact or entity that is referenced by a live cell or timeline
+row returns `IN_USE` with `details.references`. Deleting a notebook cascades
+its owned cells, edges, and terminal runs. There are no tombstone rows.
 
 ## Revisions and restores
 
@@ -122,9 +142,18 @@ await engine.history.restore(revisions[0]!.hash);
 
 `restoreArtifact` keeps the artifact UUID stable and restores its files,
 metadata, and waveform as a new forward revision. `restore` replays the whole
-book snapshot forward: book metadata, active artifacts and files, entities,
-notebooks, timelines, prompts, and messages. Runtime work is invalidated and
+book snapshot forward: book metadata, artifacts and files, entities,
+notebooks, timeline, prompts, and messages. Runtime work is invalidated and
 active jobs are aborted during a restore.
+
+## Future forks
+
+Schema v4 prepares stable row identities and normalized merge boundaries for
+DoltHub-native forks. A fork is a separate catalog copy in another namespace,
+keeps the same `bookId`, and can open a pull request against the upstream
+`main` branch. User, origin, fork, and pull-request APIs are intentionally not
+part of this release; an open engine still accepts only its local `main`
+branch.
 
 Generic action records are available for higher-level workflows:
 
