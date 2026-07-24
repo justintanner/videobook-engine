@@ -2,6 +2,7 @@ import type {
   EngineConfig,
   Job,
   JobState,
+  SimilarityApi,
 } from "./engine-types.js";
 import { createProjectsApi } from "./projects.js";
 import { createArtifactsApi } from "./artifacts.js";
@@ -26,6 +27,7 @@ import { createStorageApi } from "./storage.js";
 import { EngineContext } from "./context.js";
 import { JobQueue } from "./job-queue.js";
 import { canonicalJson } from "./store.js";
+import { createSimilarityApi } from "./similarity.js";
 
 export class Engine {
   readonly projects;
@@ -44,6 +46,7 @@ export class Engine {
   readonly logs;
   readonly settings;
   readonly jobs;
+  readonly similarity: SimilarityApi;
   readonly ready: Promise<void>;
 
   private readonly context: EngineContext;
@@ -68,6 +71,7 @@ export class Engine {
 
     const runtime = createRuntimeApi(this.context);
     this.settings = runtime.settings;
+    this.similarity = createSimilarityApi(this.context);
     const queue = new JobQueue(
       this.context.store,
       (reference) => this.context.projectRow(reference).project_id,

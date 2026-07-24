@@ -26,10 +26,14 @@
     "examples": "tsx examples/basic-usage.ts"
   },
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "dependencies": {
     "@dolthub/doltlite": "^0.11.37",
+    "@huggingface/transformers": "4.2.0",
+    "node-gyp": "12.1.0",
+    "sharp": "0.35.3",
+    "usearch": "2.26.0",
     "uuid": "^14.0.0"
   },
   "devDependencies": {
@@ -42,6 +46,7 @@
   },
   "overrides": {
     "esbuild": "0.28.1",
-    "postcss": "^8.5.10"
+    "postcss": "^8.5.10",
+    "sharp": "0.35.3"
   }
 }

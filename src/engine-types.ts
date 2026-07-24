@@ -22,7 +22,9 @@ export type EngineErrorCode =
   | "ACTION_CONFLICT"
   | "LOCKED"
   | "DIVERGED"
-  | "OFFLINE";
+  | "OFFLINE"
+  | "NOT_READY"
+  | "FEATURE_UNAVAILABLE";
 
 export interface EngineError {
   code: EngineErrorCode;
@@ -66,6 +68,7 @@ interface EngineConfigBase {
   objectPrefix?: string;
   catalogBackup?: CatalogBackupConfig;
   runtimeRetentionMs?: number;
+  similarity?: SimilarityConfig;
 }
 
 export type EngineConfig = EngineConfigBase &
@@ -73,6 +76,101 @@ export type EngineConfig = EngineConfigBase &
     | { rootDir: string; dataDir?: never; workspaceDir?: never }
     | { rootDir?: never; dataDir: string; workspaceDir: string }
   );
+
+export type SimilarityKind = "image" | "video";
+
+export interface SimilarityEmbeddingProvider {
+  readonly embeddingSpace: string;
+  readonly dimensions: number;
+  prepare(): Promise<void>;
+  embedImage(sourcePath: string): Promise<Float32Array>;
+  embedVideo(sourcePath: string): Promise<{
+    vector: Float32Array;
+    frameCount: number;
+  }>;
+}
+
+export interface SimilarityConfig {
+  /** Enables local similarity when present on the engine configuration. */
+  modelCacheDir?: string;
+  /** A Hugging Face model ID or a local compatible model directory. */
+  modelId?: string;
+  /** Refuse network downloads when the model is not already available. */
+  allowModelDownload?: boolean;
+  ffmpegPath?: string;
+  ffprobePath?: string;
+  /** Test and advanced-use escape hatch for a local embedding implementation. */
+  provider?: SimilarityEmbeddingProvider;
+}
+
+export interface SimilarityIndexOptions {
+  force?: boolean;
+}
+
+export interface SimilarityQueryOptions {
+  limit?: number;
+  minScore?: number;
+  includeSelf?: boolean;
+}
+
+export interface SimilarityIndexResult {
+  artifactId: string;
+  projectId: string;
+  kind: SimilarityKind;
+  embeddingSpace: string;
+  frameCount: number | null;
+  reused: boolean;
+}
+
+export interface SimilarityStatus {
+  artifactId: string;
+  projectId: string;
+  kind: SimilarityKind;
+  state: "not_indexed" | "ready";
+  embeddingSpace: string;
+  objectHash?: string;
+  frameCount?: number | null;
+  updatedAt?: number;
+}
+
+export interface SimilarityMatch {
+  artifactId: string;
+  projectId: string;
+  slug: string;
+  kind: SimilarityKind;
+  score: number;
+  exactBytes: boolean;
+  embeddingSpace: string;
+  signals: {
+    global: number;
+  };
+}
+
+export interface SimilarityStats {
+  embeddingSpace: string;
+  imageCount: number;
+  videoCount: number;
+}
+
+export interface SimilarityApi {
+  prepare(): Promise<Result<{ embeddingSpace: string }, EngineError>>;
+  index(
+    project: string,
+    artifact: string,
+    options?: SimilarityIndexOptions,
+  ): Promise<Result<SimilarityIndexResult, EngineError>>;
+  rebuild(
+    project: string,
+    options?: { kind?: SimilarityKind; force?: boolean },
+  ): Promise<Result<SimilarityIndexResult[], EngineError>>;
+  status(project: string, artifact: string): Result<SimilarityStatus, EngineError>;
+  stats(project: string): Result<SimilarityStats, EngineError>;
+  findSimilar(
+    project: string,
+    artifact: string,
+    options?: SimilarityQueryOptions,
+  ): Promise<Result<SimilarityMatch[], EngineError>>;
+}
 
 export interface Project {
   projectId: string;

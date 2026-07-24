@@ -88,9 +88,46 @@ application startup to finish recovery of any terminal runtime jobs:
 - `prompts`, `messages`, and `logs` — semantic conversation data and runtime logs
 - `resolver` and `status` — active artifact resolution and derived UI status
 - `storage` — publish CAS objects, then push the Dolt catalog backup
+- `similarity` — opt-in local image/image and video/video similarity lookup
 
 All public domain mutations return a discriminated `Result`. Runtime queue and
 lease primitives return direct values and use fencing where ownership matters.
+
+## Local media similarity
+
+Enable similarity explicitly; it uses a local ONNX CLIP image encoder and an
+in-process USearch index. The first call to `prepare()` downloads the pinned
+q8 model into `modelCacheDir` (or `dataDir/similarity-models`). Video indexing
+also requires `ffmpeg` and `ffprobe` on `PATH`.
+
+```ts
+const engine = createEngine({
+  dataDir: "/srv/videobook/data",
+  workspaceDir: "/srv/videobook/workspaces",
+  similarity: {
+    // allowModelDownload: false for a pre-populated local model cache
+  },
+});
+
+await engine.similarity.prepare();
+await engine.similarity.index(projectId, imageArtifactId);
+await engine.similarity.index(projectId, similarImageArtifactId);
+
+const matches = await engine.similarity.findSimilar(
+  projectId,
+  imageArtifactId,
+  { limit: 20 },
+);
+```
+
+Only active `image` artifacts with `original.png`, `original.jpg`,
+`original.jpeg`, or `original.webp`, and active `video` artifacts with
+`original.mp4`, `original.mov`, `original.webm`, `original.mkv`, or
+`original.avi` are indexable.
+Queries remain within the same project and media kind. Equal SHA-256 objects
+are marked `exactBytes`; other results are semantic similarity candidates, not
+duplicate decisions. Vectors remain runtime-only and rebuild from the CAS after
+restore.
 
 ## Backups
 
@@ -111,6 +148,17 @@ npm test
 npm run build
 npm run examples
 ```
+
+The real-media E2E test is opt-in because it downloads/loads a model and needs
+the local test assets:
+
+```bash
+VIDEOBOOK_REAL_MEDIA_E2E=1 npm test -- tests/similarity.e2e.test.ts
+```
+
+It uses `vancat.mp4`, the supplied attachment image, `vancat_profile.jpg`, and
+locally generated recompressed variants. Override the two source paths with
+`VIDEOBOOK_E2E_IMAGE` and `VIDEOBOOK_E2E_VIDEO` when needed.
 
 Tests use real DoltLite databases and cover runtime/semantic separation,
 concurrent slug claims, exact slug reuse, forward restores, terminal job audit,

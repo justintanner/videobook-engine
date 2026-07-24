@@ -75,6 +75,15 @@ export class ObjectStore {
     return readFile(this.pathFor(hash));
   }
 
+  /**
+   * Makes a content-addressed object available locally and returns its path
+   * without copying it into an artifact workspace.
+   */
+  async ensureLocalPath(hash: string): Promise<string> {
+    await this.ensureLocal(hash);
+    return this.pathFor(hash);
+  }
+
   async materialize(hash: string, destinationPath: string): Promise<void> {
     await this.ensureLocal(hash);
     await mkdir(path.dirname(destinationPath), { recursive: true });

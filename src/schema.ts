@@ -44,6 +44,7 @@ export const RUNTIME_TABLES = [
   "runtime_settings",
   "runtime_logs",
   "runtime_commit_outbox",
+  "runtime_similarity_embeddings",
 ] as const;
 
 export const SEMANTIC_SCHEMA_SQL = `
@@ -467,4 +468,25 @@ export const RUNTIME_SCHEMA_SQL = `
     message TEXT NOT NULL,
     created_at INTEGER NOT NULL
   );
+
+  CREATE TABLE IF NOT EXISTS runtime_similarity_embeddings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    artifact_id TEXT NOT NULL,
+    project_id TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('image', 'video')),
+    source_path TEXT NOT NULL,
+    object_hash TEXT NOT NULL,
+    embedding_space TEXT NOT NULL,
+    dimensions INTEGER NOT NULL,
+    vector_blob BLOB NOT NULL,
+    frame_count INTEGER,
+    updated_at INTEGER NOT NULL,
+    UNIQUE(artifact_id, embedding_space)
+  );
+  CREATE INDEX IF NOT EXISTS runtime_similarity_project_kind
+    ON runtime_similarity_embeddings(
+      project_id, kind, embedding_space, updated_at
+    );
+  CREATE INDEX IF NOT EXISTS runtime_similarity_object
+    ON runtime_similarity_embeddings(object_hash, embedding_space);
 `;
