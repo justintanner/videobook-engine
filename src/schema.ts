@@ -45,6 +45,8 @@ export const RUNTIME_TABLES = [
   "runtime_logs",
   "runtime_commit_outbox",
   "runtime_similarity_embeddings",
+  "runtime_text_similarity_documents",
+  "runtime_text_similarity_chunks",
 ] as const;
 
 export const SEMANTIC_SCHEMA_SQL = `
@@ -489,4 +491,48 @@ export const RUNTIME_SCHEMA_SQL = `
     );
   CREATE INDEX IF NOT EXISTS runtime_similarity_object
     ON runtime_similarity_embeddings(object_hash, embedding_space);
+
+  CREATE TABLE IF NOT EXISTS runtime_text_similarity_documents (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    artifact_id TEXT NOT NULL,
+    project_id TEXT NOT NULL,
+    source_path TEXT NOT NULL,
+    object_hash TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    embedding_space TEXT NOT NULL,
+    dimensions INTEGER NOT NULL,
+    chunk_count INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    UNIQUE(artifact_id, embedding_space)
+  );
+  CREATE INDEX IF NOT EXISTS runtime_text_similarity_project
+    ON runtime_text_similarity_documents(
+      project_id, embedding_space, updated_at
+    );
+  CREATE INDEX IF NOT EXISTS runtime_text_similarity_object
+    ON runtime_text_similarity_documents(object_hash, embedding_space);
+  CREATE INDEX IF NOT EXISTS runtime_text_similarity_content
+    ON runtime_text_similarity_documents(content_hash, embedding_space);
+
+  CREATE TABLE IF NOT EXISTS runtime_text_similarity_chunks (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    document_id INTEGER NOT NULL,
+    artifact_id TEXT NOT NULL,
+    project_id TEXT NOT NULL,
+    embedding_space TEXT NOT NULL,
+    chunk_index INTEGER NOT NULL,
+    start_offset INTEGER NOT NULL,
+    end_offset INTEGER NOT NULL,
+    chunk_text TEXT NOT NULL,
+    dimensions INTEGER NOT NULL,
+    vector_blob BLOB NOT NULL,
+    updated_at INTEGER NOT NULL,
+    UNIQUE(document_id, chunk_index)
+  );
+  CREATE INDEX IF NOT EXISTS runtime_text_similarity_chunk_project
+    ON runtime_text_similarity_chunks(
+      project_id, embedding_space, document_id, chunk_index
+    );
+  CREATE INDEX IF NOT EXISTS runtime_text_similarity_chunk_document
+    ON runtime_text_similarity_chunks(document_id, chunk_index);
 `;

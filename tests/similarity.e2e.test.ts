@@ -18,6 +18,8 @@ const videoSource = process.env.VIDEOBOOK_E2E_VIDEO ??
   path.resolve("vancat.mp4");
 const runRealMedia = process.env.VIDEOBOOK_REAL_MEDIA_E2E === "1";
 const realDescribe = runRealMedia ? describe : describe.skip;
+const runRealText = process.env.VIDEOBOOK_REAL_TEXT_E2E === "1";
+const realTextDescribe = runRealText ? describe : describe.skip;
 const roots: string[] = [];
 
 afterEach(async () => {
@@ -205,6 +207,112 @@ realDescribe("local similarity real-media E2E", () => {
           { limit: 10 },
         ));
         expect(reopened[0]?.artifactId).toBe(videoExact.artifactId);
+      } finally {
+        engine?.close();
+      }
+    },
+    180_000,
+  );
+});
+
+realTextDescribe("local similarity real-text E2E", () => {
+  it(
+    "embeds Markdown and JSON with the pinned local text model",
+    async () => {
+      const root = await mkdtemp(path.join(tmpdir(), "videobook-text-e2e-"));
+      roots.push(root);
+      let engine: Engine | null = createEngine({
+        dataDir: path.join(root, "data"),
+        workspaceDir: path.join(root, "workspaces"),
+        similarity: {
+          modelCacheDir: process.env.VIDEOBOOK_E2E_MODEL_CACHE ??
+            path.join(tmpdir(), "videobook-model-cache"),
+          text: {
+            modelCacheDir: process.env.VIDEOBOOK_E2E_MODEL_CACHE ??
+              path.join(tmpdir(), "videobook-model-cache"),
+          },
+        },
+      });
+      try {
+        const project = value(await engine.projects.create("real-text"));
+        const script = value(await engine.artifacts.create({
+          project: project.projectId,
+          kind: "script",
+          slug: "cat-script",
+        }));
+        const prompt = value(await engine.artifacts.create({
+          project: project.projectId,
+          kind: "prompt",
+          slug: "cat-prompt",
+        }));
+        const unrelated = value(await engine.artifacts.create({
+          project: project.projectId,
+          kind: "final",
+          slug: "ocean-final",
+        }));
+        value(await engine.files.write(
+          script.artifactId,
+          "original.md",
+          "# Quiet cat\n\nA small cat sleeps on a sunlit rug beside the window.",
+          project.projectId,
+        ));
+        value(await engine.files.write(
+          prompt.artifactId,
+          "original.json",
+          JSON.stringify({
+            subject: "feline",
+            action: "rests",
+            setting: "a warm rug by a window",
+          }),
+          project.projectId,
+        ));
+        value(await engine.files.write(
+          unrelated.artifactId,
+          "original.txt",
+          "A sailboat crosses a cold ocean under a grey sky.",
+          project.projectId,
+        ));
+
+        value(await engine.similarity.prepare({ kind: "text" }));
+        for (const artifact of [script, prompt, unrelated]) {
+          value(await engine.similarity.index(project.projectId, artifact.artifactId));
+        }
+        const matches = value(await engine.similarity.findSimilarText(
+          project.projectId,
+          "a calm feline resting on a rug",
+          { limit: 10, minScore: 0.25 },
+        ));
+        expect(matches.map((match) => match.artifactId)).toEqual(
+          expect.arrayContaining([script.artifactId, prompt.artifactId]),
+        );
+        expect(matches.slice(0, 2).map((match) => match.artifactId)).toEqual(
+          expect.arrayContaining([script.artifactId, prompt.artifactId]),
+        );
+        expect(matches[0]).toMatchObject({
+          kind: "text",
+          text: { excerpt: expect.any(String) },
+        });
+
+        engine.close();
+        engine = createEngine({
+          dataDir: path.join(root, "data"),
+          workspaceDir: path.join(root, "workspaces"),
+          similarity: {
+            modelCacheDir: process.env.VIDEOBOOK_E2E_MODEL_CACHE ??
+              path.join(tmpdir(), "videobook-model-cache"),
+            text: {
+              modelCacheDir: process.env.VIDEOBOOK_E2E_MODEL_CACHE ??
+                path.join(tmpdir(), "videobook-model-cache"),
+            },
+          },
+        });
+        const reopened = value(await engine.similarity.findSimilarText(
+          project.projectId,
+          "a calm feline resting on a rug",
+          { limit: 10, minScore: 0.25 },
+        ));
+        expect(reopened.map((match) => match.artifactId))
+          .toContain(script.artifactId);
       } finally {
         engine?.close();
       }

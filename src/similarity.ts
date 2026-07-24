@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import { readFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { mkdtemp, mkdir, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -16,7 +18,7 @@ import {
 
 import {
   err,
-  ok,
+  type ArtifactKind,
   type EngineError,
   type Result,
   type SimilarityApi,
@@ -26,9 +28,14 @@ import {
   type SimilarityIndexResult,
   type SimilarityKind,
   type SimilarityMatch,
+  type SimilarityPrepareOptions,
   type SimilarityQueryOptions,
   type SimilarityStats,
   type SimilarityStatus,
+  type SimilarityTextChunk,
+  type SimilarityTextConfig,
+  type SimilarityTextEmbeddingProvider,
+  type SimilarityTextQueryOptions,
 } from "./engine-types.js";
 import {
   EngineContext,
@@ -46,9 +53,46 @@ const DEFAULT_EMBEDDING_SPACE =
   "clip-vit-b32-q8-d15189d7028b43f1d3e65039190477f6af591c2a-v1";
 const DEFAULT_DIMENSIONS = 512;
 
+const DEFAULT_TEXT_MODEL_ID = "onnx-community/all-MiniLM-L6-v2-ONNX";
+const DEFAULT_TEXT_MODEL_REVISION =
+  "aff7a1dc4e8a1ea593e6ea21e95c22ef0a25966f";
+const DEFAULT_TEXT_EMBEDDING_SPACE =
+  "all-minilm-l6-v2-q4-aff7a1dc4e8a1ea593e6ea21e95c22ef0a25966f-text-v1";
+const DEFAULT_TEXT_DIMENSIONS = 384;
+const DEFAULT_TEXT_MAX_BYTES = 1024 * 1024;
+const DEFAULT_TEXT_MAX_CHUNKS = 256;
+const TEXT_CHUNK_TOKENS = 224;
+const TEXT_OVERLAP_TOKENS = 32;
+const TEXT_CHUNK_CHAR_WINDOW = 1600;
+const TEXT_EXCERPT_LIMIT = 480;
+
+const TEXT_ARTIFACT_KINDS = new Set<ArtifactKind>([
+  "script",
+  "character",
+  "prompt",
+  "scene",
+  "notebook",
+  "final",
+]);
+
 type FeaturePipeline = (
   images: RawImage | RawImage[],
 ) => Promise<{ data: Float32Array; dims: number[] }>;
+
+interface TextTokenizer {
+  encode(
+    text: string,
+    options?: { add_special_tokens?: boolean },
+  ): number[];
+}
+
+interface TextFeaturePipeline {
+  (texts: string[], options?: {
+    pooling?: "mean";
+    normalize?: boolean;
+  }): Promise<{ data: Float32Array; dims: number[] }>;
+  tokenizer: TextTokenizer;
+}
 
 interface EmbeddingRow {
   id: number;
@@ -65,6 +109,39 @@ interface EmbeddingRow {
   slug?: string;
 }
 
+interface TextDocumentRow {
+  id: number;
+  artifact_id: string;
+  project_id: string;
+  source_path: string;
+  object_hash: string;
+  content_hash: string;
+  embedding_space: string;
+  dimensions: number;
+  chunk_count: number;
+  updated_at: number;
+  slug?: string;
+}
+
+interface TextChunkRow {
+  id: number;
+  document_id: number;
+  artifact_id: string;
+  project_id: string;
+  embedding_space: string;
+  chunk_index: number;
+  start_offset: number;
+  end_offset: number;
+  chunk_text: string;
+  dimensions: number;
+  vector_blob: Uint8Array;
+  updated_at: number;
+  source_path?: string;
+  object_hash?: string;
+  content_hash?: string;
+  slug?: string;
+}
+
 interface CachedIndex {
   index: Index;
   dimensions: number;
@@ -74,6 +151,18 @@ interface SelectedSource extends FileRow {
   kind: SimilarityKind;
 }
 
+interface NormalizedText {
+  text: string;
+  contentHash: string;
+}
+
+interface TextSearchPair {
+  chunkId: number;
+  queryChunkIndex: number;
+  exactBytes?: boolean;
+  exactContent?: boolean;
+}
+
 export function createSimilarityApi(context: EngineContext): SimilarityApi {
   if (!context.config.similarity) return disabledSimilarityApi();
   return new LocalSimilarityApi(context, context.config.similarity);
@@ -81,6 +170,7 @@ export function createSimilarityApi(context: EngineContext): SimilarityApi {
 
 class LocalSimilarityApi implements SimilarityApi {
   private readonly provider: SimilarityEmbeddingProvider;
+  private readonly textProvider: SimilarityTextEmbeddingProvider | null;
   private readonly indexes = new Map<string, CachedIndex>();
 
   constructor(
@@ -88,12 +178,45 @@ class LocalSimilarityApi implements SimilarityApi {
     config: SimilarityConfig,
   ) {
     this.provider = config.provider ?? new LocalClipProvider(context, config);
+    this.textProvider = config.text
+      ? config.text.provider ?? new LocalTextProvider(context, config, config.text)
+      : null;
   }
 
-  async prepare(): Promise<Result<{ embeddingSpace: string }, EngineError>> {
+  async prepare(
+    options: SimilarityPrepareOptions = {},
+  ): Promise<
+    Result<
+      {
+        embeddingSpace: string;
+        embeddingSpaces: Partial<Record<SimilarityKind, string>>;
+      },
+      EngineError
+    >
+  > {
     return resultOf(async () => {
-      await this.provider.prepare();
-      return { embeddingSpace: this.provider.embeddingSpace };
+      const kinds = options.kind
+        ? [options.kind]
+        : (["image", "video", ...(this.textProvider ? ["text"] : [])] as SimilarityKind[]);
+      const spaces: Partial<Record<SimilarityKind, string>> = {};
+      const preparedMedia = new Set<SimilarityEmbeddingProvider>();
+      for (const kind of kinds) {
+        if (kind === "text") {
+          const provider = this.requireTextProvider();
+          await provider.prepare();
+          spaces.text = provider.embeddingSpace;
+        } else {
+          if (!preparedMedia.has(this.provider)) {
+            await this.provider.prepare();
+            preparedMedia.add(this.provider);
+          }
+          spaces[kind] = this.provider.embeddingSpace;
+        }
+      }
+      return {
+        embeddingSpace: this.provider.embeddingSpace,
+        embeddingSpaces: spaces,
+      };
     });
   }
 
@@ -109,84 +232,10 @@ class LocalSimilarityApi implements SimilarityApi {
         artifactReference,
       );
       const kind = similarityKind(artifact);
-      const source = this.sourceFor(artifact, kind);
-      const existing = this.embeddingForArtifact(
-        artifact.artifact_id,
-        this.provider.embeddingSpace,
-      );
-
-      if (
-        existing &&
-        existing.object_hash === source.object_hash &&
-        existing.dimensions === this.provider.dimensions &&
-        !options.force
-      ) {
-        this.addToCachedIndex(existing, vectorFromBlob(existing));
-        return this.indexResult(existing, true);
+      if (kind === "text") {
+        return this.indexText(project.project_id, artifact, options);
       }
-
-      const reusable = !options.force
-        ? this.embeddingForObject(
-            source.object_hash,
-            kind,
-            this.provider.embeddingSpace,
-            this.provider.dimensions,
-          )
-        : null;
-      const embedded = reusable
-        ? {
-            vector: vectorFromBlob(reusable),
-            frameCount: reusable.frame_count,
-            reused: true,
-          }
-        : await this.embedSource(source);
-
-      const row = this.context.store.runtime((now) => {
-        if (existing) {
-          this.context.store.db
-            .prepare(
-              `UPDATE runtime_similarity_embeddings
-               SET project_id=?, kind=?, source_path=?, object_hash=?,
-                   dimensions=?, vector_blob=?, frame_count=?, updated_at=?
-               WHERE id=?`,
-            )
-            .run(
-              project.project_id,
-              kind,
-              source.path,
-              source.object_hash,
-              this.provider.dimensions,
-              vectorToBlob(embedded.vector),
-              embedded.frameCount,
-              now,
-              existing.id,
-            );
-          return this.embeddingById(existing.id);
-        }
-        const result = this.context.store.db
-          .prepare(
-            `INSERT INTO runtime_similarity_embeddings(
-              artifact_id, project_id, kind, source_path, object_hash,
-              embedding_space, dimensions, vector_blob, frame_count, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          )
-          .run(
-            artifact.artifact_id,
-            project.project_id,
-            kind,
-            source.path,
-            source.object_hash,
-            this.provider.embeddingSpace,
-            this.provider.dimensions,
-            vectorToBlob(embedded.vector),
-            embedded.frameCount,
-            now,
-          );
-        return this.embeddingById(Number(result.lastInsertRowid));
-      });
-
-      this.addToCachedIndex(row, embedded.vector);
-      return this.indexResult(row, embedded.reused);
+      return this.indexMedia(project.project_id, artifact, kind, options);
     });
   }
 
@@ -196,19 +245,27 @@ class LocalSimilarityApi implements SimilarityApi {
   ): Promise<Result<SimilarityIndexResult[], EngineError>> {
     return resultOf(async () => {
       const project = this.context.projectRow(projectReference);
-      const kinds = options.kind ? [options.kind] : (["image", "video"] as const);
+      const allowedKinds = options.kind
+        ? [options.kind]
+        : (["image", "video", ...(this.textProvider ? ["text"] : [])] as SimilarityKind[]);
+      const artifactKinds = allowedKinds.flatMap((kind) =>
+        kind === "text" ? [...TEXT_ARTIFACT_KINDS] : [kind],
+      );
       const artifactRows = this.context.store.db
         .prepare(
           `SELECT artifact_id, project_id, slug, kind, data_json,
                   created_at, updated_at, deleted_at
            FROM artifacts
            WHERE project_id=? AND deleted_at IS NULL
-             AND kind IN (${kinds.map(() => "?").join(", ")})
+             AND kind IN (${artifactKinds.map(() => "?").join(", ")})
            ORDER BY created_at, artifact_id`,
         )
-        .all(project.project_id, ...kinds) as unknown as ArtifactRow[];
+        .all(project.project_id, ...artifactKinds) as unknown as ArtifactRow[];
       const indexed: SimilarityIndexResult[] = [];
       for (const artifact of artifactRows) {
+        const kind = similarityKind(artifact);
+        if (!allowedKinds.includes(kind)) continue;
+        if (kind === "text" && !this.hasTextSource(artifact.artifact_id)) continue;
         const result = await this.index(project.project_id, artifact.artifact_id, {
           force: options.force,
         });
@@ -230,6 +287,33 @@ class LocalSimilarityApi implements SimilarityApi {
         artifactReference,
       );
       const kind = similarityKind(artifact);
+      if (kind === "text") {
+        const provider = this.requireTextProvider();
+        const row = this.textDocumentForArtifact(
+          artifact.artifact_id,
+          provider.embeddingSpace,
+        );
+        if (!row) {
+          return {
+            artifactId: artifact.artifact_id,
+            projectId: project.project_id,
+            kind,
+            state: "not_indexed",
+            embeddingSpace: provider.embeddingSpace,
+          } satisfies SimilarityStatus;
+        }
+        return {
+          artifactId: artifact.artifact_id,
+          projectId: project.project_id,
+          kind,
+          state: "ready",
+          embeddingSpace: row.embedding_space,
+          objectHash: row.object_hash,
+          contentHash: row.content_hash,
+          chunkCount: row.chunk_count,
+          updatedAt: row.updated_at,
+        } satisfies SimilarityStatus;
+      }
       const row = this.embeddingForArtifact(
         artifact.artifact_id,
         this.provider.embeddingSpace,
@@ -241,7 +325,7 @@ class LocalSimilarityApi implements SimilarityApi {
           kind,
           state: "not_indexed",
           embeddingSpace: this.provider.embeddingSpace,
-        };
+        } satisfies SimilarityStatus;
       }
       return {
         artifactId: artifact.artifact_id,
@@ -252,7 +336,7 @@ class LocalSimilarityApi implements SimilarityApi {
         objectHash: row.object_hash,
         frameCount: row.frame_count,
         updatedAt: row.updated_at,
-      };
+      } satisfies SimilarityStatus;
     });
   }
 
@@ -270,10 +354,32 @@ class LocalSimilarityApi implements SimilarityApi {
         kind: SimilarityKind;
         count: number;
       }>;
+      const spaces: Partial<Record<SimilarityKind, string>> = {
+        image: this.provider.embeddingSpace,
+        video: this.provider.embeddingSpace,
+      };
+      let textCount = 0;
+      if (this.textProvider) {
+        spaces.text = this.textProvider.embeddingSpace;
+        const count = this.context.store.db
+          .prepare(
+            `SELECT COUNT(*) AS count
+             FROM runtime_text_similarity_documents d
+             JOIN artifacts a ON a.artifact_id=d.artifact_id
+             WHERE d.project_id=? AND d.embedding_space=?
+               AND a.deleted_at IS NULL`,
+          )
+          .get(project.project_id, this.textProvider.embeddingSpace) as unknown as {
+          count: number;
+        };
+        textCount = count.count;
+      }
       return {
         embeddingSpace: this.provider.embeddingSpace,
+        embeddingSpaces: spaces,
         imageCount: rows.find((row) => row.kind === "image")?.count ?? 0,
         videoCount: rows.find((row) => row.kind === "video")?.count ?? 0,
+        textCount,
       };
     });
   }
@@ -290,88 +396,533 @@ class LocalSimilarityApi implements SimilarityApi {
         artifactReference,
       );
       const kind = similarityKind(artifact);
-      const limit = checkedLimit(options.limit);
-      const minScore = checkedMinScore(options.minScore);
-      const query = this.embeddingForArtifact(
-        artifact.artifact_id,
-        this.provider.embeddingSpace,
-      );
-      if (!query) {
-        throw new EngineFault({
-          code: "NOT_READY",
-          message: `Artifact is not indexed for similarity: ${artifact.slug}`,
-          details: { artifactId: artifact.artifact_id },
-        });
+      if (kind === "text") {
+        return this.findSimilarTextArtifact(
+          project.project_id,
+          artifact,
+          options,
+        );
       }
-
-      const index = this.indexFor(
-        project.project_id,
-        kind,
-        query.embedding_space,
-        query.dimensions,
-      );
-      if (index.index.size() === 0) return [];
-      const candidateCount = Math.min(
-        index.index.size(),
-        Math.max(20, limit * 5),
-      );
-      const nearest = index.index.search(
-        vectorFromBlob(query),
-        candidateCount,
-        0,
-      );
-      const ids = new Set<number>();
-      for (const key of nearest.keys) ids.add(Number(key));
-      for (const exact of this.exactObjectEmbeddings(
-        project.project_id,
-        kind,
-        query.object_hash,
-        query.embedding_space,
-      )) {
-        ids.add(exact.id);
-      }
-      if (ids.size === 0) return [];
-
-      const candidates = this.activeEmbeddingsByIds(
-        project.project_id,
-        kind,
-        query.embedding_space,
-        [...ids],
-      );
-      const queryVector = vectorFromBlob(query);
-      return candidates
-        .filter(
-          (candidate) =>
-            options.includeSelf === true ||
-            candidate.artifact_id !== artifact.artifact_id,
-        )
-        .map((candidate) => {
-          const exactBytes = candidate.object_hash === query.object_hash;
-          const global = exactBytes
-            ? 1
-            : cosine(queryVector, vectorFromBlob(candidate));
-          return {
-            artifactId: candidate.artifact_id,
-            projectId: candidate.project_id,
-            slug: candidate.slug ?? candidate.artifact_id,
-            kind: candidate.kind,
-            score: global,
-            exactBytes,
-            embeddingSpace: candidate.embedding_space,
-            signals: { global },
-          } satisfies SimilarityMatch;
-        })
-        .filter((match) => minScore === undefined || match.score >= minScore)
-        .sort(
-          (left, right) =>
-            right.score - left.score ||
-            left.artifactId.localeCompare(right.artifactId),
-        )
-        .slice(0, limit);
+      return this.findSimilarMedia(project.project_id, artifact, kind, options);
     });
   }
 
-  private async embedSource(source: SelectedSource): Promise<{
+  async findSimilarText(
+    projectReference: string,
+    query: string,
+    options: SimilarityTextQueryOptions = {},
+  ): Promise<Result<SimilarityMatch[], EngineError>> {
+    return resultOf(async () => {
+      const project = this.context.projectRow(projectReference);
+      const provider = this.requireTextProvider();
+      const normalizedQuery = normalizePlainText(query);
+      if (normalizedQuery.text.length === 0) {
+        throw new EngineFault({
+          code: "INVALID_INPUT",
+          message: "Text similarity queries must not be empty",
+        });
+      }
+      const maxBytes = checkedTextMaxBytes(this.context.config.similarity?.text);
+      if (Buffer.byteLength(normalizedQuery.text, "utf8") > maxBytes) {
+        throw new EngineFault({
+          code: "INVALID_INPUT",
+          message: `Text similarity queries cannot exceed ${maxBytes} bytes`,
+        });
+      }
+      const chunks = await this.embedText(normalizedQuery.text);
+      return this.searchText(
+        project.project_id,
+        null,
+        null,
+        normalizedQuery.contentHash,
+        chunks,
+        options,
+        provider,
+      );
+    });
+  }
+
+  private async indexMedia(
+    projectId: string,
+    artifact: ArtifactRow,
+    kind: "image" | "video",
+    options: SimilarityIndexOptions,
+  ): Promise<SimilarityIndexResult> {
+    const source = this.sourceFor(artifact, kind);
+    const existing = this.embeddingForArtifact(
+      artifact.artifact_id,
+      this.provider.embeddingSpace,
+    );
+    if (
+      existing &&
+      existing.object_hash === source.object_hash &&
+      existing.dimensions === this.provider.dimensions &&
+      !options.force
+    ) {
+      this.addToCachedIndex(existing, vectorFromBlob(existing));
+      return this.indexResult(existing, true);
+    }
+    const reusable = !options.force
+      ? this.embeddingForObject(
+          source.object_hash,
+          kind,
+          this.provider.embeddingSpace,
+          this.provider.dimensions,
+        )
+      : null;
+    const embedded = reusable
+      ? {
+          vector: vectorFromBlob(reusable),
+          frameCount: reusable.frame_count,
+          reused: true,
+        }
+      : await this.embedMediaSource(source);
+    const row = this.context.store.runtime((now) => {
+      if (existing) {
+        this.context.store.db
+          .prepare(
+            `UPDATE runtime_similarity_embeddings
+             SET project_id=?, kind=?, source_path=?, object_hash=?,
+                 dimensions=?, vector_blob=?, frame_count=?, updated_at=?
+             WHERE id=?`,
+          )
+          .run(
+            projectId,
+            kind,
+            source.path,
+            source.object_hash,
+            this.provider.dimensions,
+            vectorToBlob(embedded.vector),
+            embedded.frameCount,
+            now,
+            existing.id,
+          );
+        return this.embeddingById(existing.id);
+      }
+      const result = this.context.store.db
+        .prepare(
+          `INSERT INTO runtime_similarity_embeddings(
+            artifact_id, project_id, kind, source_path, object_hash,
+            embedding_space, dimensions, vector_blob, frame_count, updated_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          artifact.artifact_id,
+          projectId,
+          kind,
+          source.path,
+          source.object_hash,
+          this.provider.embeddingSpace,
+          this.provider.dimensions,
+          vectorToBlob(embedded.vector),
+          embedded.frameCount,
+          now,
+        );
+      return this.embeddingById(Number(result.lastInsertRowid));
+    });
+    this.addToCachedIndex(row, embedded.vector);
+    return this.indexResult(row, embedded.reused);
+  }
+
+  private async indexText(
+    projectId: string,
+    artifact: ArtifactRow,
+    options: SimilarityIndexOptions,
+  ): Promise<SimilarityIndexResult> {
+    const provider = this.requireTextProvider();
+    const source = this.sourceFor(artifact, "text");
+    const normalizedSource = await this.readNormalizedText(source);
+    const existing = this.textDocumentForArtifact(
+      artifact.artifact_id,
+      provider.embeddingSpace,
+    );
+    if (
+      existing &&
+      existing.object_hash === source.object_hash &&
+      existing.content_hash === normalizedSource.contentHash &&
+      existing.dimensions === provider.dimensions &&
+      !options.force
+    ) {
+      return this.textIndexResult(existing, true);
+    }
+    const reusable = !options.force
+      ? this.textDocumentForObjectOrContent(
+          source.object_hash,
+          normalizedSource.contentHash,
+          provider.embeddingSpace,
+          provider.dimensions,
+        )
+      : null;
+    const embeddedChunks = reusable
+      ? this.textChunksForDocument(reusable.id).map((chunk) => ({
+          startOffset: chunk.start_offset,
+          endOffset: chunk.end_offset,
+          vector: vectorFromBlob(chunk),
+        }))
+      : await this.embedText(normalizedSource.text);
+    const maxChunks = checkedTextMaxChunks(this.context.config.similarity?.text);
+    if (embeddedChunks.length > maxChunks) {
+      throw new EngineFault({
+        code: "INVALID_INPUT",
+        message: `Text source produces more than ${maxChunks} chunks`,
+      });
+    }
+    this.validateTextChunks(
+      normalizedSource.text,
+      embeddedChunks,
+      provider.dimensions,
+    );
+    this.indexes.delete(
+      indexKey(projectId, "text", provider.embeddingSpace),
+    );
+    const row = this.context.store.runtime((now) => {
+      let documentId: number;
+      if (existing) {
+        documentId = existing.id;
+        this.context.store.db
+          .prepare(
+            `UPDATE runtime_text_similarity_documents
+             SET project_id=?, source_path=?, object_hash=?, content_hash=?,
+                 dimensions=?, chunk_count=?, updated_at=?
+             WHERE id=?`,
+          )
+          .run(
+            projectId,
+            source.path,
+            source.object_hash,
+            normalizedSource.contentHash,
+            provider.dimensions,
+            embeddedChunks.length,
+            now,
+            documentId,
+          );
+        this.context.store.db
+          .prepare(
+            "DELETE FROM runtime_text_similarity_chunks WHERE document_id=?",
+          )
+          .run(documentId);
+      } else {
+        const result = this.context.store.db
+          .prepare(
+            `INSERT INTO runtime_text_similarity_documents(
+              artifact_id, project_id, source_path, object_hash, content_hash,
+              embedding_space, dimensions, chunk_count, updated_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          )
+          .run(
+            artifact.artifact_id,
+            projectId,
+            source.path,
+            source.object_hash,
+            normalizedSource.contentHash,
+            provider.embeddingSpace,
+            provider.dimensions,
+            embeddedChunks.length,
+            now,
+          );
+        documentId = Number(result.lastInsertRowid);
+      }
+      const insertChunk = this.context.store.db.prepare(
+        `INSERT INTO runtime_text_similarity_chunks(
+          document_id, artifact_id, project_id, embedding_space, chunk_index,
+          start_offset, end_offset, chunk_text, dimensions, vector_blob, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      );
+      embeddedChunks.forEach((chunk, index) => {
+        insertChunk.run(
+          documentId,
+          artifact.artifact_id,
+          projectId,
+          provider.embeddingSpace,
+          index,
+          chunk.startOffset,
+          chunk.endOffset,
+          normalizedSource.text.slice(chunk.startOffset, chunk.endOffset),
+          provider.dimensions,
+          vectorToBlob(normalized(chunk.vector)),
+          now,
+        );
+      });
+      return this.textDocumentById(documentId);
+    });
+    return this.textIndexResult(row, Boolean(reusable));
+  }
+
+  private async findSimilarTextArtifact(
+    projectId: string,
+    artifact: ArtifactRow,
+    options: SimilarityQueryOptions,
+  ): Promise<SimilarityMatch[]> {
+    const provider = this.requireTextProvider();
+    const query = this.textDocumentForArtifact(
+      artifact.artifact_id,
+      provider.embeddingSpace,
+    );
+    if (!query) {
+      throw new EngineFault({
+        code: "NOT_READY",
+        message: `Artifact is not indexed for similarity: ${artifact.slug}`,
+        details: { artifactId: artifact.artifact_id },
+      });
+    }
+    const queryChunks = this.textChunksForDocument(query.id).map((chunk) => ({
+      startOffset: chunk.start_offset,
+      endOffset: chunk.end_offset,
+      vector: vectorFromBlob(chunk),
+    }));
+    return this.searchText(
+      projectId,
+      artifact.artifact_id,
+      query.object_hash,
+      query.content_hash,
+      queryChunks,
+      options,
+      provider,
+    );
+  }
+
+  private async findSimilarMedia(
+    projectId: string,
+    artifact: ArtifactRow,
+    kind: "image" | "video",
+    options: SimilarityQueryOptions,
+  ): Promise<SimilarityMatch[]> {
+    const limit = checkedLimit(options.limit);
+    const minScore = checkedMinScore(options.minScore);
+    const query = this.embeddingForArtifact(
+      artifact.artifact_id,
+      this.provider.embeddingSpace,
+    );
+    if (!query) {
+      throw new EngineFault({
+        code: "NOT_READY",
+        message: `Artifact is not indexed for similarity: ${artifact.slug}`,
+        details: { artifactId: artifact.artifact_id },
+      });
+    }
+    const index = this.indexFor(
+      projectId,
+      kind,
+      query.embedding_space,
+      query.dimensions,
+    );
+    if (index.index.size() === 0) return [];
+    const candidateCount = Math.min(
+      index.index.size(),
+      Math.max(20, limit * 5),
+    );
+    const nearest = index.index.search(
+      vectorFromBlob(query),
+      candidateCount,
+      0,
+    );
+    const ids = new Set<number>();
+    for (const key of nearest.keys) ids.add(Number(key));
+    for (const exact of this.exactObjectEmbeddings(
+      projectId,
+      kind,
+      query.object_hash,
+      query.embedding_space,
+    )) {
+      ids.add(exact.id);
+    }
+    const candidates = this.activeEmbeddingsByIds(
+      projectId,
+      kind,
+      query.embedding_space,
+      [...ids],
+    );
+    const queryVector = vectorFromBlob(query);
+    return candidates
+      .filter(
+        (candidate) =>
+          options.includeSelf === true ||
+          candidate.artifact_id !== artifact.artifact_id,
+      )
+      .map((candidate) => {
+        const exactBytes = candidate.object_hash === query.object_hash;
+        const global = exactBytes
+          ? 1
+          : cosine(queryVector, vectorFromBlob(candidate));
+        return {
+          artifactId: candidate.artifact_id,
+          projectId: candidate.project_id,
+          slug: candidate.slug ?? candidate.artifact_id,
+          kind: candidate.kind,
+          score: global,
+          exactBytes,
+          embeddingSpace: candidate.embedding_space,
+          signals: { global },
+        } satisfies SimilarityMatch;
+      })
+      .filter((match) => minScore === undefined || match.score >= minScore)
+      .sort(
+        (left, right) =>
+          right.score - left.score ||
+          left.artifactId.localeCompare(right.artifactId),
+      )
+      .slice(0, limit);
+  }
+
+  private searchText(
+    projectId: string,
+    queryArtifactId: string | null,
+    queryObjectHash: string | null,
+    queryContentHash: string,
+    queryChunks: SimilarityTextChunk[],
+    options: SimilarityQueryOptions,
+    provider: SimilarityTextEmbeddingProvider,
+  ): SimilarityMatch[] {
+    const limit = checkedLimit(options.limit);
+    const minScore = checkedMinScore(options.minScore);
+    if (queryChunks.length === 0) return [];
+    const index = this.textIndexFor(
+      projectId,
+      provider.embeddingSpace,
+      provider.dimensions,
+    );
+    if (index.index.size() === 0) return [];
+    const candidateCount = Math.min(
+      index.index.size(),
+      Math.max(50, limit * 10),
+    );
+    const nearest = index.index.search(
+      queryChunks.map((chunk) => normalized(chunk.vector)),
+      candidateCount,
+      0,
+    );
+    const pairs = new Map<number, TextSearchPair[]>();
+    for (let queryIndex = 0; queryIndex < queryChunks.length; queryIndex += 1) {
+      const matches = queryChunks.length === 1
+        ? nearest
+        : nearest.get(queryIndex);
+      for (const key of matches.keys) {
+        const chunkId = Number(key);
+        const current = pairs.get(chunkId) ?? [];
+        current.push({ chunkId, queryChunkIndex: queryIndex });
+        pairs.set(chunkId, current);
+      }
+    }
+    const exactDocuments = new Map<number, {
+      exactBytes: boolean;
+      exactContent: boolean;
+    }>();
+    if (queryObjectHash) {
+      for (const document of this.textDocumentsForHash(
+        projectId,
+        "object_hash",
+        queryObjectHash,
+        provider,
+      )) {
+        exactDocuments.set(document.id, {
+          exactBytes: true,
+          exactContent: document.content_hash === queryContentHash,
+        });
+      }
+    }
+    for (const document of this.textDocumentsForHash(
+      projectId,
+      "content_hash",
+      queryContentHash,
+      provider,
+    )) {
+      const current = exactDocuments.get(document.id);
+      exactDocuments.set(document.id, {
+        exactBytes: current?.exactBytes ?? false,
+        exactContent: true,
+      });
+    }
+    for (const document of exactDocuments.keys()) {
+      const first = this.textChunksForDocument(document)[0];
+      if (first) {
+        const current = pairs.get(first.id) ?? [];
+        current.push({
+          chunkId: first.id,
+          queryChunkIndex: 0,
+          exactBytes: exactDocuments.get(document)?.exactBytes,
+          exactContent: exactDocuments.get(document)?.exactContent,
+        });
+        pairs.set(first.id, current);
+      }
+    }
+    const chunks = this.activeTextChunksByIds(
+      projectId,
+      provider.embeddingSpace,
+      provider.dimensions,
+      [...pairs.keys()],
+    );
+    const best = new Map<number, {
+      chunk: TextChunkRow;
+      queryChunkIndex: number;
+      score: number;
+      exactBytes: boolean;
+      exactContent: boolean;
+    }>();
+    for (const chunk of chunks) {
+      for (const pair of pairs.get(chunk.id) ?? []) {
+        const queryChunk = queryChunks[pair.queryChunkIndex];
+        if (!queryChunk) continue;
+        const exactBytes = pair.exactBytes === true ||
+          chunk.object_hash === queryObjectHash;
+        const exactContent = pair.exactContent === true ||
+          chunk.content_hash === queryContentHash;
+        const score = exactBytes || exactContent
+          ? 1
+          : cosine(normalized(queryChunk.vector), vectorFromBlob(chunk));
+        const current = best.get(chunk.document_id);
+        if (!current || score > current.score) {
+          best.set(chunk.document_id, {
+            chunk,
+            queryChunkIndex: pair.queryChunkIndex,
+            score,
+            exactBytes,
+            exactContent,
+          });
+        }
+      }
+    }
+    return [...best.entries()]
+      .filter(([, match]) =>
+        options.includeSelf === true ||
+        queryArtifactId === null || match.chunk.artifact_id !== queryArtifactId,
+      )
+      .map(([, match]) => {
+        const queryChunk = queryChunks[match.queryChunkIndex];
+        return {
+          artifactId: match.chunk.artifact_id,
+          projectId: match.chunk.project_id,
+          slug: match.chunk.slug ?? match.chunk.artifact_id,
+          kind: "text" as const,
+          score: match.score,
+          exactBytes: match.exactBytes,
+          exactContent: match.exactContent,
+          embeddingSpace: match.chunk.embedding_space,
+          text: {
+            sourcePath: match.chunk.source_path ?? "original.txt",
+            chunkIndex: match.chunk.chunk_index,
+            startOffset: match.chunk.start_offset,
+            endOffset: match.chunk.end_offset,
+            excerpt: excerpt(match.chunk.chunk_text),
+            ...(queryChunk
+              ? {
+                  queryStartOffset: queryChunk.startOffset,
+                  queryEndOffset: queryChunk.endOffset,
+                }
+              : {}),
+          },
+          signals: { global: match.score },
+        } satisfies SimilarityMatch;
+      })
+      .filter((match) => minScore === undefined || match.score >= minScore)
+      .sort(
+        (left, right) =>
+          right.score - left.score ||
+          left.artifactId.localeCompare(right.artifactId),
+      )
+      .slice(0, limit);
+  }
+
+  private async embedMediaSource(source: SelectedSource): Promise<{
     vector: Float32Array;
     frameCount: number | null;
     reused: boolean;
@@ -395,6 +946,93 @@ class LocalSimilarityApi implements SimilarityApi {
     };
   }
 
+  private async embedText(text: string): Promise<SimilarityTextChunk[]> {
+    const provider = this.requireTextProvider();
+    await provider.prepare();
+    const chunks = await provider.embedText(text);
+    this.validateTextChunks(text, chunks, provider.dimensions);
+    const maxChunks = checkedTextMaxChunks(this.context.config.similarity?.text);
+    if (chunks.length > maxChunks) {
+      throw new EngineFault({
+        code: "INVALID_INPUT",
+        message: `Text source produces more than ${maxChunks} chunks`,
+      });
+    }
+    return chunks.map((chunk) => ({
+      ...chunk,
+      vector: normalized(chunk.vector),
+    }));
+  }
+
+  private async readNormalizedText(source: SelectedSource): Promise<NormalizedText> {
+    const maxBytes = checkedTextMaxBytes(this.context.config.similarity?.text);
+    const localPath = await this.context.objects.ensureLocalPath(source.object_hash);
+    const bytes = await readFile(localPath);
+    if (bytes.byteLength > maxBytes) {
+      throw new EngineFault({
+        code: "INVALID_INPUT",
+        message: `Text source exceeds the ${maxBytes}-byte similarity limit`,
+      });
+    }
+    let raw: string;
+    try {
+      raw = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+    } catch {
+      throw new EngineFault({
+        code: "INVALID_INPUT",
+        message: `Text source is not valid UTF-8: ${source.path}`,
+      });
+    }
+    const extension = path.extname(source.path).toLowerCase();
+    const normalizedText = extension === ".json"
+      ? normalizeJsonText(raw, source.path)
+      : normalizePlainText(raw);
+    if (normalizedText.text.length === 0) {
+      throw new EngineFault({
+        code: "INVALID_INPUT",
+        message: `Text source is empty: ${source.path}`,
+      });
+    }
+    return normalizedText;
+  }
+
+  private validateTextChunks(
+    text: string,
+    chunks: SimilarityTextChunk[],
+    dimensions: number,
+  ): void {
+    if (chunks.length === 0) {
+      throw new EngineFault({
+        code: "INVALID_INPUT",
+        message: "Text provider returned no chunks",
+      });
+    }
+    let previousStart = -1;
+    for (const chunk of chunks) {
+      if (
+        !Number.isInteger(chunk.startOffset) ||
+        !Number.isInteger(chunk.endOffset) ||
+        chunk.startOffset < 0 ||
+        chunk.endOffset <= chunk.startOffset ||
+        chunk.endOffset > text.length ||
+        chunk.startOffset < previousStart
+      ) {
+        throw new EngineFault({
+          code: "INVALID_INPUT",
+          message: "Text provider returned invalid chunk offsets",
+        });
+      }
+      if (chunk.vector.length !== dimensions) {
+        throw new EngineFault({
+          code: "INVALID_INPUT",
+          message: `Text provider returned ${chunk.vector.length} dimensions; expected ${dimensions}`,
+        });
+      }
+      normalized(chunk.vector);
+      previousStart = chunk.startOffset;
+    }
+  }
+
   private sourceFor(
     artifact: ArtifactRow,
     kind: SimilarityKind,
@@ -410,17 +1048,33 @@ class LocalSimilarityApi implements SimilarityApi {
       .all(artifact.artifact_id) as unknown as FileRow[];
     const extension = kind === "image"
       ? "(?:png|jpe?g|webp)"
-      : "(?:mp4|mov|webm|mkv|avi)";
-    const source = rows.find((row) =>
+      : kind === "video"
+        ? "(?:mp4|mov|webm|mkv|avi)"
+        : "(?:json|md|txt)";
+    const sources = rows.filter((row) =>
       new RegExp(`(?:^|/)original\\.${extension}$`, "i").test(row.path),
     );
-    if (!source) {
+    if (sources.length === 0) {
       throw new EngineFault({
         code: "INVALID_INPUT",
         message: `No supported original ${kind} file for ${artifact.slug}`,
       });
     }
-    return { ...source, kind };
+    if (kind === "text" && sources.length > 1) {
+      throw new EngineFault({
+        code: "INVALID_INPUT",
+        message: `Multiple supported original ${kind} files for ${artifact.slug}`,
+        details: { paths: sources.map((source) => source.path) },
+      });
+    }
+    return { ...sources[0]!, kind };
+  }
+
+  private hasTextSource(artifactId: string): boolean {
+    const rows = this.context.store.db
+      .prepare("SELECT path FROM artifact_files WHERE artifact_id=?")
+      .all(artifactId) as unknown as Array<{ path: string }>;
+    return rows.some((row) => /(?:^|\/)original\.(?:json|md|txt)$/i.test(row.path));
   }
 
   private embeddingForArtifact(
@@ -440,7 +1094,7 @@ class LocalSimilarityApi implements SimilarityApi {
 
   private embeddingForObject(
     objectHash: string,
-    kind: SimilarityKind,
+    kind: "image" | "video",
     embeddingSpace: string,
     dimensions: number,
   ): EmbeddingRow | null {
@@ -472,7 +1126,7 @@ class LocalSimilarityApi implements SimilarityApi {
 
   private exactObjectEmbeddings(
     projectId: string,
-    kind: SimilarityKind,
+    kind: "image" | "video",
     objectHash: string,
     embeddingSpace: string,
   ): EmbeddingRow[] {
@@ -488,7 +1142,7 @@ class LocalSimilarityApi implements SimilarityApi {
 
   private activeEmbeddingsByIds(
     projectId: string,
-    kind: SimilarityKind,
+    kind: "image" | "video",
     embeddingSpace: string,
     ids: number[],
   ): EmbeddingRow[] {
@@ -511,9 +1165,72 @@ class LocalSimilarityApi implements SimilarityApi {
 
   private indexFor(
     projectId: string,
-    kind: SimilarityKind,
+    kind: "image" | "video",
     embeddingSpace: string,
     dimensions: number,
+  ): CachedIndex {
+    return this.cachedIndex(
+      projectId,
+      kind,
+      embeddingSpace,
+      dimensions,
+      `SELECT e.id, e.artifact_id, e.project_id, e.kind, e.source_path,
+              e.object_hash, e.embedding_space, e.dimensions, e.vector_blob,
+              e.frame_count, e.updated_at
+       FROM runtime_similarity_embeddings e
+       JOIN artifacts a ON a.artifact_id=e.artifact_id
+       JOIN projects p ON p.project_id=e.project_id
+       WHERE e.project_id=? AND e.kind=? AND e.embedding_space=?
+         AND e.dimensions=? AND a.deleted_at IS NULL AND p.deleted_at IS NULL
+       ORDER BY e.id`,
+    );
+  }
+
+  private textIndexFor(
+    projectId: string,
+    embeddingSpace: string,
+    dimensions: number,
+  ): CachedIndex {
+    const key = indexKey(projectId, "text", embeddingSpace);
+    const current = this.indexes.get(key);
+    if (current) return current;
+    const index = new Index({
+      dimensions,
+      metric: MetricKind.Cos,
+      quantization: ScalarKind.F16,
+      connectivity: 16,
+      expansion_add: 128,
+      expansion_search: 128,
+      multi: false,
+    });
+    const rows = this.context.store.db
+      .prepare(
+        `SELECT c.id, c.document_id, c.artifact_id, c.project_id,
+                c.embedding_space, c.chunk_index, c.start_offset,
+                c.end_offset, c.chunk_text, c.dimensions, c.vector_blob,
+                c.updated_at
+         FROM runtime_text_similarity_chunks c
+         JOIN artifacts a ON a.artifact_id=c.artifact_id
+         JOIN projects p ON p.project_id=c.project_id
+         WHERE c.project_id=? AND c.embedding_space=?
+           AND c.dimensions=? AND a.deleted_at IS NULL AND p.deleted_at IS NULL
+         ORDER BY c.id`,
+      )
+      .all(projectId, embeddingSpace, dimensions) as unknown as TextChunkRow[];
+    for (const row of rows) {
+      index.add(BigInt(row.id), vectorFromBlob(row), 0);
+    }
+    const cached = { index, dimensions };
+    this.indexes.set(key, cached);
+    return cached;
+  }
+
+  private cachedIndex(
+    projectId: string,
+    kind: "image" | "video",
+    embeddingSpace: string,
+    dimensions: number,
+    sql: string,
   ): CachedIndex {
     const key = indexKey(projectId, kind, embeddingSpace);
     const current = this.indexes.get(key);
@@ -528,17 +1245,7 @@ class LocalSimilarityApi implements SimilarityApi {
       multi: false,
     });
     const rows = this.context.store.db
-      .prepare(
-        `SELECT e.id, e.artifact_id, e.project_id, e.kind, e.source_path,
-                e.object_hash, e.embedding_space, e.dimensions, e.vector_blob,
-                e.frame_count, e.updated_at
-         FROM runtime_similarity_embeddings e
-         JOIN artifacts a ON a.artifact_id=e.artifact_id
-         JOIN projects p ON p.project_id=e.project_id
-         WHERE e.project_id=? AND e.kind=? AND e.embedding_space=?
-           AND e.dimensions=? AND a.deleted_at IS NULL AND p.deleted_at IS NULL
-         ORDER BY e.id`,
-      )
+      .prepare(sql)
       .all(projectId, kind, embeddingSpace, dimensions) as unknown as EmbeddingRow[];
     for (const row of rows) {
       index.add(BigInt(row.id), vectorFromBlob(row), 0);
@@ -564,6 +1271,110 @@ class LocalSimilarityApi implements SimilarityApi {
     cached.index.add(BigInt(row.id), vector, 0);
   }
 
+  private textDocumentForArtifact(
+    artifactId: string,
+    embeddingSpace: string,
+  ): TextDocumentRow | null {
+    const row = this.context.store.db
+      .prepare(
+        `SELECT id, artifact_id, project_id, source_path, object_hash,
+                content_hash, embedding_space, dimensions, chunk_count, updated_at
+         FROM runtime_text_similarity_documents
+         WHERE artifact_id=? AND embedding_space=?`,
+      )
+      .get(artifactId, embeddingSpace) as unknown as TextDocumentRow | undefined;
+    return row ?? null;
+  }
+
+  private textDocumentById(id: number): TextDocumentRow {
+    const row = this.context.store.db
+      .prepare(
+        `SELECT id, artifact_id, project_id, source_path, object_hash,
+                content_hash, embedding_space, dimensions, chunk_count, updated_at
+         FROM runtime_text_similarity_documents WHERE id=?`,
+      )
+      .get(id) as unknown as TextDocumentRow | undefined;
+    if (!row) throw new Error(`Text similarity document not found: ${id}`);
+    return row;
+  }
+
+  private textDocumentForObjectOrContent(
+    objectHash: string,
+    contentHash: string,
+    embeddingSpace: string,
+    dimensions: number,
+  ): TextDocumentRow | null {
+    const row = this.context.store.db
+      .prepare(
+        `SELECT id, artifact_id, project_id, source_path, object_hash,
+                content_hash, embedding_space, dimensions, chunk_count, updated_at
+         FROM runtime_text_similarity_documents
+         WHERE (object_hash=? OR content_hash=?)
+           AND embedding_space=? AND dimensions=?
+         ORDER BY updated_at DESC, id DESC LIMIT 1`,
+      )
+      .get(objectHash, contentHash, embeddingSpace, dimensions) as unknown as
+      | TextDocumentRow
+      | undefined;
+    return row ?? null;
+  }
+
+  private textDocumentsForHash(
+    projectId: string,
+    column: "object_hash" | "content_hash",
+    hash: string,
+    provider: SimilarityTextEmbeddingProvider,
+  ): TextDocumentRow[] {
+    return this.context.store.db
+      .prepare(
+        `SELECT id, artifact_id, project_id, source_path, object_hash,
+                content_hash, embedding_space, dimensions, chunk_count, updated_at
+         FROM runtime_text_similarity_documents
+         WHERE project_id=? AND ${column}=? AND embedding_space=?
+           AND dimensions=?`,
+      )
+      .all(projectId, hash, provider.embeddingSpace, provider.dimensions) as unknown as
+      TextDocumentRow[];
+  }
+
+  private textChunksForDocument(documentId: number): TextChunkRow[] {
+    return this.context.store.db
+      .prepare(
+        `SELECT id, document_id, artifact_id, project_id, embedding_space,
+                chunk_index, start_offset, end_offset, chunk_text, dimensions,
+                vector_blob, updated_at
+         FROM runtime_text_similarity_chunks
+         WHERE document_id=? ORDER BY chunk_index`,
+      )
+      .all(documentId) as unknown as TextChunkRow[];
+  }
+
+  private activeTextChunksByIds(
+    projectId: string,
+    embeddingSpace: string,
+    dimensions: number,
+    ids: number[],
+  ): TextChunkRow[] {
+    if (ids.length === 0) return [];
+    const placeholders = ids.map(() => "?").join(", ");
+    return this.context.store.db
+      .prepare(
+        `SELECT c.id, c.document_id, c.artifact_id, c.project_id,
+                c.embedding_space, c.chunk_index, c.start_offset,
+                c.end_offset, c.chunk_text, c.dimensions, c.vector_blob,
+                c.updated_at, d.source_path, d.object_hash, d.content_hash,
+                a.slug
+         FROM runtime_text_similarity_chunks c
+         JOIN runtime_text_similarity_documents d ON d.id=c.document_id
+         JOIN artifacts a ON a.artifact_id=c.artifact_id
+         JOIN projects p ON p.project_id=c.project_id
+         WHERE c.project_id=? AND c.embedding_space=? AND c.dimensions=?
+           AND a.deleted_at IS NULL AND p.deleted_at IS NULL
+           AND c.id IN (${placeholders})`,
+      )
+      .all(projectId, embeddingSpace, dimensions, ...ids) as unknown as TextChunkRow[];
+  }
+
   private indexResult(
     row: EmbeddingRow,
     reused: boolean,
@@ -576,6 +1387,31 @@ class LocalSimilarityApi implements SimilarityApi {
       frameCount: row.frame_count,
       reused,
     };
+  }
+
+  private textIndexResult(
+    row: TextDocumentRow,
+    reused: boolean,
+  ): SimilarityIndexResult {
+    return {
+      artifactId: row.artifact_id,
+      projectId: row.project_id,
+      kind: "text",
+      embeddingSpace: row.embedding_space,
+      frameCount: null,
+      chunkCount: row.chunk_count,
+      reused,
+    };
+  }
+
+  private requireTextProvider(): SimilarityTextEmbeddingProvider {
+    if (!this.textProvider) {
+      throw new EngineFault({
+        code: "FEATURE_UNAVAILABLE",
+        message: "Text similarity is disabled; configure EngineConfig.similarity.text",
+      });
+    }
+    return this.textProvider;
   }
 }
 
@@ -680,9 +1516,7 @@ class LocalClipProvider implements SimilarityEmbeddingProvider {
     const batch = output.dims[0];
     const dimensions = output.dims[1];
     if (batch !== sourcePaths.length || dimensions !== this.dimensions) {
-      throw new Error(
-        `Unexpected embedding shape: ${output.dims.join("x")}`,
-      );
+      throw new Error(`Unexpected embedding shape: ${output.dims.join("x")}`);
     }
     const vectors: Float32Array[] = [];
     for (let index = 0; index < batch; index += 1) {
@@ -690,6 +1524,82 @@ class LocalClipProvider implements SimilarityEmbeddingProvider {
       vectors.push(normalized(output.data.slice(start, start + this.dimensions)));
     }
     return vectors;
+  }
+}
+
+class LocalTextProvider implements SimilarityTextEmbeddingProvider {
+  readonly embeddingSpace: string;
+  readonly dimensions = DEFAULT_TEXT_DIMENSIONS;
+  private embedder: TextFeaturePipeline | null = null;
+
+  constructor(
+    private readonly context: EngineContext,
+    private readonly sharedConfig: SimilarityConfig,
+    private readonly config: SimilarityTextConfig,
+  ) {
+    this.embeddingSpace = config.modelId && config.modelId !== DEFAULT_TEXT_MODEL_ID
+      ? `text-${config.modelId.replace(/[^a-zA-Z0-9]+/g, "-")}-v1`
+      : DEFAULT_TEXT_EMBEDDING_SPACE;
+  }
+
+  async prepare(): Promise<void> {
+    await this.loadEmbedder();
+  }
+
+  async embedText(text: string): Promise<SimilarityTextChunk[]> {
+    const embedder = await this.loadEmbedder();
+    const ranges = makeTextRanges(text, embedder.tokenizer);
+    const chunks: SimilarityTextChunk[] = [];
+    for (let offset = 0; offset < ranges.length; offset += 32) {
+      const batchRanges = ranges.slice(offset, offset + 32);
+      const output = await embedder(
+        batchRanges.map((range) => text.slice(range.startOffset, range.endOffset)),
+        { pooling: "mean", normalize: true },
+      );
+      const batch = output.dims[0];
+      const dimensions = output.dims[1];
+      if (batch !== batchRanges.length || dimensions !== this.dimensions) {
+        throw new Error(`Unexpected text embedding shape: ${output.dims.join("x")}`);
+      }
+      for (let index = 0; index < batch; index += 1) {
+        const start = index * this.dimensions;
+        chunks.push({
+          startOffset: batchRanges[index]!.startOffset,
+          endOffset: batchRanges[index]!.endOffset,
+          vector: normalized(output.data.slice(start, start + this.dimensions)),
+        });
+      }
+    }
+    return chunks;
+  }
+
+  private async loadEmbedder(): Promise<TextFeaturePipeline> {
+    if (this.embedder) return this.embedder;
+    const dataDir = this.context.config.dataDir;
+    if (!dataDir) throw new Error("Text similarity requires a configured dataDir");
+    const cacheDir = this.config.modelCacheDir ??
+      this.sharedConfig.modelCacheDir ??
+      path.join(dataDir, "similarity-models");
+    await mkdir(cacheDir, { recursive: true });
+    const modelId = this.config.modelId ?? DEFAULT_TEXT_MODEL_ID;
+    const allowDownload = this.config.allowModelDownload ??
+      this.sharedConfig.allowModelDownload;
+    try {
+      this.embedder = await pipeline("feature-extraction", modelId, {
+        dtype: "q4",
+        cache_dir: cacheDir,
+        local_files_only: allowDownload === false,
+        ...(modelId === DEFAULT_TEXT_MODEL_ID
+          ? { revision: DEFAULT_TEXT_MODEL_REVISION }
+          : {}),
+      }) as unknown as TextFeaturePipeline;
+      return this.embedder;
+    } catch (error) {
+      throw new EngineFault({
+        code: allowDownload === false ? "OFFLINE" : "FEATURE_UNAVAILABLE",
+        message: `Unable to load local text similarity model: ${errorMessage(error)}`,
+      });
+    }
   }
 }
 
@@ -706,6 +1616,7 @@ function disabledSimilarityApi(): SimilarityApi {
     status: () => unavailable(),
     stats: () => unavailable(),
     findSimilar: async () => unavailable(),
+    findSimilarText: async () => unavailable(),
   };
 }
 
@@ -713,9 +1624,10 @@ function similarityKind(artifact: ArtifactRow): SimilarityKind {
   if (artifact.kind === "image" || artifact.kind === "video") {
     return artifact.kind;
   }
+  if (TEXT_ARTIFACT_KINDS.has(artifact.kind)) return "text";
   throw new EngineFault({
     code: "INVALID_INPUT",
-    message: `Similarity supports image and video artifacts, not ${artifact.kind}`,
+    message: `Similarity supports image, video, and text artifacts, not ${artifact.kind}`,
   });
 }
 
@@ -795,6 +1707,146 @@ function runCommand(
   });
 }
 
+function normalizePlainText(raw: string): NormalizedText {
+  const text = raw
+    .replace(/^\uFEFF/, "")
+    .normalize("NFC")
+    .replace(/\r\n?/g, "\n")
+    .replace(/[ \t]+$/gm, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+  return { text, contentHash: hashText(text) };
+}
+
+function normalizeJsonText(raw: string, sourcePath: string): NormalizedText {
+  let value: unknown;
+  try {
+    value = JSON.parse(raw.replace(/^\uFEFF/, ""));
+  } catch (error) {
+    throw new EngineFault({
+      code: "INVALID_INPUT",
+      message: `Invalid JSON source ${sourcePath}: ${errorMessage(error)}`,
+    });
+  }
+  const lines: string[] = [];
+  appendJsonLines(lines, "$", value, 0);
+  return normalizePlainText(lines.join("\n"));
+}
+
+function appendJsonLines(
+  lines: string[],
+  jsonPath: string,
+  value: unknown,
+  depth: number,
+): void {
+  if (depth > 100) {
+    throw new EngineFault({
+      code: "INVALID_INPUT",
+      message: "JSON source exceeds the maximum nesting depth",
+    });
+  }
+  if (Array.isArray(value)) {
+    if (value.length === 0) {
+      lines.push(`${jsonPath}: []`);
+      return;
+    }
+    value.forEach((item, index) => appendJsonLines(
+      lines,
+      `${jsonPath}[${index}]`,
+      item,
+      depth + 1,
+    ));
+    return;
+  }
+  if (value !== null && typeof value === "object") {
+    const entries = Object.entries(value).sort(([left], [right]) =>
+      left < right ? -1 : left > right ? 1 : 0,
+    );
+    if (entries.length === 0) {
+      lines.push(`${jsonPath}: {}`);
+      return;
+    }
+    for (const [key, item] of entries) {
+      appendJsonLines(lines, `${jsonPath}.${key}`, item, depth + 1);
+    }
+    return;
+  }
+  lines.push(`${jsonPath}: ${JSON.stringify(value)}`);
+}
+
+function makeTextRanges(
+  text: string,
+  tokenizer: TextTokenizer,
+): Array<{ startOffset: number; endOffset: number }> {
+  const ranges: Array<{ startOffset: number; endOffset: number }> = [];
+  let startOffset = 0;
+  while (startOffset < text.length) {
+    let upper = Math.min(text.length, startOffset + TEXT_CHUNK_CHAR_WINDOW);
+    let low = startOffset + 1;
+    let high = upper;
+    while (low < high) {
+      const middle = Math.ceil((low + high) / 2);
+      if (tokenCount(tokenizer, text.slice(startOffset, middle)) <= TEXT_CHUNK_TOKENS) {
+        low = middle;
+      } else {
+        high = middle - 1;
+      }
+    }
+    upper = low;
+    const boundary = preferredBoundary(text, startOffset, upper);
+    if (boundary > startOffset &&
+        tokenCount(tokenizer, text.slice(startOffset, boundary)) <= TEXT_CHUNK_TOKENS) {
+      upper = boundary;
+    }
+    ranges.push({ startOffset, endOffset: upper });
+    if (upper >= text.length) break;
+    const overlapStart = findOverlapStart(tokenizer, text, startOffset, upper);
+    startOffset = overlapStart <= startOffset
+      ? upper
+      : Math.max(startOffset + 1, Math.min(overlapStart, upper - 1));
+  }
+  return ranges;
+}
+
+function tokenCount(tokenizer: TextTokenizer, text: string): number {
+  return tokenizer.encode(text, { add_special_tokens: false }).length;
+}
+
+function preferredBoundary(text: string, start: number, end: number): number {
+  const floor = Math.max(start + 1, end - 180);
+  for (let index = end; index >= floor; index -= 1) {
+    const character = text[index - 1];
+    if (character === "\n" || character === " " || character === "\t") {
+      return index;
+    }
+  }
+  return end;
+}
+
+function findOverlapStart(
+  tokenizer: TextTokenizer,
+  text: string,
+  start: number,
+  end: number,
+): number {
+  let low = start;
+  let high = end - 1;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    if (tokenCount(tokenizer, text.slice(middle, end)) > TEXT_OVERLAP_TOKENS) {
+      low = middle + 1;
+    } else {
+      high = middle;
+    }
+  }
+  const boundary = preferredBoundary(text, low, end);
+  return boundary > start && boundary < end ? boundary : low;
+}
+
+function hashText(text: string): string {
+  return createHash("sha256").update(text, "utf8").digest("hex");
+}
+
 function normalized(vector: Float32Array): Float32Array {
   const norm = Math.hypot(...vector);
   if (!Number.isFinite(norm) || norm === 0) {
@@ -828,7 +1880,9 @@ function vectorToBlob(vector: Float32Array): Buffer {
   );
 }
 
-function vectorFromBlob(row: Pick<EmbeddingRow, "vector_blob" | "dimensions">): Float32Array {
+function vectorFromBlob(
+  row: Pick<EmbeddingRow, "vector_blob" | "dimensions"> | Pick<TextChunkRow, "vector_blob" | "dimensions">,
+): Float32Array {
   const bytes = row.vector_blob;
   if (bytes.byteLength !== row.dimensions * Float32Array.BYTES_PER_ELEMENT) {
     throw new Error("Stored similarity vector has an invalid byte length");
@@ -849,6 +1903,12 @@ function cosine(left: Float32Array, right: Float32Array): number {
   return Math.max(-1, Math.min(1, score));
 }
 
+function excerpt(text: string): string {
+  return text.length <= TEXT_EXCERPT_LIMIT
+    ? text
+    : `${text.slice(0, TEXT_EXCERPT_LIMIT - 1)}…`;
+}
+
 function checkedLimit(value: number | undefined): number {
   const limit = value ?? 20;
   if (!Number.isInteger(limit) || limit < 1 || limit > 100) {
@@ -866,6 +1926,28 @@ function checkedMinScore(value: number | undefined): number | undefined {
     throw new EngineFault({
       code: "INVALID_INPUT",
       message: "Similarity minScore must be between -1 and 1",
+    });
+  }
+  return value;
+}
+
+function checkedTextMaxBytes(config: SimilarityTextConfig | undefined): number {
+  const value = config?.maxSourceBytes ?? DEFAULT_TEXT_MAX_BYTES;
+  if (!Number.isInteger(value) || value < 1 || value > 64 * 1024 * 1024) {
+    throw new EngineFault({
+      code: "INVALID_INPUT",
+      message: "Text maxSourceBytes must be an integer between 1 and 67108864",
+    });
+  }
+  return value;
+}
+
+function checkedTextMaxChunks(config: SimilarityTextConfig | undefined): number {
+  const value = config?.maxChunks ?? DEFAULT_TEXT_MAX_CHUNKS;
+  if (!Number.isInteger(value) || value < 1 || value > 2048) {
+    throw new EngineFault({
+      code: "INVALID_INPUT",
+      message: "Text maxChunks must be an integer between 1 and 2048",
     });
   }
   return value;

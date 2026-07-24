@@ -77,7 +77,7 @@ export type EngineConfig = EngineConfigBase &
     | { rootDir?: never; dataDir: string; workspaceDir: string }
   );
 
-export type SimilarityKind = "image" | "video";
+export type SimilarityKind = "image" | "video" | "text";
 
 export interface SimilarityEmbeddingProvider {
   readonly embeddingSpace: string;
@@ -88,6 +88,34 @@ export interface SimilarityEmbeddingProvider {
     vector: Float32Array;
     frameCount: number;
   }>;
+}
+
+export interface SimilarityTextChunk {
+  startOffset: number;
+  endOffset: number;
+  vector: Float32Array;
+}
+
+export interface SimilarityTextEmbeddingProvider {
+  readonly embeddingSpace: string;
+  readonly dimensions: number;
+  prepare(): Promise<void>;
+  embedText(text: string): Promise<SimilarityTextChunk[]>;
+}
+
+export interface SimilarityTextConfig {
+  /** A Hugging Face model ID or a local compatible model directory. */
+  modelId?: string;
+  /** A cache directory for the text model. */
+  modelCacheDir?: string;
+  /** Refuse network downloads when the text model is not already available. */
+  allowModelDownload?: boolean;
+  /** Maximum canonical text source size. Defaults to 1 MiB. */
+  maxSourceBytes?: number;
+  /** Maximum chunks per document. Defaults to 256. */
+  maxChunks?: number;
+  /** Test and advanced-use escape hatch for a local text embedding implementation. */
+  provider?: SimilarityTextEmbeddingProvider;
 }
 
 export interface SimilarityConfig {
@@ -101,6 +129,8 @@ export interface SimilarityConfig {
   ffprobePath?: string;
   /** Test and advanced-use escape hatch for a local embedding implementation. */
   provider?: SimilarityEmbeddingProvider;
+  /** Enables semantic JSON, Markdown, and text similarity when present. */
+  text?: SimilarityTextConfig;
 }
 
 export interface SimilarityIndexOptions {
@@ -119,6 +149,7 @@ export interface SimilarityIndexResult {
   kind: SimilarityKind;
   embeddingSpace: string;
   frameCount: number | null;
+  chunkCount?: number;
   reused: boolean;
 }
 
@@ -130,6 +161,8 @@ export interface SimilarityStatus {
   embeddingSpace: string;
   objectHash?: string;
   frameCount?: number | null;
+  chunkCount?: number;
+  contentHash?: string;
   updatedAt?: number;
 }
 
@@ -140,7 +173,17 @@ export interface SimilarityMatch {
   kind: SimilarityKind;
   score: number;
   exactBytes: boolean;
+  exactContent?: boolean;
   embeddingSpace: string;
+  text?: {
+    sourcePath: string;
+    chunkIndex: number;
+    startOffset: number;
+    endOffset: number;
+    excerpt: string;
+    queryStartOffset?: number;
+    queryEndOffset?: number;
+  };
   signals: {
     global: number;
   };
@@ -150,10 +193,31 @@ export interface SimilarityStats {
   embeddingSpace: string;
   imageCount: number;
   videoCount: number;
+  textCount: number;
+  embeddingSpaces: Partial<Record<SimilarityKind, string>>;
 }
 
+export interface SimilarityPrepareOptions {
+  kind?: SimilarityKind;
+}
+
+export type SimilarityTextQueryOptions = Omit<
+  SimilarityQueryOptions,
+  "includeSelf"
+>;
+
 export interface SimilarityApi {
-  prepare(): Promise<Result<{ embeddingSpace: string }, EngineError>>;
+  prepare(
+    options?: SimilarityPrepareOptions,
+  ): Promise<
+    Result<
+      {
+        embeddingSpace: string;
+        embeddingSpaces: Partial<Record<SimilarityKind, string>>;
+      },
+      EngineError
+    >
+  >;
   index(
     project: string,
     artifact: string,
@@ -169,6 +233,11 @@ export interface SimilarityApi {
     project: string,
     artifact: string,
     options?: SimilarityQueryOptions,
+  ): Promise<Result<SimilarityMatch[], EngineError>>;
+  findSimilarText(
+    project: string,
+    query: string,
+    options?: SimilarityTextQueryOptions,
   ): Promise<Result<SimilarityMatch[], EngineError>>;
 }
 
