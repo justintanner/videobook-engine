@@ -69,6 +69,7 @@ export class DoltStore {
   constructor(input: {
     dataDir: string;
     workspaceDir: string;
+    initialBook?: { bookId: string; slug: string };
     catalogBackup?: CatalogBackupConfig;
   }) {
     this.dataDir = path.resolve(input.dataDir);
@@ -82,7 +83,7 @@ export class DoltStore {
     const existed = existsSync(this.databasePath);
     this.db = new DatabaseSync(this.databasePath);
     this.configureConnection();
-    this.initialize(existed);
+    this.initialize(existed, input.initialBook);
     if (input.catalogBackup) this.configureRemote(input.catalogBackup);
   }
 
@@ -115,13 +116,12 @@ export class DoltStore {
         this.db
           .prepare(
             `INSERT INTO operations(
-              operation_id, project_id, operation, artifact_id, details_json,
+              operation_id, operation, artifact_id, details_json,
               write_set_json, base_revision, created_at, author
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
           )
           .run(
             operationId,
-            input.projectId,
             input.operation,
             input.artifactId ?? null,
             canonicalJson(input.details ?? {}),
@@ -188,7 +188,10 @@ export class DoltStore {
     }
   }
 
-  private initialize(existed: boolean): void {
+  private initialize(
+    existed: boolean,
+    initialBook?: { bookId: string; slug: string },
+  ): void {
     const schemaExists = this.tableExists("engine_schema");
     if (existed && !schemaExists) {
       const userTables = this.userTables();
@@ -197,22 +200,35 @@ export class DoltStore {
         throw new EngineFault({
           code: "SCHEMA_INCOMPATIBLE",
           message:
-            "Existing database is not Dolt-native Videobook v1; choose an empty dataDir",
+            "Existing database is not a supported Videobook catalog; choose an empty dataDir",
           details: { tables: userTables },
         });
       }
     }
 
     if (!schemaExists) {
+      if (!initialBook) {
+        this.db.close();
+        throw new EngineFault({
+          code: "INVALID_INPUT",
+          message:
+            "initialBookSlug is required when creating a new engine root",
+        });
+      }
       this.db.exec(SEMANTIC_SCHEMA_SQL);
       this.db
         .prepare(
           "INSERT INTO engine_schema(singleton, version, created_at) VALUES (1, ?, ?)",
         )
         .run(SCHEMA_VERSION, Date.now());
+      this.db
+        .prepare(
+          "INSERT INTO book(singleton, book_id, slug) VALUES (1, ?, ?)",
+        )
+        .run(initialBook.bookId, initialBook.slug);
       this.stageTables(SEMANTIC_TABLES);
       this.assertOnlySemanticStaged();
-      this.sqlCommit("Initialize Dolt-native Videobook v1");
+      this.sqlCommit("Initialize Videobook book");
     } else {
       const row = this.db
         .prepare(
@@ -226,11 +242,21 @@ export class DoltStore {
           message: `Database schema ${row?.version ?? "unknown"} is not supported by engine schema ${SCHEMA_VERSION}`,
         });
       }
+      const book = this.db
+        .prepare("SELECT book_id FROM book WHERE singleton=1")
+        .get() as unknown as { book_id: string } | undefined;
+      if (!book) {
+        this.db.close();
+        throw new EngineFault({
+          code: "SCHEMA_INCOMPATIBLE",
+          message: "Book catalog is missing its singleton book record",
+        });
+      }
       if (this.db.doltActiveBranch() !== "main") {
         this.db.close();
         throw new EngineFault({
           code: "SCHEMA_INCOMPATIBLE",
-          message: "Dolt-native Videobook v1 only supports the main branch",
+          message: "Videobook only supports the main branch",
         });
       }
     }

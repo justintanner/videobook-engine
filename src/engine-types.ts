@@ -6,7 +6,6 @@ export type ArtifactKind =
   | "character"
   | "prompt"
   | "scene"
-  | "notebook"
   | "final";
 
 export type EngineErrorCode =
@@ -64,6 +63,8 @@ export interface CatalogBackupConfig {
 }
 
 interface EngineConfigBase {
+  /** Required only when initializing an empty engine root. */
+  initialBookSlug?: string;
   remoteObjects?: ContentStore;
   objectPrefix?: string;
   catalogBackup?: CatalogBackupConfig;
@@ -145,7 +146,6 @@ export interface SimilarityQueryOptions {
 
 export interface SimilarityIndexResult {
   artifactId: string;
-  projectId: string;
   kind: SimilarityKind;
   embeddingSpace: string;
   frameCount: number | null;
@@ -155,7 +155,6 @@ export interface SimilarityIndexResult {
 
 export interface SimilarityStatus {
   artifactId: string;
-  projectId: string;
   kind: SimilarityKind;
   state: "not_indexed" | "ready";
   embeddingSpace: string;
@@ -168,7 +167,6 @@ export interface SimilarityStatus {
 
 export interface SimilarityMatch {
   artifactId: string;
-  projectId: string;
   slug: string;
   kind: SimilarityKind;
   score: number;
@@ -219,40 +217,31 @@ export interface SimilarityApi {
     >
   >;
   index(
-    project: string,
     artifact: string,
     options?: SimilarityIndexOptions,
   ): Promise<Result<SimilarityIndexResult, EngineError>>;
   rebuild(
-    project: string,
     options?: { kind?: SimilarityKind; force?: boolean },
   ): Promise<Result<SimilarityIndexResult[], EngineError>>;
-  status(project: string, artifact: string): Result<SimilarityStatus, EngineError>;
-  stats(project: string): Result<SimilarityStats, EngineError>;
+  status(artifact: string): Result<SimilarityStatus, EngineError>;
+  stats(): Result<SimilarityStats, EngineError>;
   findSimilar(
-    project: string,
     artifact: string,
     options?: SimilarityQueryOptions,
   ): Promise<Result<SimilarityMatch[], EngineError>>;
   findSimilarText(
-    project: string,
     query: string,
     options?: SimilarityTextQueryOptions,
   ): Promise<Result<SimilarityMatch[], EngineError>>;
 }
 
-export interface Project {
-  projectId: string;
+export interface Book {
+  bookId: string;
   slug: string;
-  createdAt: number;
-  updatedAt: number;
-  path: string;
-  isDefault: boolean;
 }
 
 export interface Artifact {
   artifactId: string;
-  projectId: string;
   slug: string;
   kind: ArtifactKind;
   createdAt: number;
@@ -261,7 +250,6 @@ export interface Artifact {
 }
 
 export interface CreateArtifactInput {
-  project: string;
   kind: ArtifactKind | string;
   /** Name used to derive a canonical kind-prefixed slug. */
   name?: string;
@@ -270,7 +258,6 @@ export interface CreateArtifactInput {
 }
 
 export interface RenameArtifactInput {
-  project: string;
   artifact: string;
   /** Name used to derive the artifact's new canonical slug. */
   name?: string;
@@ -307,7 +294,6 @@ export interface Revision {
   message: string;
   date: string;
   author?: string;
-  projectId?: string;
   operationId?: string;
   operation?: string;
   artifactId?: string;
@@ -318,7 +304,6 @@ export interface Revision {
 }
 
 export interface OperationInput {
-  projectId: string;
   operation: string;
   artifactId?: string;
   details?: Record<string, unknown>;
@@ -354,7 +339,6 @@ export interface ActionLogEntry {
 
 export interface PromptHistoryEntry {
   id: number;
-  projectId: string;
   surface: string;
   prompt: string;
   context: Record<string, unknown>;
@@ -402,7 +386,6 @@ export interface JobError {
 export interface Job {
   id: number;
   operationId: string;
-  projectId: string;
   type: string;
   artifactId: string | null;
   externalTaskId: string | null;
@@ -636,7 +619,6 @@ export interface ChatLogEntry {
 
 export interface Message<T = Record<string, unknown>> {
   messageId: string;
-  projectId: string;
   role: string;
   body: T;
   createdAt: number;

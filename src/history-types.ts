@@ -1,9 +1,7 @@
-import type {
-  Revision,
-  RevisionFileChange,
-} from "../engine-types.js";
+import type { Revision, RevisionFileChange } from "./engine-types.js";
+import type { ArtifactKind } from "./engine-types.js";
 
-export type BookActionPhase =
+export type HistoryActionPhase =
   | "requested"
   | "started"
   | "completed"
@@ -11,87 +9,73 @@ export type BookActionPhase =
   | "cancelled"
   | "conflicted";
 
-export type BookActionScope =
-  | "project"
+export type HistoryActionScope =
+  | "book"
   | "artifact"
   | "layout"
   | "external"
   | "system";
 
-export type BookArtifactKind =
-  | "prompt"
-  | "image"
-  | "video"
-  | "character"
-  | "scene"
-  | "audio"
-  | "script"
-  | "final"
-  | "notebook"
-  | "unknown";
+export type HistoryArtifactKind = ArtifactKind | "unknown";
 
-export interface BookLayout {
+export interface HistoryLayout {
   stage: number;
   column: number;
 }
 
-export interface BookActionEvent {
+export interface HistoryActionEvent {
   id: string;
   revision: string;
-  phase: BookActionPhase;
+  phase: HistoryActionPhase;
   date: string;
   details: Record<string, unknown>;
   files: string[];
   fileChanges: RevisionFileChange[];
 }
 
-export interface BookArtifactRef {
+export interface HistoryArtifactRef {
   id: string;
   slug: string;
-  kind: BookArtifactKind;
+  kind: HistoryArtifactKind;
 }
 
-export interface BookAction {
+export interface HistoryAction {
   id: string;
-  projectId: string;
   operation: string;
   title: string;
-  scope: BookActionScope;
+  scope: HistoryActionScope;
   actor: string;
   lane: string;
   date: string;
-  phase: BookActionPhase;
+  phase: HistoryActionPhase;
   baseRevision?: string;
   rebasedOver?: string;
   parentActionIds: string[];
-  inputArtifacts: BookArtifactRef[];
-  outputArtifacts: BookArtifactRef[];
+  inputArtifacts: HistoryArtifactRef[];
+  outputArtifacts: HistoryArtifactRef[];
   targetArtifactId?: string;
   targetActionId?: string;
-  layout?: BookLayout;
+  layout?: HistoryLayout;
   details: Record<string, unknown>;
-  events: BookActionEvent[];
+  events: HistoryActionEvent[];
 }
 
-export interface ProjectBook {
-  projectId: string;
-  slug: string;
+export interface HistoryActionPage {
   headRevision: string;
-  actions: BookAction[];
+  actions: HistoryAction[];
   nextCursor?: string;
 }
 
-export interface GetProjectBookOptions {
+export interface GetHistoryActionsOptions {
   limit?: number;
   cursor?: string;
 }
 
-export interface RecordBookActionInput {
-  projectSlug: string;
+export interface RecordActionInput {
   actionId?: string;
   operation: string;
-  phase?: BookActionPhase;
-  scope?: BookActionScope;
+  phase?: HistoryActionPhase;
+  scope?: HistoryActionScope;
   actor?: string;
   lane?: string;
   baseRevision?: string;
@@ -100,12 +84,12 @@ export interface RecordBookActionInput {
   outputArtifactIds?: string[];
   targetArtifactId?: string;
   targetActionId?: string;
-  layout?: BookLayout;
+  layout?: HistoryLayout;
   writeSet?: string[];
   details?: Record<string, unknown>;
 }
 
-export interface BookActionRevision {
-  action: BookAction;
+export interface HistoryActionRevision {
+  action: HistoryAction;
   revision: Revision;
 }

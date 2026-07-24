@@ -4,7 +4,7 @@ import type {
   JobState,
   SimilarityApi,
 } from "./engine-types.js";
-import { createProjectsApi } from "./projects.js";
+import { createBookApi } from "./books.js";
 import { createArtifactsApi } from "./artifacts.js";
 import {
   createFilesApi,
@@ -30,7 +30,7 @@ import { canonicalJson } from "./store.js";
 import { createSimilarityApi } from "./similarity.js";
 
 export class Engine {
-  readonly projects;
+  readonly book;
   readonly artifacts;
   readonly files;
   readonly workspaces;
@@ -54,7 +54,7 @@ export class Engine {
 
   constructor(config: EngineConfig) {
     this.context = new EngineContext(config);
-    this.projects = createProjectsApi(this.context);
+    this.book = createBookApi(this.context);
     this.artifacts = createArtifactsApi(this.context);
     this.files = createFilesApi(this.context);
     this.workspaces = createWorkspacesApi(this.context);
@@ -74,9 +74,7 @@ export class Engine {
     this.similarity = createSimilarityApi(this.context);
     const queue = new JobQueue(
       this.context.store,
-      (reference) => this.context.projectRow(reference).project_id,
-      (projectId, reference) =>
-        this.context.artifactRow(projectId, reference).artifact_id,
+      (reference) => this.context.artifactRow(reference).artifact_id,
       (job) => this.recordTerminalJob(job),
     );
     this.jobs = {
@@ -110,21 +108,18 @@ export class Engine {
   private async reconcileTerminalJobs(): Promise<void> {
     const rows = this.context.store.db
       .prepare(
-        `SELECT j.id, j.project_id
+        `SELECT j.id
          FROM runtime_jobs j
-         JOIN projects p ON p.project_id=j.project_id
          LEFT JOIN job_runs r ON r.run_id=j.operation_id
          WHERE j.state IN ('done','failed','aborted')
-           AND p.deleted_at IS NULL
            AND r.run_id IS NULL
          ORDER BY j.finished_at, j.id`,
       )
       .all() as unknown as Array<{
       id: number;
-      project_id: string;
     }>;
     for (const row of rows) {
-      const job = this.jobs.queue.get(row.project_id, row.id);
+      const job = this.jobs.queue.get(row.id);
       if (job) await this.recordTerminalJob(job);
     }
   }
@@ -133,7 +128,6 @@ export class Engine {
     if (!isTerminal(job.state)) return;
     await this.context.store.semantic(
       {
-        projectId: job.projectId,
         operation: `job_${job.state}`,
         artifactId: job.artifactId ?? undefined,
         details: {
@@ -149,14 +143,13 @@ export class Engine {
         this.context.store.db
           .prepare(
             `INSERT OR IGNORE INTO job_runs(
-              run_id, project_id, artifact_id, job_type, state,
+              run_id, artifact_id, job_type, state,
               payload_json, result_json, error_json,
               started_at, finished_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
           .run(
             job.operationId,
-            job.projectId,
             job.artifactId,
             job.type,
             job.state,

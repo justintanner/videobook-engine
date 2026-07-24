@@ -18,7 +18,6 @@ import { canonicalJson, parseJson } from "./store.js";
 interface JobRow {
   id: number;
   operation_id: string;
-  project_id: string;
   type: string;
   artifact_id: string | null;
   external_task_id: string | null;
@@ -38,27 +37,19 @@ interface JobRow {
 export class JobQueue {
   constructor(
     private readonly store: DoltStore,
-    private readonly resolveProjectId: (reference: string) => string,
-    private readonly resolveArtifactId: (
-      projectId: string,
-      reference: string,
-    ) => string,
+    private readonly resolveArtifactId: (reference: string) => string,
     private readonly recordTerminal: (job: Job) => Promise<void>,
   ) {}
 
-  enqueue(project: string, options: EnqueueOptions): EnqueueResult {
-    const projectId = this.resolveProjectId(project);
+  enqueue(options: EnqueueOptions): EnqueueResult {
     const resolvedArtifactId = options.artifactId
-      ? this.resolveArtifactId(projectId, options.artifactId)
+      ? this.resolveArtifactId(options.artifactId)
       : null;
     const operationId = uuidv7();
     const now = Date.now();
     const maxAttempts = Math.max(1, options.maxAttempts ?? 1);
     const state = options.initialState ?? "queued";
-    const runtimeOptions = options as unknown as Record<
-      string,
-      unknown
-    >;
+    const runtimeOptions = options as unknown as Record<string, unknown>;
     const queuedKind =
       typeof runtimeOptions.artifactWorkKind === "string"
         ? runtimeOptions.artifactWorkKind
@@ -70,7 +61,6 @@ export class JobQueue {
     const dedupeKey =
       options.dedupeKey === undefined
         ? canonicalJson({
-            projectId,
             type: options.type,
             artifactId: resolvedArtifactId,
             externalTaskId: options.externalTaskId ?? null,
@@ -82,14 +72,13 @@ export class JobQueue {
       const inserted = this.store.db
         .prepare(
           `INSERT OR IGNORE INTO runtime_jobs(
-            operation_id, project_id, type, artifact_id, external_task_id,
+            operation_id, type, artifact_id, external_task_id,
             state, payload_json, dedupe_key, enqueued_at, started_at,
             attempts, max_attempts
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           operationId,
-          projectId,
           options.type,
           resolvedArtifactId,
           options.externalTaskId ?? null,
@@ -105,14 +94,12 @@ export class JobQueue {
         inserted > 0
           ? this.requiredRowByOperation(operationId)
           : this.findDuplicateRow(
-              projectId,
               options.type,
               options.externalTaskId ?? null,
               dedupeKey,
             );
       if (resolvedArtifactId && queuedKind) {
         this.upsertQueuedArtifactView(
-          projectId,
           resolvedArtifactId,
           queuedKind,
           queuedOrientation,
@@ -123,38 +110,29 @@ export class JobQueue {
     });
   }
 
-  get(project: string, id: number): Job | null {
-    const projectId = this.resolveProjectId(project);
+  get(id: number): Job | null {
     const row = this.store.db
-      .prepare(`${JOB_SELECT} WHERE project_id = ? AND id = ?`)
-      .get(projectId, id) as unknown as JobRow | undefined;
+      .prepare(`${JOB_SELECT} WHERE id = ?`)
+      .get(id) as unknown as JobRow | undefined;
     return row ? rowToJob(row) : null;
   }
 
-  findByExternal(
-    project: string,
-    type: string,
-    externalTaskId: string,
-  ): Job | null {
-    const projectId = this.resolveProjectId(project);
+  findByExternal(type: string, externalTaskId: string): Job | null {
     const row = this.store.db
       .prepare(
         `${JOB_SELECT}
-         WHERE project_id = ? AND type = ? AND external_task_id = ?
+         WHERE type = ? AND external_task_id = ?
          ORDER BY id DESC LIMIT 1`,
       )
-      .get(projectId, type, externalTaskId) as unknown as JobRow | undefined;
+      .get(type, externalTaskId) as unknown as JobRow | undefined;
     return row ? rowToJob(row) : null;
   }
 
-  list(project: string, options: ListJobsOptions = {}): Job[] {
-    const projectId = this.resolveProjectId(project);
-    const clauses = ["project_id = ?"];
-    const params: unknown[] = [projectId];
+  list(options: ListJobsOptions = {}): Job[] {
+    const clauses: string[] = [];
+    const params: unknown[] = [];
     if (options.states && options.states.length > 0) {
-      clauses.push(
-        `state IN (${options.states.map(() => "?").join(", ")})`,
-      );
+      clauses.push(`state IN (${options.states.map(() => "?").join(", ")})`);
       params.push(...options.states);
     }
     if (options.type) {
@@ -163,107 +141,78 @@ export class JobQueue {
     }
     if (options.artifactId) {
       clauses.push("artifact_id = ?");
-      params.push(
-        this.resolveArtifactId(projectId, options.artifactId),
-      );
+      params.push(this.resolveArtifactId(options.artifactId));
     }
     params.push(Math.max(1, options.limit ?? 10_000));
     const rows = this.store.db
       .prepare(
         `${JOB_SELECT}
-         WHERE ${clauses.join(" AND ")}
+         ${clauses.length ? `WHERE ${clauses.join(" AND ")}` : ""}
          ORDER BY id DESC LIMIT ?`,
       )
       .all(...params) as unknown as JobRow[];
     return rows.map(rowToJob);
   }
 
-  count(project: string, options: ListJobsOptions = {}): number {
-    return this.list(project, options).length;
+  count(options: ListJobsOptions = {}): number {
+    return this.list(options).length;
   }
 
-  dequeue(project: string, pid: number, leaseMs: number): Job | null {
-    const projectId = this.resolveProjectId(project);
+  dequeue(pid: number, leaseMs: number): Job | null {
     return this.store.runtime((now) => {
       const candidate = this.store.db
         .prepare(
-          `SELECT id
-           FROM runtime_jobs
-           WHERE project_id = ? AND state = 'queued'
-           ORDER BY enqueued_at, id
-           LIMIT 1`,
+          `SELECT id FROM runtime_jobs
+           WHERE state = 'queued' ORDER BY enqueued_at, id LIMIT 1`,
         )
-        .get(projectId) as unknown as { id: number } | undefined;
+        .get() as unknown as { id: number } | undefined;
       if (!candidate) return null;
       const changed = this.store.db
         .prepare(
           `UPDATE runtime_jobs
-           SET state='running',
-               started_at=COALESCE(started_at, ?),
-               pid=?,
-               lease_expires_at=?,
-               attempts=attempts+1,
-               fence=fence+1
+           SET state='running', started_at=COALESCE(started_at, ?), pid=?,
+               lease_expires_at=?, attempts=attempts+1, fence=fence+1
            WHERE id=? AND state='queued'`,
         )
         .run(now, pid, now + leaseMs, candidate.id).changes;
-      if (changed === 0) return null;
-      return rowToJob(this.requiredRow(candidate.id));
+      return changed === 0 ? null : rowToJob(this.requiredRow(candidate.id));
     });
   }
 
   heartbeat(id: number, fence: number, leaseMs: number): boolean {
-    return this.store.runtime((now) => {
-      return (
-        this.store.db
-          .prepare(
-            `UPDATE runtime_jobs
-             SET lease_expires_at=?
-             WHERE id=? AND state='running' AND fence=?`,
-          )
-          .run(now + leaseMs, id, fence).changes > 0
-      );
-    });
+    return this.store.runtime((now) =>
+      this.store.db
+        .prepare(
+          `UPDATE runtime_jobs SET lease_expires_at=?
+           WHERE id=? AND state='running' AND fence=?`,
+        )
+        .run(now + leaseMs, id, fence).changes > 0,
+    );
   }
 
   async complete(
-    project: string,
     id: number,
     options: CompleteOptions = {},
     expectedFence?: number,
   ): Promise<boolean> {
-    const projectId = this.resolveProjectId(project);
     const job = this.store.runtime((now) => {
       const current = this.requiredRow(id);
-      if (current.project_id !== projectId) return null;
       const fence = expectedFence ?? current.fence;
       const changed = this.store.db
         .prepare(
           `UPDATE runtime_jobs
-           SET state='done', result_json=?, error_json=NULL,
-               finished_at=?, lease_expires_at=NULL, pid=NULL
+           SET state='done', result_json=?, error_json=NULL, finished_at=?,
+               lease_expires_at=NULL, pid=NULL
            WHERE id=? AND state IN ('running','completing') AND fence=?`,
         )
         .run(
-          options.result === undefined
-            ? null
-            : canonicalJson(options.result),
+          options.result === undefined ? null : canonicalJson(options.result),
           now,
           id,
           fence,
         ).changes;
       if (changed === 0) return null;
-      if (current.artifact_id) {
-        this.store.db
-          .prepare(
-            `UPDATE runtime_artifact_views
-             SET status='ready', meta_json='{}', owner_id=NULL,
-                 owner_kind=NULL, pid=NULL, deadline_at=NULL,
-                 updated_at=?
-             WHERE artifact_id=?`,
-          )
-          .run(now, current.artifact_id);
-      }
+      if (current.artifact_id) this.markArtifactReady(current.artifact_id, now);
       return rowToJob(this.requiredRow(id));
     });
     if (!job) return false;
@@ -272,25 +221,20 @@ export class JobQueue {
   }
 
   async fail(
-    project: string,
     id: number,
     options: FailOptions,
     expectedFence?: number,
   ): Promise<boolean> {
-    const projectId = this.resolveProjectId(project);
-    const job = this.store.runtime((now) => {
+    const result = this.store.runtime((now) => {
       const current = this.requiredRow(id);
-      if (current.project_id !== projectId) return null;
       const fence = expectedFence ?? current.fence;
       const retry =
-        options.allowRetry !== false &&
-        current.attempts < current.max_attempts;
+        options.allowRetry !== false && current.attempts < current.max_attempts;
       const nextState = retry ? "queued" : "failed";
       const changed = this.store.db
         .prepare(
           `UPDATE runtime_jobs
-           SET state=?, error_json=?, finished_at=?,
-               lease_expires_at=NULL, pid=NULL
+           SET state=?, error_json=?, finished_at=?, lease_expires_at=NULL, pid=NULL
            WHERE id=? AND state IN ('running','completing') AND fence=?`,
         )
         .run(
@@ -300,45 +244,30 @@ export class JobQueue {
           id,
           fence,
         ).changes;
-      if (changed === 0) return null;
-      if (
-        !retry &&
-        current.artifact_id &&
-        options.preserveArtifactState !== true
-      ) {
-        this.store.db
-          .prepare(
-            `UPDATE runtime_artifact_views
-             SET status='error', meta_json=?, owner_id=NULL,
-                 owner_kind=NULL, pid=NULL, deadline_at=NULL,
-                 updated_at=?
-             WHERE artifact_id=?`,
-          )
-          .run(
-            canonicalJson({ error: options.error }),
-            now,
-            current.artifact_id,
-          );
+      if (changed === 0) return { changed: false, job: null as Job | null };
+      if (!retry && current.artifact_id && options.preserveArtifactState !== true) {
+        this.markArtifactFailed(current.artifact_id, options.error, now);
       }
-      return retry ? null : rowToJob(this.requiredRow(id));
+      return {
+        changed: true,
+        job: retry ? null : rowToJob(this.requiredRow(id)),
+      };
     });
-    if (!job) return false;
-    await this.recordTerminal(job);
+    if (!result.changed) return false;
+    if (result.job) await this.recordTerminal(result.job);
     return true;
   }
 
-  async abort(project: string, id: number, reason: string): Promise<boolean> {
-    const projectId = this.resolveProjectId(project);
+  async abort(id: number, reason: string): Promise<boolean> {
     const job = this.store.runtime((now) => {
       const changed = this.store.db
         .prepare(
           `UPDATE runtime_jobs
            SET state='aborted', error_json=?, finished_at=?,
                lease_expires_at=NULL, pid=NULL, fence=fence+1
-           WHERE id=? AND project_id=?
-             AND state IN ('queued','running','completing')`,
+           WHERE id=? AND state IN ('queued','running','completing')`,
         )
-        .run(canonicalJson({ message: reason }), now, id, projectId).changes;
+        .run(canonicalJson({ message: reason }), now, id).changes;
       return changed > 0 ? rowToJob(this.requiredRow(id)) : null;
     });
     if (!job) return false;
@@ -346,19 +275,15 @@ export class JobQueue {
     return true;
   }
 
-  markCompleting(project: string, id: number): boolean {
-    const projectId = this.resolveProjectId(project);
-    return this.store.runtime(() => {
-      return (
-        this.store.db
-          .prepare(
-            `UPDATE runtime_jobs
-             SET state='completing'
-             WHERE id=? AND project_id=? AND state='running'`,
-          )
-          .run(id, projectId).changes > 0
-      );
-    });
+  markCompleting(id: number): boolean {
+    return this.store.runtime(() =>
+      this.store.db
+        .prepare(
+          `UPDATE runtime_jobs SET state='completing'
+           WHERE id=? AND state='running'`,
+        )
+        .run(id).changes > 0,
+    );
   }
 
   async abortArtifact(artifactId: string, reason: string): Promise<Job[]> {
@@ -366,17 +291,14 @@ export class JobQueue {
       this.store.db
         .prepare(
           `SELECT id FROM runtime_jobs
-           WHERE artifact_id=?
-             AND state IN ('queued','running','completing')`,
+           WHERE artifact_id=? AND state IN ('queued','running','completing')`,
         )
         .all(artifactId) as unknown as Array<{ id: number }>
     ).map((row) => row.id);
     const terminal: Job[] = [];
     for (const id of ids) {
-      const current = this.requiredRow(id);
-      const project = current.project_id;
-      const changed = this.store.runtime((now) => {
-        const updated = this.store.db
+      const job = this.store.runtime((now) => {
+        const changed = this.store.db
           .prepare(
             `UPDATE runtime_jobs
              SET state='aborted', error_json=?, finished_at=?,
@@ -384,31 +306,25 @@ export class JobQueue {
              WHERE id=? AND state IN ('queued','running','completing')`,
           )
           .run(canonicalJson({ message: reason }), now, id).changes;
-        return updated > 0 ? rowToJob(this.requiredRow(id)) : null;
+        return changed > 0 ? rowToJob(this.requiredRow(id)) : null;
       });
-      if (changed) {
-        terminal.push(changed);
-        await this.recordTerminal(changed);
+      if (job) {
+        terminal.push(job);
+        await this.recordTerminal(job);
       }
-      void project;
     }
     return terminal;
   }
 
-  async reap(
-    project: string,
-  ): Promise<{ requeued: number; failed: number }> {
-    const projectId = this.resolveProjectId(project);
+  async reap(): Promise<{ requeued: number; failed: number }> {
     const result = this.store.runtime((now) => {
       const rows = this.store.db
         .prepare(
           `${JOB_SELECT}
-           WHERE project_id=?
-             AND state IN ('running','completing')
-             AND lease_expires_at IS NOT NULL
-             AND lease_expires_at < ?`,
+           WHERE state IN ('running','completing')
+             AND lease_expires_at IS NOT NULL AND lease_expires_at < ?`,
         )
-        .all(projectId, now) as unknown as JobRow[];
+        .all(now) as unknown as JobRow[];
       let requeued = 0;
       let failed = 0;
       const terminal: Job[] = [];
@@ -417,8 +333,7 @@ export class JobQueue {
           this.store.db
             .prepare(
               `UPDATE runtime_jobs
-               SET state='queued', pid=NULL, lease_expires_at=NULL,
-                   fence=fence+1
+               SET state='queued', pid=NULL, lease_expires_at=NULL, fence=fence+1
                WHERE id=?`,
             )
             .run(row.id);
@@ -431,32 +346,23 @@ export class JobQueue {
                    finished_at=?, error_json=?, fence=fence+1
                WHERE id=?`,
             )
-            .run(
-              now,
-              canonicalJson({ message: "Job lease expired" }),
-              row.id,
-            );
+            .run(now, canonicalJson({ message: "Job lease expired" }), row.id);
           failed += 1;
           terminal.push(rowToJob(this.requiredRow(row.id)));
         }
       }
       return { requeued, failed, terminal };
     });
-    for (const job of result.terminal) {
-      await this.recordTerminal(job);
-    }
+    for (const job of result.terminal) await this.recordTerminal(job);
     return { requeued: result.requeued, failed: result.failed };
   }
 
-  listLeased(project: string): Job[] {
-    return this.list(project, {
-      states: ["running", "completing"],
-    });
+  listLeased(): Job[] {
+    return this.list({ states: ["running", "completing"] });
   }
 
-  createRunner(project: string, config: RunnerConfig): QueueRunner {
-    this.resolveProjectId(project);
-    return new QueueRunner(this, project, config);
+  createRunner(config: RunnerConfig): QueueRunner {
+    return new QueueRunner(this, config);
   }
 
   private requiredRow(id: number): JobRow {
@@ -476,7 +382,6 @@ export class JobQueue {
   }
 
   private findDuplicateRow(
-    projectId: string,
     type: string,
     externalTaskId: string | null,
     dedupeKey: string | null,
@@ -485,26 +390,21 @@ export class JobQueue {
       ? (this.store.db
           .prepare(
             `${JOB_SELECT}
-             WHERE project_id=? AND type=? AND external_task_id=?
-             ORDER BY id DESC LIMIT 1`,
+             WHERE type=? AND external_task_id=? ORDER BY id DESC LIMIT 1`,
           )
-          .get(projectId, type, externalTaskId) as unknown as
-          | JobRow
-          | undefined)
+          .get(type, externalTaskId) as unknown as JobRow | undefined)
       : (this.store.db
           .prepare(
             `${JOB_SELECT}
-             WHERE project_id=? AND dedupe_key=?
-               AND state IN ('queued','running','completing')
+             WHERE dedupe_key=? AND state IN ('queued','running','completing')
              ORDER BY id DESC LIMIT 1`,
           )
-          .get(projectId, dedupeKey) as unknown as JobRow | undefined);
+          .get(dedupeKey) as unknown as JobRow | undefined);
     if (!row) throw new Error("Queue insert was ignored without a duplicate");
     return row;
   }
 
   private upsertQueuedArtifactView(
-    projectId: string,
     artifactId: string,
     kind: string,
     orientation: string | null,
@@ -513,23 +413,38 @@ export class JobQueue {
     this.store.db
       .prepare(
         `INSERT INTO runtime_artifact_views(
-          artifact_id, project_id, status, meta_json, updated_at
-        ) VALUES (?, ?, 'pending', ?, ?)
+          artifact_id, status, meta_json, updated_at
+        ) VALUES (?, 'pending', ?, ?)
         ON CONFLICT(artifact_id) DO UPDATE SET
-          status='pending',
-          meta_json=excluded.meta_json,
-          owner_id=NULL,
-          owner_kind=NULL,
-          pid=NULL,
-          deadline_at=NULL,
+          status='pending', meta_json=excluded.meta_json, owner_id=NULL,
+          owner_kind=NULL, pid=NULL, deadline_at=NULL,
           updated_at=excluded.updated_at`,
       )
-      .run(
-        artifactId,
-        projectId,
-        canonicalJson({ kind, orientation, queued: true }),
-        now,
-      );
+      .run(artifactId, canonicalJson({ kind, orientation, queued: true }), now);
+  }
+
+  private markArtifactReady(artifactId: string, now: number): void {
+    this.store.db
+      .prepare(
+        `UPDATE runtime_artifact_views
+         SET status='ready', meta_json='{}', owner_id=NULL, owner_kind=NULL,
+             pid=NULL, deadline_at=NULL, updated_at=? WHERE artifact_id=?`,
+      )
+      .run(now, artifactId);
+  }
+
+  private markArtifactFailed(
+    artifactId: string,
+    error: JobError,
+    now: number,
+  ): void {
+    this.store.db
+      .prepare(
+        `UPDATE runtime_artifact_views
+         SET status='error', meta_json=?, owner_id=NULL, owner_kind=NULL,
+             pid=NULL, deadline_at=NULL, updated_at=? WHERE artifact_id=?`,
+      )
+      .run(canonicalJson({ error }), now, artifactId);
   }
 }
 
@@ -544,7 +459,6 @@ export class QueueRunner {
 
   constructor(
     private readonly queue: JobQueue,
-    private readonly project: string,
     private readonly config: RunnerConfig,
   ) {
     this.leaseMs = config.leaseMs ?? 30_000;
@@ -556,12 +470,7 @@ export class QueueRunner {
     if (this.running) return;
     this.running = true;
     this.schedule(0);
-    this.reapTimer = setInterval(
-      () => {
-        void this.queue.reap(this.project);
-      },
-      this.reapIntervalMs,
-    );
+    this.reapTimer = setInterval(() => void this.queue.reap(), this.reapIntervalMs);
     this.reapTimer.unref?.();
   }
 
@@ -577,7 +486,7 @@ export class QueueRunner {
   async waitFor(id: number, timeoutMs = 300_000): Promise<unknown> {
     const started = Date.now();
     while (Date.now() - started < timeoutMs) {
-      const job = this.queue.get(this.project, id);
+      const job = this.queue.get(id);
       if (!job) throw new Error(`Job ${id} not found`);
       if (job.state === "done") return job.result;
       if (job.state === "failed" || job.state === "aborted") {
@@ -603,11 +512,7 @@ export class QueueRunner {
   private pump(): void {
     if (!this.running) return;
     while (this.active.size < this.config.concurrency) {
-      const job = this.queue.dequeue(
-        this.project,
-        process.pid,
-        this.leaseMs,
-      );
+      const job = this.queue.dequeue(process.pid, this.leaseMs);
       if (!job) break;
       const task = this.run(job);
       this.active.set(job.id, task);
@@ -629,21 +534,13 @@ export class QueueRunner {
       const handler: JobHandler | null = this.config.resolveHandler(job.type);
       if (!handler) throw new Error(`No handler for job type: ${job.type}`);
       const result = await handler(job);
-      await this.queue.complete(
-        this.project,
-        job.id,
-        { result },
-        job.fence,
-      );
+      await this.queue.complete(job.id, { result }, job.fence);
     } catch (error) {
       const jobError: JobError = {
         message: error instanceof Error ? error.message : String(error),
-        ...(error instanceof Error && error.name
-          ? { code: error.name }
-          : {}),
+        ...(error instanceof Error && error.name ? { code: error.name } : {}),
       };
       await this.queue.fail(
-        this.project,
         job.id,
         {
           error: jobError,
@@ -662,7 +559,7 @@ export class QueueRunner {
 }
 
 const JOB_SELECT = `
-  SELECT id, operation_id, project_id, type, artifact_id, external_task_id,
+  SELECT id, operation_id, type, artifact_id, external_task_id,
          state, payload_json, result_json, enqueued_at, started_at,
          finished_at, lease_expires_at, attempts, max_attempts,
          error_json, fence
@@ -673,24 +570,18 @@ function rowToJob(row: JobRow): Job {
   return {
     id: row.id,
     operationId: row.operation_id,
-    projectId: row.project_id,
     type: row.type,
     artifactId: row.artifact_id,
     externalTaskId: row.external_task_id,
     state: row.state,
     payload: parseJson<Record<string, unknown>>(row.payload_json, {}),
-    result:
-      row.result_json === null
-        ? null
-        : parseJson<unknown>(row.result_json, null),
+    result: row.result_json === null ? null : parseJson<unknown>(row.result_json, null),
     attempts: row.attempts,
     maxAttempts: row.max_attempts,
     error:
       row.error_json === null
         ? null
-        : parseJson<JobError>(row.error_json, {
-            message: row.error_json,
-          }),
+        : parseJson<JobError>(row.error_json, { message: row.error_json }),
     enqueuedAt: row.enqueued_at,
     startedAt: row.started_at,
     finishedAt: row.finished_at,

@@ -18,13 +18,12 @@ export function createResolverApi(context: EngineContext) {
     parseTags: parseArtifactTags,
     resolveAll: (
       text: string,
-      project: string,
     ): Promise<
       Result<
         { resolved: ResolvedArtifact[]; unresolved: string[] },
         EngineError
       >
-    > => resolveAllArtifacts(context, text, project),
+    > => resolveAllArtifacts(context, text),
     expandSlotRefs,
   };
 }
@@ -50,7 +49,6 @@ export function expandSlotRefs(
 async function resolveAllArtifacts(
   context: EngineContext,
   text: string,
-  projectReference: string,
 ): Promise<
   Result<
     { resolved: ResolvedArtifact[]; unresolved: string[] },
@@ -62,17 +60,15 @@ async function resolveAllArtifacts(
     if (tags.length === 0) {
       return ok({ resolved: [], unresolved: [] });
     }
-    const project = context.projectRow(projectReference);
     const rows = context.store.db
       .prepare(
-        `SELECT artifact_id, project_id, slug, kind, data_json,
+        `SELECT artifact_id, slug, kind, data_json,
                 created_at, updated_at, deleted_at
          FROM artifacts
-         WHERE project_id=? AND deleted_at IS NULL`,
+         WHERE deleted_at IS NULL`,
       )
-      .all(project.project_id) as unknown as Array<{
+      .all() as unknown as Array<{
       artifact_id: string;
-      project_id: string;
       slug: string;
       kind: ResolvedArtifact["artifactType"];
       data_json: string;
@@ -95,11 +91,6 @@ async function resolveAllArtifacts(
         `char-${tag}`,
         `prompt-${tag}`,
         `scene-${tag}`,
-        `book-${tag}`,
-        // Legacy prefixes remain readable for existing projects.
-        `prm-${tag}`,
-        `scn-${tag}`,
-        `nb-${tag}`,
       ];
       const row = candidates
         .map((candidate) => bySlug.get(candidate))
@@ -108,10 +99,7 @@ async function resolveAllArtifacts(
         unresolved.push(tag);
         continue;
       }
-      const manifest = await files.manifest(
-        row.artifact_id,
-        project.project_id,
-      );
+      const manifest = await files.manifest(row.artifact_id);
       if (!manifest.ok) return manifest;
       const primary =
         findPrimaryMediaFile(manifest.value.files, row.slug) ??

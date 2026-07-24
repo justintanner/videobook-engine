@@ -15,18 +15,18 @@ export type {
 } from "./notebook/types.js";
 
 export type {
-  BookAction,
-  BookActionEvent,
-  BookActionPhase,
-  BookActionRevision,
-  BookActionScope,
-  BookArtifactKind,
-  BookArtifactRef,
-  BookLayout,
-  GetProjectBookOptions,
-  ProjectBook,
-  RecordBookActionInput,
-} from "./book/types.js";
+  GetHistoryActionsOptions,
+  HistoryAction,
+  HistoryActionEvent,
+  HistoryActionPage,
+  HistoryActionPhase,
+  HistoryActionRevision,
+  HistoryActionScope,
+  HistoryArtifactKind,
+  HistoryArtifactRef,
+  HistoryLayout,
+  RecordActionInput,
+} from "./history-types.js";
 
 export {
   findAudioFile,
@@ -48,9 +48,9 @@ export {
 
 export { artifactSlug, normalizeKind } from "./artifacts.js";
 export {
-  isValidProjectSlug,
-  normalizeProjectSlug,
-} from "./projects.js";
+  isValidBookSlug,
+  normalizeBookSlug,
+} from "./context.js";
 export { normalizeFilePath } from "./files.js";
 export { JobQueue, QueueRunner } from "./job-queue.js";
 export type { StoredObject } from "./cas.js";

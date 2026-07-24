@@ -8,6 +8,7 @@ import {
   artifactSlug,
   computeArtifactStatus,
   createEngine,
+  normalizeKind,
   type Engine,
 } from "../src/index.js";
 
@@ -22,10 +23,24 @@ afterEach(async () => {
 });
 
 describe("artifact slug prefixes", () => {
+  it("does not expose notebook as an artifact kind or prefix", async () => {
+    expect(() => normalizeKind("notebook")).toThrow("Invalid artifact kind");
+    expect(() => artifactSlug("script", "book-story-notes")).not.toThrow();
+    const engine = await setup();
+    try {
+      expect(await engine.artifacts.create({ kind: "notebook", name: "notes" })).toMatchObject({
+        ok: false,
+        error: { code: "INVALID_INPUT" },
+      });
+    } finally {
+      engine.close();
+    }
+  });
+
   it.each([
     ["prompt", "Draft", "prompt-draft"],
     ["scene", "Opening Shot", "scene-opening-shot"],
-    ["notebook", "Story Notes", "book-story-notes"],
+    ["script", "Story Notes", "script-story-notes"],
   ] as const)("uses the canonical %s prefix", (kind, name, expected) => {
     expect(artifactSlug(kind, name)).toBe(expected);
     expect(artifactSlug(kind, expected)).toBe(expected);
@@ -34,7 +49,7 @@ describe("artifact slug prefixes", () => {
   it.each([
     ["prompt", "prm-draft"],
     ["scene", "scn-opening-shot"],
-    ["notebook", "nb-story-notes"],
+    ["script", "char-story-notes"],
   ] as const)("rejects the legacy prefix for new %s slugs", (kind, slug) => {
     expect(() => artifactSlug(kind, slug)).toThrow(
       `Artifact slug ${slug} does not match kind ${kind}`,
@@ -45,7 +60,7 @@ describe("artifact slug prefixes", () => {
     for (const artifactSlug of [
       "prompt-draft",
       "scene-opening-shot",
-      "book-story-notes",
+      "char-story-notes",
     ]) {
       expect(
         computeArtifactStatus({
@@ -66,21 +81,17 @@ describe("artifact slug prefixes", () => {
   it("resolves unqualified tags using the canonical prefixes", async () => {
     const engine = await setup();
     try {
-      const project = value(await engine.projects.create("prefixes"));
       const artifacts = await Promise.all([
         engine.artifacts.create({
-          project: project.projectId,
           kind: "prompt",
           name: "main prompt",
         }),
         engine.artifacts.create({
-          project: project.projectId,
           kind: "scene",
           name: "opening shot",
         }),
         engine.artifacts.create({
-          project: project.projectId,
-          kind: "notebook",
+          kind: "script",
           name: "story notes",
         }),
       ]);
@@ -89,7 +100,6 @@ describe("artifact slug prefixes", () => {
       const resolution = value(
         await engine.resolver.resolveAll(
           "@main-prompt @opening-shot @story-notes",
-          project.projectId,
         ),
       );
 
@@ -99,7 +109,7 @@ describe("artifact slug prefixes", () => {
       ).toEqual([
         "prompt-main-prompt",
         "scene-opening-shot",
-        "book-story-notes",
+        "script-story-notes",
       ]);
     } finally {
       engine.close();
@@ -113,6 +123,7 @@ async function setup(): Promise<Engine> {
   return createEngine({
     dataDir: path.join(root, "data"),
     workspaceDir: path.join(root, "workspace"),
+    initialBookSlug: "prefixes",
   });
 }
 

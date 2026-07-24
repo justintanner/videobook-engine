@@ -2,14 +2,16 @@
 
 ## Project
 
-`videobook-engine` is an ESM TypeScript package for Node.js 20+. Version 1 is
-Dolt-native and deliberately has no compatibility layer for the former
-Git/project-directory/SQLite-sidecar engine.
+`videobook-engine` is an ESM TypeScript package for Node.js 22+. Version 2 is
+Dolt-native and deliberately has no compatibility or migration layer for the
+former multi-project catalog or the earlier Git/project-directory/SQLite-sidecar
+engine.
 
 ## Commands
 
 ```bash
 npm run typecheck
+npm run lint
 npm test
 npm run build
 npm run examples
@@ -18,17 +20,19 @@ npx knip
 
 ## Architecture
 
-`src/engine.ts` exports the `createEngine(config)` factory and the
-namespaced `Engine` API. Configuration requires separate `dataDir` and
-`workspaceDir` paths.
+`src/engine.ts` exports the `createEngine(config)` factory and the namespaced
+`Engine` API. A new catalog requires `initialBookSlug`; subsequent opens use
+the singleton book stored in the catalog. Configuration accepts either
+`rootDir` or separate `dataDir` and `workspaceDir` paths.
 
 - `dataDir/videobook.db` is the only database.
 - Semantic and runtime tables share that database.
 - Semantic tables are explicitly allowlisted, staged, and committed to Dolt.
 - `runtime_*` tables are never staged or versioned.
 - `dataDir/objects/sha256/` is the immutable local content-addressed store.
-- `workspaceDir/<project UUID>/<artifact UUID>/` is disposable materialization.
-- Project and artifact UUIDv7 identities are stable; active slugs are reusable.
+- `workspaceDir/<artifact UUID>/` is disposable materialization.
+- The singleton Book and artifact UUIDv7 identities are stable; active artifact
+  slugs are reusable.
 - Deletes tombstone semantic records, abort jobs, revoke leases, and invalidate
   runtime/workspace state.
 - Restores are forward-only commits. The engine never rewinds a live branch.
@@ -39,11 +43,11 @@ Core modules are flat and single-purpose:
 
 - `schema.ts` — semantic/runtime schema and stage allowlists
 - `store.ts` — SQL transactions, Dolt staging/commit, outbox recovery, push
-- `projects.ts` and `artifacts.ts` — stable-ID lifecycle and active-slug rules
+- `books.ts` and `artifacts.ts` — singleton book and artifact lifecycle rules
 - `cas.ts`, `files.ts`, `media.ts` — objects, mappings, materialization
 - `domain.ts`, `metadata.ts`, `communications.ts` — normalized semantic data
 - `job-queue.ts`, `runtime-services.ts`, `status.ts` — runtime coordination
-- `history.ts` — Dolt projections, action graph, forward restores
+- `history.ts` — Dolt projections, generic action graph, forward restores
 - `storage.ts` — object publication and catalog backup
 
 Public domain operations return `Result<T, EngineError>`. Queue and lease
@@ -52,7 +56,7 @@ primitives return direct runtime values and use owner IDs/fences for CAS.
 ## Testing
 
 Vitest tests use real embedded Dolt databases and temporary filesystems. The
-required lifecycle invariant is:
+required artifact lifecycle invariant is:
 
 1. create `vid-cat`;
 2. delete it;

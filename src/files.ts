@@ -1,9 +1,4 @@
-import {
-  mkdir,
-  readdir,
-  rm,
-  stat,
-} from "node:fs/promises";
+import { readdir, rm, stat } from "node:fs/promises";
 import * as path from "node:path";
 
 import type {
@@ -13,12 +8,7 @@ import type {
   Result,
 } from "./engine-types.js";
 import { ok } from "./engine-types.js";
-import {
-  EngineContext,
-  resultOf,
-  type FileRow,
-} from "./context.js";
-import { canonicalJson } from "./store.js";
+import { EngineContext, resultOf, type FileRow } from "./context.js";
 
 interface PreparedFile {
   relativePath: string;
@@ -34,49 +24,33 @@ export function createFilesApi(context: EngineContext) {
       artifact: string,
       filename: string,
       data: Buffer | string,
-      project: string,
     ): Promise<Result<string, EngineError>> =>
-      writeFile(context, artifact, filename, data, project),
+      writeFile(context, artifact, filename, data),
     writeFromPath: (
       artifact: string,
       filename: string,
       sourcePath: string,
-      project: string,
     ): Promise<Result<string, EngineError>> =>
-      writeFromPath(context, artifact, filename, sourcePath, project),
+      writeFromPath(context, artifact, filename, sourcePath),
     read: (
       artifact: string,
       filename: string,
-      project: string,
-    ): Promise<Result<Buffer, EngineError>> =>
-      readFile(context, artifact, filename, project),
+    ): Promise<Result<Buffer, EngineError>> => readFile(context, artifact, filename),
     delete: (
       artifact: string,
       filename: string,
-      project: string,
-    ): Promise<Result<string, EngineError>> =>
-      deleteFile(context, artifact, filename, project),
+    ): Promise<Result<string, EngineError>> => deleteFile(context, artifact, filename),
     rename: (
       artifact: string,
       oldFilename: string,
       newFilename: string,
-      project: string,
-    ): Promise<
-      Result<{ oldPath: string; newPath: string }, EngineError>
-    > =>
-      renameFile(
-        context,
-        artifact,
-        oldFilename,
-        newFilename,
-        project,
-      ),
+    ): Promise<Result<{ oldPath: string; newPath: string }, EngineError>> =>
+      renameFile(context, artifact, oldFilename, newFilename),
     copy: (
       artifact: string,
       filename: string,
       destinationArtifact: string,
       destinationFilename: string,
-      project: string,
     ): Promise<Result<string, EngineError>> =>
       copyFile(
         context,
@@ -84,35 +58,23 @@ export function createFilesApi(context: EngineContext) {
         filename,
         destinationArtifact,
         destinationFilename,
-        project,
       ),
     manifest: (
       artifact: string,
-      project: string,
       options?: { includeDotfiles?: boolean },
     ): Promise<Result<ArtifactManifest, EngineError>> =>
-      manifest(context, artifact, project, options),
+      manifest(context, artifact, options),
     listSubdir: (
       artifact: string,
       subdir: string,
-      project: string,
-    ): Result<string[], EngineError> =>
-      listSubdir(context, artifact, subdir, project),
+    ): Result<string[], EngineError> => listSubdir(context, artifact, subdir),
     ingestWorkspace: (
       artifact: string,
       paths: string[],
-      project: string,
       operation = "ingest_workspace",
       details: Record<string, unknown> = {},
     ): Promise<Result<string, EngineError>> =>
-      ingestWorkspace(
-        context,
-        artifact,
-        paths,
-        project,
-        operation,
-        details,
-      ),
+      ingestWorkspace(context, artifact, paths, operation, details),
     readAtRevision: (
       artifactId: string,
       filename: string,
@@ -125,21 +87,12 @@ export function createFilesApi(context: EngineContext) {
 
 export function createWorkspacesApi(context: EngineContext) {
   return {
-    resolveArtifact: (
-      artifact: string,
-      project: string,
-    ): Promise<Result<string, EngineError>> =>
-      resolveArtifactWorkspace(context, artifact, project),
-    materialize: (
-      artifact: string,
-      project: string,
-    ): Promise<Result<string, EngineError>> =>
-      resolveArtifactWorkspace(context, artifact, project),
-    evict: (
-      artifact: string,
-      project: string,
-    ): Promise<Result<boolean, EngineError>> =>
-      evictWorkspace(context, artifact, project),
+    resolveArtifact: (artifact: string): Promise<Result<string, EngineError>> =>
+      resolveArtifactWorkspace(context, artifact),
+    materialize: (artifact: string): Promise<Result<string, EngineError>> =>
+      resolveArtifactWorkspace(context, artifact),
+    evict: (artifact: string): Promise<Result<boolean, EngineError>> =>
+      evictWorkspace(context, artifact),
   };
 }
 
@@ -148,29 +101,19 @@ async function writeFile(
   artifactReference: string,
   filename: string,
   data: Buffer | string,
-  projectReference: string,
 ): Promise<Result<string, EngineError>> {
   return resultOf(async () => {
-    const project = context.projectRow(projectReference);
-    const artifact = context.artifactRow(
-      project.project_id,
-      artifactReference,
-    );
+    const artifact = context.artifactRow(artifactReference);
     const relativePath = normalizeFilePath(filename);
     const object = await context.objects.put(data);
     const destination = path.join(
-      context.ensureArtifactWorkspace(
-        project.project_id,
-        artifact.artifact_id,
-      ),
+      context.ensureArtifactWorkspace(artifact.artifact_id),
       ...relativePath.split("/"),
     );
     await context.objects.materialize(object.hash, destination);
     const mtimeMs = Date.now();
-    const mimeType = mimeTypeFor(relativePath);
     const mutation = await context.store.semantic(
       {
-        projectId: project.project_id,
         operation: "write_file",
         artifactId: artifact.artifact_id,
         details: {
@@ -192,22 +135,13 @@ async function writeFile(
             relativePath,
             objectHash: object.hash,
             size: object.size,
-            mimeType,
+            mimeType: mimeTypeFor(relativePath),
             mtimeMs,
           },
           now,
         );
-        context.store.db
-          .prepare(
-            "UPDATE artifacts SET updated_at=? WHERE artifact_id=?",
-          )
-          .run(now, artifact.artifact_id);
-        markWorkspaceReady(
-          context,
-          project.project_id,
-          artifact.artifact_id,
-          now,
-        );
+        touchArtifact(context, artifact.artifact_id, now);
+        markWorkspaceReady(context, artifact.artifact_id, now);
       },
     );
     return ok(destination, mutation.revision);
@@ -219,27 +153,18 @@ async function writeFromPath(
   artifactReference: string,
   filename: string,
   sourcePath: string,
-  projectReference: string,
 ): Promise<Result<string, EngineError>> {
   return resultOf(async () => {
-    const project = context.projectRow(projectReference);
-    const artifact = context.artifactRow(
-      project.project_id,
-      artifactReference,
-    );
+    const artifact = context.artifactRow(artifactReference);
     const relativePath = normalizeFilePath(filename);
     const object = await context.objects.import(sourcePath);
     const destination = path.join(
-      context.ensureArtifactWorkspace(
-        project.project_id,
-        artifact.artifact_id,
-      ),
+      context.ensureArtifactWorkspace(artifact.artifact_id),
       ...relativePath.split("/"),
     );
     await context.objects.materialize(object.hash, destination);
     const mutation = await context.store.semantic(
       {
-        projectId: project.project_id,
         operation: "write_file",
         artifactId: artifact.artifact_id,
         details: {
@@ -266,17 +191,8 @@ async function writeFromPath(
           },
           now,
         );
-        context.store.db
-          .prepare(
-            "UPDATE artifacts SET updated_at=? WHERE artifact_id=?",
-          )
-          .run(now, artifact.artifact_id);
-        markWorkspaceReady(
-          context,
-          project.project_id,
-          artifact.artifact_id,
-          now,
-        );
+        touchArtifact(context, artifact.artifact_id, now);
+        markWorkspaceReady(context, artifact.artifact_id, now);
       },
     );
     return ok(destination, mutation.revision);
@@ -287,32 +203,14 @@ async function readFile(
   context: EngineContext,
   artifactReference: string,
   filename: string,
-  projectReference: string,
 ): Promise<Result<Buffer, EngineError>> {
   return resultOf(async () => {
-    const project = context.projectRow(projectReference);
-    const artifact = context.artifactRow(
-      project.project_id,
-      artifactReference,
-    );
+    const artifact = context.artifactRow(artifactReference);
     const relativePath = normalizeFilePath(filename);
-    const row = context.store.db
-      .prepare(
-        `SELECT artifact_id, path, object_hash, size_bytes, mime_type,
-                mtime_ms, created_at
-         FROM artifact_files
-         WHERE artifact_id=? AND path=?`,
-      )
-      .get(artifact.artifact_id, relativePath) as unknown as
-      | FileRow
-      | undefined;
-    if (!row) throw new Error(`File not found: ${relativePath}`);
+    const row = requiredFile(context, artifact.artifact_id, relativePath);
     const buffer = await context.objects.read(row.object_hash);
     const destination = path.join(
-      context.ensureArtifactWorkspace(
-        project.project_id,
-        artifact.artifact_id,
-      ),
+      context.ensureArtifactWorkspace(artifact.artifact_id),
       ...relativePath.split("/"),
     );
     await context.objects.materialize(row.object_hash, destination);
@@ -325,24 +223,13 @@ async function deleteFile(
   context: EngineContext,
   artifactReference: string,
   filename: string,
-  projectReference: string,
 ): Promise<Result<string, EngineError>> {
   return resultOf(async () => {
-    const project = context.projectRow(projectReference);
-    const artifact = context.artifactRow(
-      project.project_id,
-      artifactReference,
-    );
+    const artifact = context.artifactRow(artifactReference);
     const relativePath = normalizeFilePath(filename);
-    const exists = context.store.db
-      .prepare(
-        "SELECT 1 AS present FROM artifact_files WHERE artifact_id=? AND path=?",
-      )
-      .get(artifact.artifact_id, relativePath);
-    if (!exists) throw new Error(`File not found: ${relativePath}`);
+    requiredFile(context, artifact.artifact_id, relativePath);
     const mutation = await context.store.semantic(
       {
-        projectId: project.project_id,
         operation: "delete_file",
         artifactId: artifact.artifact_id,
         details: { path: relativePath },
@@ -351,19 +238,13 @@ async function deleteFile(
       ["artifact_files", "artifacts"],
       (_operationId, now) => {
         context.store.db
-          .prepare(
-            "DELETE FROM artifact_files WHERE artifact_id=? AND path=?",
-          )
+          .prepare("DELETE FROM artifact_files WHERE artifact_id=? AND path=?")
           .run(artifact.artifact_id, relativePath);
-        context.store.db
-          .prepare(
-            "UPDATE artifacts SET updated_at=? WHERE artifact_id=?",
-          )
-          .run(now, artifact.artifact_id);
+        touchArtifact(context, artifact.artifact_id, now);
       },
     );
     const destination = path.join(
-      context.artifactPath(project.project_id, artifact.artifact_id),
+      context.artifactPath(artifact.artifact_id),
       ...relativePath.split("/"),
     );
     await rm(destination, { force: true });
@@ -376,48 +257,21 @@ async function renameFile(
   artifactReference: string,
   oldFilename: string,
   newFilename: string,
-  projectReference: string,
-): Promise<
-  Result<{ oldPath: string; newPath: string }, EngineError>
-> {
+): Promise<Result<{ oldPath: string; newPath: string }, EngineError>> {
   return resultOf(async () => {
-    const project = context.projectRow(projectReference);
-    const artifact = context.artifactRow(
-      project.project_id,
-      artifactReference,
-    );
+    const artifact = context.artifactRow(artifactReference);
     const oldRelative = normalizeFilePath(oldFilename);
     const newRelative = normalizeFilePath(newFilename);
-    const row = context.store.db
-      .prepare(
-        `SELECT artifact_id, path, object_hash, size_bytes, mime_type,
-                mtime_ms, created_at
-         FROM artifact_files
-         WHERE artifact_id=? AND path=?`,
-      )
-      .get(artifact.artifact_id, oldRelative) as unknown as
-      | FileRow
-      | undefined;
-    if (!row) throw new Error(`File not found: ${oldRelative}`);
-    if (
-      context.store.db
-        .prepare(
-          "SELECT 1 AS present FROM artifact_files WHERE artifact_id=? AND path=?",
-        )
-        .get(artifact.artifact_id, newRelative)
-    ) {
+    const row = requiredFile(context, artifact.artifact_id, oldRelative);
+    if (fileExists(context, artifact.artifact_id, newRelative)) {
       throw new Error(`File already exists: ${newRelative}`);
     }
-    const workspace = context.ensureArtifactWorkspace(
-      project.project_id,
-      artifact.artifact_id,
-    );
+    const workspace = context.ensureArtifactWorkspace(artifact.artifact_id);
     const oldPath = path.join(workspace, ...oldRelative.split("/"));
     const newPath = path.join(workspace, ...newRelative.split("/"));
     await context.objects.materialize(row.object_hash, newPath);
     const mutation = await context.store.semantic(
       {
-        projectId: project.project_id,
         operation: "rename_file",
         artifactId: artifact.artifact_id,
         details: { oldPath: oldRelative, newPath: newRelative },
@@ -430,8 +284,7 @@ async function renameFile(
       (_operationId, now) => {
         context.store.db
           .prepare(
-            `UPDATE artifact_files
-             SET path=?, mime_type=?, mtime_ms=?
+            `UPDATE artifact_files SET path=?, mime_type=?, mtime_ms=?
              WHERE artifact_id=? AND path=?`,
           )
           .run(
@@ -441,11 +294,7 @@ async function renameFile(
             artifact.artifact_id,
             oldRelative,
           );
-        context.store.db
-          .prepare(
-            "UPDATE artifacts SET updated_at=? WHERE artifact_id=?",
-          )
-          .run(now, artifact.artifact_id);
+        touchArtifact(context, artifact.artifact_id, now);
       },
     );
     await rm(oldPath, { force: true });
@@ -459,42 +308,20 @@ async function copyFile(
   filename: string,
   destinationReference: string,
   destinationFilename: string,
-  projectReference: string,
 ): Promise<Result<string, EngineError>> {
   return resultOf(async () => {
-    const project = context.projectRow(projectReference);
-    const source = context.artifactRow(
-      project.project_id,
-      sourceReference,
-    );
-    const destination = context.artifactRow(
-      project.project_id,
-      destinationReference,
-    );
+    const source = context.artifactRow(sourceReference);
+    const destination = context.artifactRow(destinationReference);
     const sourcePath = normalizeFilePath(filename);
     const destinationPath = normalizeFilePath(destinationFilename);
-    const row = context.store.db
-      .prepare(
-        `SELECT artifact_id, path, object_hash, size_bytes, mime_type,
-                mtime_ms, created_at
-         FROM artifact_files
-         WHERE artifact_id=? AND path=?`,
-      )
-      .get(source.artifact_id, sourcePath) as unknown as
-      | FileRow
-      | undefined;
-    if (!row) throw new Error(`File not found: ${sourcePath}`);
+    const row = requiredFile(context, source.artifact_id, sourcePath);
     const absolute = path.join(
-      context.ensureArtifactWorkspace(
-        project.project_id,
-        destination.artifact_id,
-      ),
+      context.ensureArtifactWorkspace(destination.artifact_id),
       ...destinationPath.split("/"),
     );
     await context.objects.materialize(row.object_hash, absolute);
     const mutation = await context.store.semantic(
       {
-        projectId: project.project_id,
         operation: "copy_file",
         artifactId: destination.artifact_id,
         details: {
@@ -502,9 +329,7 @@ async function copyFile(
           sourcePath,
           destinationPath,
         },
-        writeSet: [
-          `file:${destination.artifact_id}:${destinationPath}`,
-        ],
+        writeSet: [`file:${destination.artifact_id}:${destinationPath}`],
       },
       ["artifact_files", "artifacts"],
       (_operationId, now) => {
@@ -529,11 +354,8 @@ async function copyFile(
             now,
             now,
           );
-        context.store.db
-          .prepare(
-            "UPDATE artifacts SET updated_at=? WHERE artifact_id=?",
-          )
-          .run(now, destination.artifact_id);
+        touchArtifact(context, destination.artifact_id, now);
+        markWorkspaceReady(context, destination.artifact_id, now);
       },
     );
     return ok(absolute, mutation.revision);
@@ -543,41 +365,23 @@ async function copyFile(
 async function manifest(
   context: EngineContext,
   artifactReference: string,
-  projectReference: string,
   options: { includeDotfiles?: boolean } = {},
 ): Promise<Result<ArtifactManifest, EngineError>> {
   return resultOf(async () => {
-    const project = context.projectRow(projectReference);
-    const artifact = context.artifactRow(
-      project.project_id,
-      artifactReference,
-    );
+    const artifact = context.artifactRow(artifactReference);
     await materializeArtifact(context, artifact.artifact_id);
-    const rows = context.store.db
-      .prepare(
-        `SELECT artifact_id, path, object_hash, size_bytes, mime_type,
-                mtime_ms, created_at
-         FROM artifact_files
-         WHERE artifact_id=?
-         ORDER BY path`,
-      )
-      .all(artifact.artifact_id) as unknown as FileRow[];
+    const rows = filesForArtifact(context, artifact.artifact_id);
     const filtered = options.includeDotfiles
       ? rows
       : rows.filter(
           (row) =>
-            !row.path
-              .split("/")
-              .some((segment) => segment.startsWith(".")),
+            !row.path.split("/").some((segment) => segment.startsWith(".")),
         );
     const files = filtered.map(rowToManifestFile);
     return {
       artifactId: artifact.artifact_id,
       slug: artifact.slug,
-      path: context.artifactPath(
-        project.project_id,
-        artifact.artifact_id,
-      ),
+      path: context.artifactPath(artifact.artifact_id),
       fileCount: files.length,
       files,
       directories: directoriesFor(filtered),
@@ -589,24 +393,16 @@ function listSubdir(
   context: EngineContext,
   artifactReference: string,
   subdir: string,
-  projectReference: string,
 ): Result<string[], EngineError> {
   try {
-    const project = context.projectRow(projectReference);
-    const artifact = context.artifactRow(
-      project.project_id,
-      artifactReference,
-    );
+    const artifact = context.artifactRow(artifactReference);
     const prefix = `${normalizeFilePath(subdir).replace(/\/+$/, "")}/`;
     const rows = context.store.db
       .prepare(
         `SELECT path FROM artifact_files
-         WHERE artifact_id=? AND path LIKE ?
-         ORDER BY path`,
+         WHERE artifact_id=? AND path LIKE ? ORDER BY path`,
       )
-      .all(artifact.artifact_id, `${prefix}%`) as unknown as Array<{
-      path: string;
-    }>;
+      .all(artifact.artifact_id, `${prefix}%`) as unknown as Array<{ path: string }>;
     return ok(
       rows
         .map((row) => row.path.slice(prefix.length))
@@ -627,42 +423,26 @@ async function ingestWorkspace(
   context: EngineContext,
   artifactReference: string,
   paths: string[],
-  projectReference: string,
   operation: string,
   details: Record<string, unknown>,
 ): Promise<Result<string, EngineError>> {
   return resultOf(async () => {
-    const project = context.projectRow(projectReference);
-    const artifact = context.artifactRow(
-      project.project_id,
-      artifactReference,
-    );
-    const workspace = context.ensureArtifactWorkspace(
-      project.project_id,
-      artifact.artifact_id,
-    );
-    const requestedPaths = [
-      ...new Set(paths.map((item) => normalizeFilePath(item))),
-    ];
+    const artifact = context.artifactRow(artifactReference);
+    const workspace = context.ensureArtifactWorkspace(artifact.artifact_id);
+    const requestedPaths = [...new Set(paths.map(normalizeFilePath))];
     const uniquePaths: string[] = [];
     for (const requestedPath of requestedPaths) {
-      const source = path.join(
-        workspace,
-        ...requestedPath.split("/"),
-      );
+      const source = path.join(workspace, ...requestedPath.split("/"));
       const sourceStat = await stat(source);
       if (sourceStat.isFile()) {
         uniquePaths.push(requestedPath);
-        continue;
-      }
-      if (!sourceStat.isDirectory()) {
+      } else if (sourceStat.isDirectory()) {
+        uniquePaths.push(...(await workspaceFiles(source, requestedPath)));
+      } else {
         throw new Error(
           `Workspace path is neither a file nor directory: ${requestedPath}`,
         );
       }
-      uniquePaths.push(
-        ...(await workspaceFiles(source, requestedPath)),
-      );
     }
     const expandedPaths = [...new Set(uniquePaths)].sort();
     const prepared: PreparedFile[] = [];
@@ -680,33 +460,18 @@ async function ingestWorkspace(
     }
     const mutation = await context.store.semantic(
       {
-        projectId: project.project_id,
         operation,
         artifactId: artifact.artifact_id,
-        details: {
-          ...details,
-          paths: expandedPaths,
-        },
+        details: { ...details, paths: expandedPaths },
         writeSet: expandedPaths.map(
           (item) => `file:${artifact.artifact_id}:${item}`,
         ),
       },
       ["objects", "artifact_files", "artifacts"],
       (_operationId, now) => {
-        for (const file of prepared) {
-          linkObject(context, artifact.artifact_id, file, now);
-        }
-        context.store.db
-          .prepare(
-            "UPDATE artifacts SET updated_at=? WHERE artifact_id=?",
-          )
-          .run(now, artifact.artifact_id);
-        markWorkspaceReady(
-          context,
-          project.project_id,
-          artifact.artifact_id,
-          now,
-        );
+        for (const file of prepared) linkObject(context, artifact.artifact_id, file, now);
+        touchArtifact(context, artifact.artifact_id, now);
+        markWorkspaceReady(context, artifact.artifact_id, now);
       },
     );
     return ok(mutation.revision, mutation.revision);
@@ -719,21 +484,15 @@ async function workspaceFiles(
 ): Promise<string[]> {
   const entries = await readdir(directory, { withFileTypes: true });
   const files: string[] = [];
-  for (const entry of entries.sort((a, b) =>
-    a.name.localeCompare(b.name),
-  )) {
+  for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
     const relativePath = `${relativeDirectory}/${entry.name}`;
     const absolutePath = path.join(directory, entry.name);
     if (entry.isDirectory()) {
-      files.push(
-        ...(await workspaceFiles(absolutePath, relativePath)),
-      );
+      files.push(...(await workspaceFiles(absolutePath, relativePath)));
     } else if (entry.isFile()) {
       files.push(relativePath);
     } else {
-      throw new Error(
-        `Workspace path is not a regular file: ${relativePath}`,
-      );
+      throw new Error(`Workspace path is not a regular file: ${relativePath}`);
     }
   }
   return files;
@@ -749,8 +508,7 @@ async function readAtRevision(
     const relativePath = normalizeFilePath(filename);
     const row = context.store.db
       .prepare(
-        `SELECT object_hash
-         FROM dolt_at_artifact_files(?)
+        `SELECT object_hash FROM dolt_at_artifact_files(?)
          WHERE artifact_id=? AND path=?`,
       )
       .get(revision, artifactId, relativePath) as unknown as
@@ -768,19 +526,10 @@ async function readAtRevision(
 async function resolveArtifactWorkspace(
   context: EngineContext,
   artifactReference: string,
-  projectReference: string,
 ): Promise<Result<string, EngineError>> {
   return resultOf(async () => {
-    const project = context.projectRow(projectReference);
-    const artifact = context.artifactRow(
-      project.project_id,
-      artifactReference,
-    );
-    await materializeArtifact(context, artifact.artifact_id);
-    const workspace = context.ensureArtifactWorkspace(
-      project.project_id,
-      artifact.artifact_id,
-    );
+    const artifact = context.artifactRow(artifactReference);
+    const workspace = await materializeArtifact(context, artifact.artifact_id);
     touchWorkspace(context, artifact.artifact_id);
     return workspace;
   });
@@ -789,18 +538,13 @@ async function resolveArtifactWorkspace(
 async function evictWorkspace(
   context: EngineContext,
   artifactReference: string,
-  projectReference: string,
 ): Promise<Result<boolean, EngineError>> {
   return resultOf(async () => {
-    const project = context.projectRow(projectReference);
-    const artifact = context.artifactRow(
-      project.project_id,
-      artifactReference,
-    );
-    await rm(
-      context.artifactPath(project.project_id, artifact.artifact_id),
-      { recursive: true, force: true },
-    );
+    const artifact = context.artifactRow(artifactReference);
+    await rm(context.artifactPath(artifact.artifact_id), {
+      recursive: true,
+      force: true,
+    });
     context.store.runtime((now) => {
       context.store.db
         .prepare(
@@ -819,19 +563,8 @@ export async function materializeArtifact(
   artifactId: string,
 ): Promise<string> {
   const artifact = context.artifactRowById(artifactId);
-  const workspace = context.ensureArtifactWorkspace(
-    artifact.project_id,
-    artifact.artifact_id,
-  );
-  const rows = context.store.db
-    .prepare(
-      `SELECT artifact_id, path, object_hash, size_bytes, mime_type,
-              mtime_ms, created_at
-       FROM artifact_files
-       WHERE artifact_id=?`,
-    )
-    .all(artifact.artifact_id) as unknown as FileRow[];
-  for (const row of rows) {
+  const workspace = context.ensureArtifactWorkspace(artifact.artifact_id);
+  for (const row of filesForArtifact(context, artifact.artifact_id)) {
     await context.objects.materialize(
       row.object_hash,
       path.join(workspace, ...row.path.split("/")),
@@ -841,22 +574,15 @@ export async function materializeArtifact(
     context.store.db
       .prepare(
         `INSERT INTO runtime_workspace_entries(
-          artifact_id, project_id, path, hydrated_at, invalidated_at,
-          last_accessed_at
-        ) VALUES (?, ?, ?, ?, NULL, ?)
+          artifact_id, path, hydrated_at, invalidated_at, last_accessed_at
+        ) VALUES (?, ?, ?, NULL, ?)
         ON CONFLICT(artifact_id) DO UPDATE SET
           path=excluded.path,
           hydrated_at=excluded.hydrated_at,
           invalidated_at=NULL,
           last_accessed_at=excluded.last_accessed_at`,
       )
-      .run(
-        artifact.artifact_id,
-        artifact.project_id,
-        workspace,
-        now,
-        now,
-      );
+      .run(artifact.artifact_id, workspace, now, now);
   });
   return workspace;
 }
@@ -869,19 +595,17 @@ function linkObject(
 ): void {
   context.store.db
     .prepare(
-      `INSERT INTO objects(
-        object_hash, size_bytes, mime_type, created_at
-      ) VALUES (?, ?, ?, ?)
-      ON CONFLICT(object_hash) DO UPDATE SET
-        size_bytes=excluded.size_bytes,
-        mime_type=COALESCE(objects.mime_type, excluded.mime_type)`,
+      `INSERT INTO objects(object_hash, size_bytes, mime_type, created_at)
+       VALUES (?, ?, ?, ?)
+       ON CONFLICT(object_hash) DO UPDATE SET
+         size_bytes=excluded.size_bytes,
+         mime_type=COALESCE(objects.mime_type, excluded.mime_type)`,
     )
     .run(file.objectHash, file.size, file.mimeType, now);
   context.store.db
     .prepare(
       `INSERT INTO artifact_files(
-        artifact_id, path, object_hash, size_bytes, mime_type,
-        mtime_ms, created_at
+        artifact_id, path, object_hash, size_bytes, mime_type, mtime_ms, created_at
       ) VALUES (?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(artifact_id, path) DO UPDATE SET
         object_hash=excluded.object_hash,
@@ -900,56 +624,80 @@ function linkObject(
     );
 }
 
+function touchArtifact(context: EngineContext, artifactId: string, now: number): void {
+  context.store.db
+    .prepare("UPDATE artifacts SET updated_at=? WHERE artifact_id=?")
+    .run(now, artifactId);
+}
+
 function markWorkspaceReady(
   context: EngineContext,
-  projectId: string,
   artifactId: string,
   now: number,
 ): void {
   context.store.db
     .prepare(
       `INSERT INTO runtime_workspace_entries(
-        artifact_id, project_id, path, hydrated_at, invalidated_at,
-        last_accessed_at
-      ) VALUES (?, ?, ?, ?, NULL, ?)
+        artifact_id, path, hydrated_at, invalidated_at, last_accessed_at
+      ) VALUES (?, ?, ?, NULL, ?)
       ON CONFLICT(artifact_id) DO UPDATE SET
         hydrated_at=excluded.hydrated_at,
         invalidated_at=NULL,
         last_accessed_at=excluded.last_accessed_at`,
     )
-    .run(
-      artifactId,
-      projectId,
-      context.artifactPath(projectId, artifactId),
-      now,
-      now,
-    );
+    .run(artifactId, context.artifactPath(artifactId), now, now);
   context.store.db
     .prepare(
       `INSERT INTO runtime_artifact_views(
-        artifact_id, project_id, status, meta_json, updated_at
-      ) VALUES (?, ?, 'ready', '{}', ?)
+        artifact_id, status, meta_json, updated_at
+      ) VALUES (?, 'ready', '{}', ?)
       ON CONFLICT(artifact_id) DO UPDATE SET
-        status='ready',
-        meta_json='{}',
-        owner_id=NULL,
-        owner_kind=NULL,
-        pid=NULL,
-        deadline_at=NULL,
-        updated_at=excluded.updated_at`,
+        status='ready', meta_json='{}', owner_id=NULL, owner_kind=NULL,
+        pid=NULL, deadline_at=NULL, updated_at=excluded.updated_at`,
     )
-    .run(artifactId, projectId, now);
+    .run(artifactId, now);
 }
 
 function touchWorkspace(context: EngineContext, artifactId: string): void {
   context.store.runtime((now) => {
     context.store.db
       .prepare(
-        `UPDATE runtime_workspace_entries
-         SET last_accessed_at=? WHERE artifact_id=?`,
+        "UPDATE runtime_workspace_entries SET last_accessed_at=? WHERE artifact_id=?",
       )
       .run(now, artifactId);
   });
+}
+
+function requiredFile(
+  context: EngineContext,
+  artifactId: string,
+  relativePath: string,
+): FileRow {
+  const row = context.store.db
+    .prepare(
+      `SELECT artifact_id, path, object_hash, size_bytes, mime_type, mtime_ms, created_at
+       FROM artifact_files WHERE artifact_id=? AND path=?`,
+    )
+    .get(artifactId, relativePath) as unknown as FileRow | undefined;
+  if (!row) throw new Error(`File not found: ${relativePath}`);
+  return row;
+}
+
+function fileExists(context: EngineContext, artifactId: string, relativePath: string): boolean {
+  return Boolean(
+    context.store.db
+      .prepare("SELECT 1 AS present FROM artifact_files WHERE artifact_id=? AND path=?")
+      .get(artifactId, relativePath),
+  );
+}
+
+function filesForArtifact(context: EngineContext, artifactId: string): FileRow[] {
+  return context.store.db
+    .prepare(
+      `SELECT artifact_id, path, object_hash, size_bytes, mime_type, mtime_ms, created_at
+       FROM artifact_files WHERE artifact_id=? ORDER BY path`,
+    )
+    .all(artifactId) as unknown as FileRow[];
 }
 
 function rowToManifestFile(row: FileRow): ArtifactManifestFile {

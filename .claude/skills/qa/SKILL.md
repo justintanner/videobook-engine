@@ -39,13 +39,11 @@ Match changed files against these patterns and run the corresponding test comman
 
 | Changed file pattern | Test command |
 |---|---|
-| `src/project/*` | `npx vitest run tests/project.test.ts` |
-| `src/asset/*` | `npx vitest run tests/asset.test.ts tests/status.test.ts` |
-| `src/git/*` | `npx vitest run tests/git.test.ts` |
-| `src/lock/*` | `npx vitest run tests/lock.test.ts` |
-| `src/file/*` | `npx vitest run tests/file.test.ts` |
+| `src/books.ts`, `src/schema.ts`, `src/history.ts`, `src/store.ts` | `npx vitest run tests/dolt-native.test.ts` |
+| `src/artifacts.ts`, `src/files.ts`, `src/status.ts`, `src/runtime-services.ts` | `npx vitest run tests/dolt-native.test.ts tests/artifact-prefixes.test.ts` |
+| `src/similarity.ts` | `npx vitest run tests/similarity.test.ts` |
 
-If no specific file pattern matches but any `src/` files changed, run `npx vitest run tests/green-path.test.ts` as a general check.
+If no specific file pattern matches but any `src/` files changed, run `npx vitest run` as a general check.
 
 ### Step 4: Code smell scan
 

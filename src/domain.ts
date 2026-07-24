@@ -8,11 +8,7 @@ import type {
   NotebookEdge,
   NotebookRun,
 } from "./notebook/types.js";
-import type {
-  EngineError,
-  Result,
-  Revision,
-} from "./engine-types.js";
+import type { EngineError, Result, Revision } from "./engine-types.js";
 import { ok } from "./engine-types.js";
 import { EngineContext, resultOf } from "./context.js";
 import { canonicalJson, parseJson } from "./store.js";
@@ -64,59 +60,35 @@ export function createEntitiesApi(context: EngineContext) {
     create: (
       type: EntityType,
       name: string,
-      project: string,
       input: Partial<EntityDocument> = {},
     ): Promise<Result<EntityDocument, EngineError>> =>
-      createEntity(context, type, name, project, input),
-    list: (project: string, type?: EntityType): EntityDocument[] =>
-      listEntities(context, project, type),
-    read: (
-      entityId: string,
-      project: string,
-    ): Result<EntityDocument, EngineError> =>
-      readEntity(context, entityId, project),
-    write: (
-      entity: EntityDocument,
-      project: string,
-    ): Promise<Result<Revision, EngineError>> =>
-      writeEntity(context, entity, project),
-    delete: (
-      entityId: string,
-      project: string,
-    ): Promise<Result<{ deletedAt: number }, EngineError>> =>
-      deleteEntity(context, entityId, project),
+      createEntity(context, type, name, input),
+    list: (type?: EntityType): EntityDocument[] => listEntities(context, type),
+    read: (entityId: string): Result<EntityDocument, EngineError> =>
+      readEntity(context, entityId),
+    write: (entity: EntityDocument): Promise<Result<Revision, EngineError>> =>
+      writeEntity(context, entity),
+    delete: (entityId: string): Promise<Result<{ deletedAt: number }, EngineError>> =>
+      deleteEntity(context, entityId),
   };
 }
 
 export function createNotebooksApi(context: EngineContext) {
   return {
-    create: (
-      name: string,
-      project: string,
-    ): Promise<Result<NotebookDocument, EngineError>> =>
-      createNotebook(context, name, project),
-    list: (project: string): NotebookDocument[] =>
-      listNotebooks(context, project),
-    read: (
-      notebookId: string,
-      project: string,
-    ): Result<NotebookDocument, EngineError> =>
-      readNotebook(context, notebookId, project),
+    create: (name: string): Promise<Result<NotebookDocument, EngineError>> =>
+      createNotebook(context, name),
+    list: (): NotebookDocument[] => listNotebooks(context),
+    read: (notebookId: string): Result<NotebookDocument, EngineError> =>
+      readNotebook(context, notebookId),
     write: (
       notebook: NotebookDocument,
-      project: string,
-    ): Promise<Result<Revision, EngineError>> =>
-      writeNotebook(context, notebook, project),
+    ): Promise<Result<Revision, EngineError>> => writeNotebook(context, notebook),
     delete: (
       notebookId: string,
-      project: string,
     ): Promise<Result<{ deletedAt: number }, EngineError>> =>
-      deleteNotebook(context, notebookId, project),
-    recordRun: (
-      run: NotebookRun,
-      project: string,
-    ): Promise<Result<Revision, EngineError>> =>
-      recordNotebookRun(context, run, project),
+      deleteNotebook(context, notebookId),
+    recordRun: (run: NotebookRun): Promise<Result<Revision, EngineError>> =>
+      recordNotebookRun(context, run),
   };
 }
 
@@ -124,18 +96,15 @@ async function createEntity(
   context: EngineContext,
   type: EntityType,
   name: string,
-  projectReference: string,
   input: Partial<EntityDocument>,
 ): Promise<Result<EntityDocument, EngineError>> {
   return resultOf(async () => {
     if (!["prompt", "character", "scene"].includes(type)) {
       throw new Error(`Invalid entity type: ${type}`);
     }
-    const project = context.projectRow(projectReference);
     const entityId = uuidv7();
     const mutation = await context.store.semantic(
       {
-        projectId: project.project_id,
         operation: "create_entity",
         details: { entityId, type, name },
         writeSet: [`entity:${entityId}`],
@@ -145,13 +114,12 @@ async function createEntity(
         context.store.db
           .prepare(
             `INSERT INTO entities(
-              entity_id, project_id, type, name, description, prompt,
+              entity_id, type, name, description, prompt,
               data_json, created_at, updated_at, deleted_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL)`,
           )
           .run(
             entityId,
-            project.project_id,
             type,
             name.trim(),
             input.description ?? null,
@@ -162,43 +130,32 @@ async function createEntity(
           );
       },
     );
-    const entity = requiredEntity(context, project.project_id, entityId);
-    return ok(entity, mutation.revision);
+    return ok(requiredEntity(context, entityId), mutation.revision);
   });
 }
 
-function listEntities(
-  context: EngineContext,
-  projectReference: string,
-  type?: EntityType,
-): EntityDocument[] {
-  const project = context.projectRow(projectReference);
+function listEntities(context: EngineContext, type?: EntityType): EntityDocument[] {
   const rows = type
     ? (context.store.db
         .prepare(
           `${ENTITY_SELECT}
-           WHERE project_id=? AND type=? AND deleted_at IS NULL
+           WHERE type=? AND deleted_at IS NULL
            ORDER BY created_at, entity_id`,
         )
-        .all(project.project_id, type) as unknown as EntityRow[])
+        .all(type) as unknown as EntityRow[])
     : (context.store.db
         .prepare(
           `${ENTITY_SELECT}
-           WHERE project_id=? AND deleted_at IS NULL
+           WHERE deleted_at IS NULL
            ORDER BY created_at, entity_id`,
         )
-        .all(project.project_id) as unknown as EntityRow[]);
+        .all() as unknown as EntityRow[]);
   return rows.map(rowToEntity);
 }
 
-function readEntity(
-  context: EngineContext,
-  entityId: string,
-  projectReference: string,
-): Result<EntityDocument, EngineError> {
+function readEntity(context: EngineContext, entityId: string): Result<EntityDocument, EngineError> {
   try {
-    const project = context.projectRow(projectReference);
-    return ok(requiredEntity(context, project.project_id, entityId));
+    return ok(requiredEntity(context, entityId));
   } catch (error) {
     return {
       ok: false,
@@ -213,14 +170,11 @@ function readEntity(
 async function writeEntity(
   context: EngineContext,
   entity: EntityDocument,
-  projectReference: string,
 ): Promise<Result<Revision, EngineError>> {
   return resultOf(async () => {
-    const project = context.projectRow(projectReference);
-    requiredEntity(context, project.project_id, entity.id);
+    requiredEntity(context, entity.id);
     const mutation = await context.store.semantic(
       {
-        projectId: project.project_id,
         operation: "write_entity",
         details: { entityId: entity.id, type: entity.type },
         writeSet: [`entity:${entity.id}`],
@@ -232,7 +186,7 @@ async function writeEntity(
             `UPDATE entities
              SET type=?, name=?, description=?, prompt=?, data_json=?,
                  updated_at=?
-             WHERE entity_id=? AND project_id=? AND deleted_at IS NULL`,
+             WHERE entity_id=? AND deleted_at IS NULL`,
           )
           .run(
             entity.type,
@@ -242,7 +196,6 @@ async function writeEntity(
             canonicalJson(entity.data),
             now,
             entity.id,
-            project.project_id,
           );
       },
     );
@@ -253,14 +206,11 @@ async function writeEntity(
 async function deleteEntity(
   context: EngineContext,
   entityId: string,
-  projectReference: string,
 ): Promise<Result<{ deletedAt: number }, EngineError>> {
   return resultOf(async () => {
-    const project = context.projectRow(projectReference);
-    requiredEntity(context, project.project_id, entityId);
-    const mutation = await context.store.semantic(
+    requiredEntity(context, entityId);
+    const mutation = await context.store.semantic<number>(
       {
-        projectId: project.project_id,
         operation: "delete_entity",
         details: { entityId },
         writeSet: [`entity:${entityId}`],
@@ -270,9 +220,9 @@ async function deleteEntity(
         context.store.db
           .prepare(
             `UPDATE entities SET deleted_at=?, updated_at=?
-             WHERE entity_id=? AND project_id=?`,
+             WHERE entity_id=?`,
           )
-          .run(now, now, entityId, project.project_id);
+          .run(now, now, entityId);
         return now;
       },
     );
@@ -283,14 +233,11 @@ async function deleteEntity(
 async function createNotebook(
   context: EngineContext,
   name: string,
-  projectReference: string,
 ): Promise<Result<NotebookDocument, EngineError>> {
   return resultOf(async () => {
-    const project = context.projectRow(projectReference);
     const notebookId = uuidv7();
     const mutation = await context.store.semantic(
       {
-        projectId: project.project_id,
         operation: "create_notebook",
         details: { notebookId, name },
         writeSet: [`notebook:${notebookId}`],
@@ -300,47 +247,34 @@ async function createNotebook(
         context.store.db
           .prepare(
             `INSERT INTO notebooks(
-              notebook_id, project_id, name, version, properties_json,
+              notebook_id, name, version, properties_json,
               created_at, updated_at, deleted_at
-            ) VALUES (?, ?, ?, 2, '{}', ?, ?, NULL)`,
+            ) VALUES (?, ?, 2, '{}', ?, ?, NULL)`,
           )
-          .run(notebookId, project.project_id, name.trim(), now, now);
+          .run(notebookId, name.trim(), now, now);
       },
     );
-    return ok(
-      requiredNotebook(context, project.project_id, notebookId),
-      mutation.revision,
-    );
+    return ok(requiredNotebook(context, notebookId), mutation.revision);
   });
 }
 
-function listNotebooks(
-  context: EngineContext,
-  projectReference: string,
-): NotebookDocument[] {
-  const project = context.projectRow(projectReference);
+function listNotebooks(context: EngineContext): NotebookDocument[] {
   const rows = context.store.db
     .prepare(
       `${NOTEBOOK_SELECT}
-       WHERE project_id=? AND deleted_at IS NULL
+       WHERE deleted_at IS NULL
        ORDER BY created_at, notebook_id`,
     )
-    .all(project.project_id) as unknown as NotebookRow[];
-  return rows.map((row) =>
-    notebookFromRows(context, project.project_id, row),
-  );
+    .all() as unknown as NotebookRow[];
+  return rows.map((row) => notebookFromRows(context, row));
 }
 
 function readNotebook(
   context: EngineContext,
   notebookId: string,
-  projectReference: string,
 ): Result<NotebookDocument, EngineError> {
   try {
-    const project = context.projectRow(projectReference);
-    return ok(
-      requiredNotebook(context, project.project_id, notebookId),
-    );
+    return ok(requiredNotebook(context, notebookId));
   } catch (error) {
     return {
       ok: false,
@@ -355,14 +289,11 @@ function readNotebook(
 async function writeNotebook(
   context: EngineContext,
   notebook: NotebookDocument,
-  projectReference: string,
 ): Promise<Result<Revision, EngineError>> {
   return resultOf(async () => {
-    const project = context.projectRow(projectReference);
-    requiredNotebook(context, project.project_id, notebook.id);
+    requiredNotebook(context, notebook.id);
     const mutation = await context.store.semantic(
       {
-        projectId: project.project_id,
         operation: "write_notebook",
         details: { notebookId: notebook.id },
         writeSet: [`notebook:${notebook.id}`],
@@ -373,7 +304,7 @@ async function writeNotebook(
           .prepare(
             `UPDATE notebooks
              SET name=?, version=?, properties_json=?, updated_at=?
-             WHERE notebook_id=? AND project_id=? AND deleted_at IS NULL`,
+             WHERE notebook_id=? AND deleted_at IS NULL`,
           )
           .run(
             notebook.name,
@@ -381,7 +312,6 @@ async function writeNotebook(
             canonicalJson(notebook.properties ?? {}),
             now,
             notebook.id,
-            project.project_id,
           );
         replaceNotebookChildren(context, notebook);
       },
@@ -393,14 +323,11 @@ async function writeNotebook(
 async function deleteNotebook(
   context: EngineContext,
   notebookId: string,
-  projectReference: string,
 ): Promise<Result<{ deletedAt: number }, EngineError>> {
   return resultOf(async () => {
-    const project = context.projectRow(projectReference);
-    requiredNotebook(context, project.project_id, notebookId);
-    const mutation = await context.store.semantic(
+    requiredNotebook(context, notebookId);
+    const mutation = await context.store.semantic<number>(
       {
-        projectId: project.project_id,
         operation: "delete_notebook",
         details: { notebookId },
         writeSet: [`notebook:${notebookId}`],
@@ -409,10 +336,9 @@ async function deleteNotebook(
       (_operationId, now) => {
         context.store.db
           .prepare(
-            `UPDATE notebooks SET deleted_at=?, updated_at=?
-             WHERE notebook_id=? AND project_id=?`,
+            `UPDATE notebooks SET deleted_at=?, updated_at=? WHERE notebook_id=?`,
           )
-          .run(now, now, notebookId, project.project_id);
+          .run(now, now, notebookId);
         return now;
       },
     );
@@ -423,23 +349,18 @@ async function deleteNotebook(
 async function recordNotebookRun(
   context: EngineContext,
   run: NotebookRun,
-  projectReference: string,
 ): Promise<Result<Revision, EngineError>> {
   return resultOf(async () => {
-    const project = context.projectRow(projectReference);
-    requiredNotebook(context, project.project_id, run.notebookId);
+    requiredNotebook(context, run.notebookId);
     if (
       run.status !== "completed" &&
       run.status !== "failed" &&
       run.status !== "aborted"
     ) {
-      throw new Error(
-        "Only terminal notebook runs may be recorded semantically",
-      );
+      throw new Error("Only terminal notebook runs may be recorded semantically");
     }
     const mutation = await context.store.semantic(
       {
-        projectId: project.project_id,
         operation: "record_notebook_run",
         details: { notebookId: run.notebookId, runId: run.id },
         writeSet: [`notebook-run:${run.id}`],
@@ -449,9 +370,9 @@ async function recordNotebookRun(
         context.store.db
           .prepare(
             `INSERT INTO notebook_runs(
-              run_id, notebook_id, project_id, status, started_at,
+              run_id, notebook_id, status, started_at,
               completed_at, cell_order_json, outputs_json, error
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(run_id) DO UPDATE SET
               status=excluded.status,
               completed_at=excluded.completed_at,
@@ -462,7 +383,6 @@ async function recordNotebookRun(
           .run(
             run.id,
             run.notebookId,
-            project.project_id,
             run.status,
             Date.parse(run.startedAt),
             run.completedAt ? Date.parse(run.completedAt) : null,
@@ -476,17 +396,10 @@ async function recordNotebookRun(
   });
 }
 
-function requiredEntity(
-  context: EngineContext,
-  projectId: string,
-  entityId: string,
-): EntityDocument {
+function requiredEntity(context: EngineContext, entityId: string): EntityDocument {
   const row = context.store.db
-    .prepare(
-      `${ENTITY_SELECT}
-       WHERE entity_id=? AND project_id=? AND deleted_at IS NULL`,
-    )
-    .get(entityId, projectId) as unknown as EntityRow | undefined;
+    .prepare(`${ENTITY_SELECT} WHERE entity_id=? AND deleted_at IS NULL`)
+    .get(entityId) as unknown as EntityRow | undefined;
   if (!row) throw new Error(`Entity not found: ${entityId}`);
   return rowToEntity(row);
 }
@@ -506,49 +419,37 @@ function rowToEntity(row: EntityRow): EntityDocument {
 
 function requiredNotebook(
   context: EngineContext,
-  projectId: string,
   notebookId: string,
 ): NotebookDocument {
   const row = context.store.db
-    .prepare(
-      `${NOTEBOOK_SELECT}
-       WHERE notebook_id=? AND project_id=? AND deleted_at IS NULL`,
-    )
-    .get(notebookId, projectId) as unknown as NotebookRow | undefined;
+    .prepare(`${NOTEBOOK_SELECT} WHERE notebook_id=? AND deleted_at IS NULL`)
+    .get(notebookId) as unknown as NotebookRow | undefined;
   if (!row) throw new Error(`Notebook not found: ${notebookId}`);
-  return notebookFromRows(context, projectId, row);
+  return notebookFromRows(context, row);
 }
 
 function notebookFromRows(
   context: EngineContext,
-  _projectId: string,
   row: NotebookRow,
 ): NotebookDocument {
   const cells = context.store.db
     .prepare(
       `SELECT cell_id, type, title, position_x, position_y, entity_id,
               prompt, model, inputs_json, output_artifact_id, ordinal
-       FROM notebook_cells
-       WHERE notebook_id=?
-       ORDER BY ordinal, cell_id`,
+       FROM notebook_cells WHERE notebook_id=? ORDER BY ordinal, cell_id`,
     )
     .all(row.notebook_id) as unknown as NotebookCellRow[];
   const edges = context.store.db
     .prepare(
       `SELECT edge_id, source_cell_id, target_cell_id, target_input, ordinal
-       FROM notebook_edges
-       WHERE notebook_id=?
-       ORDER BY ordinal, edge_id`,
+       FROM notebook_edges WHERE notebook_id=? ORDER BY ordinal, edge_id`,
     )
     .all(row.notebook_id) as unknown as NotebookEdgeRow[];
   return {
     id: row.notebook_id,
     name: row.name,
     version: 2,
-    properties: parseJson<Record<string, unknown>>(
-      row.properties_json,
-      {},
-    ),
+    properties: parseJson<Record<string, unknown>>(row.properties_json, {}),
     cells: cells.map(rowToCell),
     edges: edges.map(rowToEdge),
     createdAt: new Date(row.created_at).toISOString(),
@@ -616,9 +517,7 @@ function rowToCell(row: NotebookCellRow): NotebookCell {
     ...(row.prompt ? { prompt: row.prompt } : {}),
     ...(row.model ? { model: row.model } : {}),
     inputs: parseJson<Record<string, unknown>>(row.inputs_json, {}),
-    ...(row.output_artifact_id
-      ? { outputAssetId: row.output_artifact_id }
-      : {}),
+    ...(row.output_artifact_id ? { outputAssetId: row.output_artifact_id } : {}),
   };
 }
 
@@ -644,13 +543,13 @@ function revisionFor(context: EngineContext, hash: string): Revision {
 }
 
 const ENTITY_SELECT = `
-  SELECT entity_id, project_id, type, name, description, prompt,
+  SELECT entity_id, type, name, description, prompt,
          data_json, created_at, updated_at, deleted_at
   FROM entities
 `;
 
 const NOTEBOOK_SELECT = `
-  SELECT notebook_id, project_id, name, version, properties_json, created_at,
+  SELECT notebook_id, name, version, properties_json, created_at,
          updated_at, deleted_at
   FROM notebooks
 `;

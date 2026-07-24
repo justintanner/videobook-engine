@@ -19,7 +19,7 @@ const reusableKinds: ArtifactKind[] = [
   "character",
   "prompt",
   "scene",
-  "notebook",
+  "final",
 ];
 
 describe("active slug properties", () => {
@@ -35,13 +35,11 @@ describe("active slug properties", () => {
           const engine = await createEngine({
             dataDir: path.join(root, "data"),
             workspaceDir: path.join(root, "workspace"),
+            initialBookSlug: "property",
           });
           try {
-            const project = await engine.projects.create("property");
-            if (!project.ok) throw new Error(project.error.message);
             const slug = artifactSlug(kind, name);
             const first = await engine.artifacts.create({
-              project: project.value.projectId,
               kind,
               slug,
             });
@@ -50,16 +48,13 @@ describe("active slug properties", () => {
               first.value.artifactId,
               "private.txt",
               first.value.artifactId,
-              project.value.projectId,
             );
             if (!written.ok) throw new Error(written.error.message);
             const deleted = await engine.artifacts.delete(
               first.value.artifactId,
-              project.value.projectId,
             );
             if (!deleted.ok) throw new Error(deleted.error.message);
             const second = await engine.artifacts.create({
-              project: project.value.projectId,
               kind,
               slug,
             });
@@ -71,7 +66,6 @@ describe("active slug properties", () => {
             expect(second.value.path).not.toBe(first.value.path);
             const manifest = await engine.files.manifest(
               second.value.artifactId,
-              project.value.projectId,
             );
             if (!manifest.ok) throw new Error(manifest.error.message);
             expect(manifest.value.files).toEqual([]);

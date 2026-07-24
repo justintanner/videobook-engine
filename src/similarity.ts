@@ -71,7 +71,6 @@ const TEXT_ARTIFACT_KINDS = new Set<ArtifactKind>([
   "character",
   "prompt",
   "scene",
-  "notebook",
   "final",
 ]);
 
@@ -97,7 +96,6 @@ interface TextFeaturePipeline {
 interface EmbeddingRow {
   id: number;
   artifact_id: string;
-  project_id: string;
   kind: SimilarityKind;
   source_path: string;
   object_hash: string;
@@ -112,7 +110,6 @@ interface EmbeddingRow {
 interface TextDocumentRow {
   id: number;
   artifact_id: string;
-  project_id: string;
   source_path: string;
   object_hash: string;
   content_hash: string;
@@ -127,7 +124,6 @@ interface TextChunkRow {
   id: number;
   document_id: number;
   artifact_id: string;
-  project_id: string;
   embedding_space: string;
   chunk_index: number;
   start_offset: number;
@@ -221,30 +217,23 @@ class LocalSimilarityApi implements SimilarityApi {
   }
 
   async index(
-    projectReference: string,
     artifactReference: string,
     options: SimilarityIndexOptions = {},
   ): Promise<Result<SimilarityIndexResult, EngineError>> {
     return resultOf(async () => {
-      const project = this.context.projectRow(projectReference);
-      const artifact = this.context.artifactRow(
-        project.project_id,
-        artifactReference,
-      );
+      const artifact = this.context.artifactRow(artifactReference);
       const kind = similarityKind(artifact);
       if (kind === "text") {
-        return this.indexText(project.project_id, artifact, options);
+        return this.indexText(artifact, options);
       }
-      return this.indexMedia(project.project_id, artifact, kind, options);
+      return this.indexMedia(artifact, kind, options);
     });
   }
 
   async rebuild(
-    projectReference: string,
     options: { kind?: SimilarityKind; force?: boolean } = {},
   ): Promise<Result<SimilarityIndexResult[], EngineError>> {
     return resultOf(async () => {
-      const project = this.context.projectRow(projectReference);
       const allowedKinds = options.kind
         ? [options.kind]
         : (["image", "video", ...(this.textProvider ? ["text"] : [])] as SimilarityKind[]);
@@ -253,20 +242,20 @@ class LocalSimilarityApi implements SimilarityApi {
       );
       const artifactRows = this.context.store.db
         .prepare(
-          `SELECT artifact_id, project_id, slug, kind, data_json,
+          `SELECT artifact_id, slug, kind, data_json,
                   created_at, updated_at, deleted_at
            FROM artifacts
-           WHERE project_id=? AND deleted_at IS NULL
+           WHERE deleted_at IS NULL
              AND kind IN (${artifactKinds.map(() => "?").join(", ")})
            ORDER BY created_at, artifact_id`,
         )
-        .all(project.project_id, ...artifactKinds) as unknown as ArtifactRow[];
+        .all(...artifactKinds) as unknown as ArtifactRow[];
       const indexed: SimilarityIndexResult[] = [];
       for (const artifact of artifactRows) {
         const kind = similarityKind(artifact);
         if (!allowedKinds.includes(kind)) continue;
         if (kind === "text" && !this.hasTextSource(artifact.artifact_id)) continue;
-        const result = await this.index(project.project_id, artifact.artifact_id, {
+        const result = await this.index(artifact.artifact_id, {
           force: options.force,
         });
         if (!result.ok) throw new EngineFault(result.error);
@@ -277,15 +266,10 @@ class LocalSimilarityApi implements SimilarityApi {
   }
 
   status(
-    projectReference: string,
     artifactReference: string,
   ): Result<SimilarityStatus, EngineError> {
     return syncResultOf(() => {
-      const project = this.context.projectRow(projectReference);
-      const artifact = this.context.artifactRow(
-        project.project_id,
-        artifactReference,
-      );
+      const artifact = this.context.artifactRow(artifactReference);
       const kind = similarityKind(artifact);
       if (kind === "text") {
         const provider = this.requireTextProvider();
@@ -296,7 +280,6 @@ class LocalSimilarityApi implements SimilarityApi {
         if (!row) {
           return {
             artifactId: artifact.artifact_id,
-            projectId: project.project_id,
             kind,
             state: "not_indexed",
             embeddingSpace: provider.embeddingSpace,
@@ -304,7 +287,6 @@ class LocalSimilarityApi implements SimilarityApi {
         }
         return {
           artifactId: artifact.artifact_id,
-          projectId: project.project_id,
           kind,
           state: "ready",
           embeddingSpace: row.embedding_space,
@@ -321,7 +303,6 @@ class LocalSimilarityApi implements SimilarityApi {
       if (!row) {
         return {
           artifactId: artifact.artifact_id,
-          projectId: project.project_id,
           kind,
           state: "not_indexed",
           embeddingSpace: this.provider.embeddingSpace,
@@ -329,7 +310,6 @@ class LocalSimilarityApi implements SimilarityApi {
       }
       return {
         artifactId: artifact.artifact_id,
-        projectId: project.project_id,
         kind,
         state: "ready",
         embeddingSpace: row.embedding_space,
@@ -340,17 +320,16 @@ class LocalSimilarityApi implements SimilarityApi {
     });
   }
 
-  stats(projectReference: string): Result<SimilarityStats, EngineError> {
+  stats(): Result<SimilarityStats, EngineError> {
     return syncResultOf(() => {
-      const project = this.context.projectRow(projectReference);
       const rows = this.context.store.db
         .prepare(
           `SELECT kind, COUNT(*) AS count
            FROM runtime_similarity_embeddings
-           WHERE project_id=? AND embedding_space=?
+           WHERE embedding_space=?
            GROUP BY kind`,
         )
-        .all(project.project_id, this.provider.embeddingSpace) as unknown as Array<{
+        .all(this.provider.embeddingSpace) as unknown as Array<{
         kind: SimilarityKind;
         count: number;
       }>;
@@ -366,10 +345,10 @@ class LocalSimilarityApi implements SimilarityApi {
             `SELECT COUNT(*) AS count
              FROM runtime_text_similarity_documents d
              JOIN artifacts a ON a.artifact_id=d.artifact_id
-             WHERE d.project_id=? AND d.embedding_space=?
+             WHERE d.embedding_space=?
                AND a.deleted_at IS NULL`,
           )
-          .get(project.project_id, this.textProvider.embeddingSpace) as unknown as {
+          .get(this.textProvider.embeddingSpace) as unknown as {
           count: number;
         };
         textCount = count.count;
@@ -385,35 +364,24 @@ class LocalSimilarityApi implements SimilarityApi {
   }
 
   async findSimilar(
-    projectReference: string,
     artifactReference: string,
     options: SimilarityQueryOptions = {},
   ): Promise<Result<SimilarityMatch[], EngineError>> {
     return resultOf(async () => {
-      const project = this.context.projectRow(projectReference);
-      const artifact = this.context.artifactRow(
-        project.project_id,
-        artifactReference,
-      );
+      const artifact = this.context.artifactRow(artifactReference);
       const kind = similarityKind(artifact);
       if (kind === "text") {
-        return this.findSimilarTextArtifact(
-          project.project_id,
-          artifact,
-          options,
-        );
+        return this.findSimilarTextArtifact(artifact, options);
       }
-      return this.findSimilarMedia(project.project_id, artifact, kind, options);
+      return this.findSimilarMedia(artifact, kind, options);
     });
   }
 
   async findSimilarText(
-    projectReference: string,
     query: string,
     options: SimilarityTextQueryOptions = {},
   ): Promise<Result<SimilarityMatch[], EngineError>> {
     return resultOf(async () => {
-      const project = this.context.projectRow(projectReference);
       const provider = this.requireTextProvider();
       const normalizedQuery = normalizePlainText(query);
       if (normalizedQuery.text.length === 0) {
@@ -431,7 +399,6 @@ class LocalSimilarityApi implements SimilarityApi {
       }
       const chunks = await this.embedText(normalizedQuery.text);
       return this.searchText(
-        project.project_id,
         null,
         null,
         normalizedQuery.contentHash,
@@ -443,7 +410,6 @@ class LocalSimilarityApi implements SimilarityApi {
   }
 
   private async indexMedia(
-    projectId: string,
     artifact: ArtifactRow,
     kind: "image" | "video",
     options: SimilarityIndexOptions,
@@ -482,12 +448,11 @@ class LocalSimilarityApi implements SimilarityApi {
         this.context.store.db
           .prepare(
             `UPDATE runtime_similarity_embeddings
-             SET project_id=?, kind=?, source_path=?, object_hash=?,
+             SET kind=?, source_path=?, object_hash=?,
                  dimensions=?, vector_blob=?, frame_count=?, updated_at=?
              WHERE id=?`,
           )
           .run(
-            projectId,
             kind,
             source.path,
             source.object_hash,
@@ -502,13 +467,12 @@ class LocalSimilarityApi implements SimilarityApi {
       const result = this.context.store.db
         .prepare(
           `INSERT INTO runtime_similarity_embeddings(
-            artifact_id, project_id, kind, source_path, object_hash,
+            artifact_id, kind, source_path, object_hash,
             embedding_space, dimensions, vector_blob, frame_count, updated_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         )
         .run(
           artifact.artifact_id,
-          projectId,
           kind,
           source.path,
           source.object_hash,
@@ -525,7 +489,6 @@ class LocalSimilarityApi implements SimilarityApi {
   }
 
   private async indexText(
-    projectId: string,
     artifact: ArtifactRow,
     options: SimilarityIndexOptions,
   ): Promise<SimilarityIndexResult> {
@@ -572,9 +535,7 @@ class LocalSimilarityApi implements SimilarityApi {
       embeddedChunks,
       provider.dimensions,
     );
-    this.indexes.delete(
-      indexKey(projectId, "text", provider.embeddingSpace),
-    );
+    this.indexes.delete(indexKey("text", provider.embeddingSpace));
     const row = this.context.store.runtime((now) => {
       let documentId: number;
       if (existing) {
@@ -582,12 +543,11 @@ class LocalSimilarityApi implements SimilarityApi {
         this.context.store.db
           .prepare(
             `UPDATE runtime_text_similarity_documents
-             SET project_id=?, source_path=?, object_hash=?, content_hash=?,
+             SET source_path=?, object_hash=?, content_hash=?,
                  dimensions=?, chunk_count=?, updated_at=?
              WHERE id=?`,
           )
           .run(
-            projectId,
             source.path,
             source.object_hash,
             normalizedSource.contentHash,
@@ -605,13 +565,12 @@ class LocalSimilarityApi implements SimilarityApi {
         const result = this.context.store.db
           .prepare(
             `INSERT INTO runtime_text_similarity_documents(
-              artifact_id, project_id, source_path, object_hash, content_hash,
+              artifact_id, source_path, object_hash, content_hash,
               embedding_space, dimensions, chunk_count, updated_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
           )
           .run(
             artifact.artifact_id,
-            projectId,
             source.path,
             source.object_hash,
             normalizedSource.contentHash,
@@ -624,15 +583,14 @@ class LocalSimilarityApi implements SimilarityApi {
       }
       const insertChunk = this.context.store.db.prepare(
         `INSERT INTO runtime_text_similarity_chunks(
-          document_id, artifact_id, project_id, embedding_space, chunk_index,
+          document_id, artifact_id, embedding_space, chunk_index,
           start_offset, end_offset, chunk_text, dimensions, vector_blob, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       );
       embeddedChunks.forEach((chunk, index) => {
         insertChunk.run(
           documentId,
           artifact.artifact_id,
-          projectId,
           provider.embeddingSpace,
           index,
           chunk.startOffset,
@@ -649,7 +607,6 @@ class LocalSimilarityApi implements SimilarityApi {
   }
 
   private async findSimilarTextArtifact(
-    projectId: string,
     artifact: ArtifactRow,
     options: SimilarityQueryOptions,
   ): Promise<SimilarityMatch[]> {
@@ -671,7 +628,6 @@ class LocalSimilarityApi implements SimilarityApi {
       vector: vectorFromBlob(chunk),
     }));
     return this.searchText(
-      projectId,
       artifact.artifact_id,
       query.object_hash,
       query.content_hash,
@@ -682,7 +638,6 @@ class LocalSimilarityApi implements SimilarityApi {
   }
 
   private async findSimilarMedia(
-    projectId: string,
     artifact: ArtifactRow,
     kind: "image" | "video",
     options: SimilarityQueryOptions,
@@ -701,7 +656,6 @@ class LocalSimilarityApi implements SimilarityApi {
       });
     }
     const index = this.indexFor(
-      projectId,
       kind,
       query.embedding_space,
       query.dimensions,
@@ -719,7 +673,6 @@ class LocalSimilarityApi implements SimilarityApi {
     const ids = new Set<number>();
     for (const key of nearest.keys) ids.add(Number(key));
     for (const exact of this.exactObjectEmbeddings(
-      projectId,
       kind,
       query.object_hash,
       query.embedding_space,
@@ -727,7 +680,6 @@ class LocalSimilarityApi implements SimilarityApi {
       ids.add(exact.id);
     }
     const candidates = this.activeEmbeddingsByIds(
-      projectId,
       kind,
       query.embedding_space,
       [...ids],
@@ -746,7 +698,6 @@ class LocalSimilarityApi implements SimilarityApi {
           : cosine(queryVector, vectorFromBlob(candidate));
         return {
           artifactId: candidate.artifact_id,
-          projectId: candidate.project_id,
           slug: candidate.slug ?? candidate.artifact_id,
           kind: candidate.kind,
           score: global,
@@ -765,7 +716,6 @@ class LocalSimilarityApi implements SimilarityApi {
   }
 
   private searchText(
-    projectId: string,
     queryArtifactId: string | null,
     queryObjectHash: string | null,
     queryContentHash: string,
@@ -777,7 +727,6 @@ class LocalSimilarityApi implements SimilarityApi {
     const minScore = checkedMinScore(options.minScore);
     if (queryChunks.length === 0) return [];
     const index = this.textIndexFor(
-      projectId,
       provider.embeddingSpace,
       provider.dimensions,
     );
@@ -809,7 +758,6 @@ class LocalSimilarityApi implements SimilarityApi {
     }>();
     if (queryObjectHash) {
       for (const document of this.textDocumentsForHash(
-        projectId,
         "object_hash",
         queryObjectHash,
         provider,
@@ -821,7 +769,6 @@ class LocalSimilarityApi implements SimilarityApi {
       }
     }
     for (const document of this.textDocumentsForHash(
-      projectId,
       "content_hash",
       queryContentHash,
       provider,
@@ -846,7 +793,6 @@ class LocalSimilarityApi implements SimilarityApi {
       }
     }
     const chunks = this.activeTextChunksByIds(
-      projectId,
       provider.embeddingSpace,
       provider.dimensions,
       [...pairs.keys()],
@@ -890,7 +836,6 @@ class LocalSimilarityApi implements SimilarityApi {
         const queryChunk = queryChunks[match.queryChunkIndex];
         return {
           artifactId: match.chunk.artifact_id,
-          projectId: match.chunk.project_id,
           slug: match.chunk.slug ?? match.chunk.artifact_id,
           kind: "text" as const,
           score: match.score,
@@ -1083,7 +1028,7 @@ class LocalSimilarityApi implements SimilarityApi {
   ): EmbeddingRow | null {
     const row = this.context.store.db
       .prepare(
-        `SELECT id, artifact_id, project_id, kind, source_path, object_hash,
+        `SELECT id, artifact_id, kind, source_path, object_hash,
                 embedding_space, dimensions, vector_blob, frame_count, updated_at
          FROM runtime_similarity_embeddings
          WHERE artifact_id=? AND embedding_space=?`,
@@ -1100,7 +1045,7 @@ class LocalSimilarityApi implements SimilarityApi {
   ): EmbeddingRow | null {
     const row = this.context.store.db
       .prepare(
-        `SELECT id, artifact_id, project_id, kind, source_path, object_hash,
+        `SELECT id, artifact_id, kind, source_path, object_hash,
                 embedding_space, dimensions, vector_blob, frame_count, updated_at
          FROM runtime_similarity_embeddings
          WHERE object_hash=? AND kind=? AND embedding_space=? AND dimensions=?
@@ -1115,7 +1060,7 @@ class LocalSimilarityApi implements SimilarityApi {
   private embeddingById(id: number): EmbeddingRow {
     const row = this.context.store.db
       .prepare(
-        `SELECT id, artifact_id, project_id, kind, source_path, object_hash,
+        `SELECT id, artifact_id, kind, source_path, object_hash,
                 embedding_space, dimensions, vector_blob, frame_count, updated_at
          FROM runtime_similarity_embeddings WHERE id=?`,
       )
@@ -1125,23 +1070,21 @@ class LocalSimilarityApi implements SimilarityApi {
   }
 
   private exactObjectEmbeddings(
-    projectId: string,
     kind: "image" | "video",
     objectHash: string,
     embeddingSpace: string,
   ): EmbeddingRow[] {
     return this.context.store.db
       .prepare(
-        `SELECT id, artifact_id, project_id, kind, source_path, object_hash,
+        `SELECT id, artifact_id, kind, source_path, object_hash,
                 embedding_space, dimensions, vector_blob, frame_count, updated_at
          FROM runtime_similarity_embeddings
-         WHERE project_id=? AND kind=? AND object_hash=? AND embedding_space=?`,
+         WHERE kind=? AND object_hash=? AND embedding_space=?`,
       )
-      .all(projectId, kind, objectHash, embeddingSpace) as unknown as EmbeddingRow[];
+      .all(kind, objectHash, embeddingSpace) as unknown as EmbeddingRow[];
   }
 
   private activeEmbeddingsByIds(
-    projectId: string,
     kind: "image" | "video",
     embeddingSpace: string,
     ids: number[],
@@ -1150,48 +1093,43 @@ class LocalSimilarityApi implements SimilarityApi {
     const placeholders = ids.map(() => "?").join(", ");
     return this.context.store.db
       .prepare(
-        `SELECT e.id, e.artifact_id, e.project_id, e.kind, e.source_path,
+        `SELECT e.id, e.artifact_id, e.kind, e.source_path,
                 e.object_hash, e.embedding_space, e.dimensions, e.vector_blob,
                 e.frame_count, e.updated_at, a.slug
          FROM runtime_similarity_embeddings e
          JOIN artifacts a ON a.artifact_id=e.artifact_id
-         JOIN projects p ON p.project_id=e.project_id
-         WHERE e.project_id=? AND e.kind=? AND e.embedding_space=?
-           AND a.deleted_at IS NULL AND p.deleted_at IS NULL
+         WHERE e.kind=? AND e.embedding_space=?
+           AND a.deleted_at IS NULL
            AND e.id IN (${placeholders})`,
       )
-      .all(projectId, kind, embeddingSpace, ...ids) as unknown as EmbeddingRow[];
+      .all(kind, embeddingSpace, ...ids) as unknown as EmbeddingRow[];
   }
 
   private indexFor(
-    projectId: string,
     kind: "image" | "video",
     embeddingSpace: string,
     dimensions: number,
   ): CachedIndex {
     return this.cachedIndex(
-      projectId,
       kind,
       embeddingSpace,
       dimensions,
-      `SELECT e.id, e.artifact_id, e.project_id, e.kind, e.source_path,
+      `SELECT e.id, e.artifact_id, e.kind, e.source_path,
               e.object_hash, e.embedding_space, e.dimensions, e.vector_blob,
               e.frame_count, e.updated_at
        FROM runtime_similarity_embeddings e
        JOIN artifacts a ON a.artifact_id=e.artifact_id
-       JOIN projects p ON p.project_id=e.project_id
-       WHERE e.project_id=? AND e.kind=? AND e.embedding_space=?
-         AND e.dimensions=? AND a.deleted_at IS NULL AND p.deleted_at IS NULL
+       WHERE e.kind=? AND e.embedding_space=?
+         AND e.dimensions=? AND a.deleted_at IS NULL
        ORDER BY e.id`,
     );
   }
 
   private textIndexFor(
-    projectId: string,
     embeddingSpace: string,
     dimensions: number,
   ): CachedIndex {
-    const key = indexKey(projectId, "text", embeddingSpace);
+    const key = indexKey("text", embeddingSpace);
     const current = this.indexes.get(key);
     if (current) return current;
     const index = new Index({
@@ -1205,18 +1143,17 @@ class LocalSimilarityApi implements SimilarityApi {
     });
     const rows = this.context.store.db
       .prepare(
-        `SELECT c.id, c.document_id, c.artifact_id, c.project_id,
+        `SELECT c.id, c.document_id, c.artifact_id,
                 c.embedding_space, c.chunk_index, c.start_offset,
                 c.end_offset, c.chunk_text, c.dimensions, c.vector_blob,
                 c.updated_at
          FROM runtime_text_similarity_chunks c
          JOIN artifacts a ON a.artifact_id=c.artifact_id
-         JOIN projects p ON p.project_id=c.project_id
-         WHERE c.project_id=? AND c.embedding_space=?
-           AND c.dimensions=? AND a.deleted_at IS NULL AND p.deleted_at IS NULL
+         WHERE c.embedding_space=?
+           AND c.dimensions=? AND a.deleted_at IS NULL
          ORDER BY c.id`,
       )
-      .all(projectId, embeddingSpace, dimensions) as unknown as TextChunkRow[];
+      .all(embeddingSpace, dimensions) as unknown as TextChunkRow[];
     for (const row of rows) {
       index.add(BigInt(row.id), vectorFromBlob(row), 0);
     }
@@ -1226,13 +1163,12 @@ class LocalSimilarityApi implements SimilarityApi {
   }
 
   private cachedIndex(
-    projectId: string,
     kind: "image" | "video",
     embeddingSpace: string,
     dimensions: number,
     sql: string,
   ): CachedIndex {
-    const key = indexKey(projectId, kind, embeddingSpace);
+    const key = indexKey(kind, embeddingSpace);
     const current = this.indexes.get(key);
     if (current) return current;
     const index = new Index({
@@ -1246,7 +1182,7 @@ class LocalSimilarityApi implements SimilarityApi {
     });
     const rows = this.context.store.db
       .prepare(sql)
-      .all(projectId, kind, embeddingSpace, dimensions) as unknown as EmbeddingRow[];
+      .all(kind, embeddingSpace, dimensions) as unknown as EmbeddingRow[];
     for (const row of rows) {
       index.add(BigInt(row.id), vectorFromBlob(row), 0);
     }
@@ -1257,7 +1193,7 @@ class LocalSimilarityApi implements SimilarityApi {
 
   private addToCachedIndex(row: EmbeddingRow, vector: Float32Array): void {
     const cached = this.indexes.get(
-      indexKey(row.project_id, row.kind, row.embedding_space),
+      indexKey(row.kind, row.embedding_space),
     );
     if (!cached) return;
     if (cached.dimensions !== vector.length) {
@@ -1277,7 +1213,7 @@ class LocalSimilarityApi implements SimilarityApi {
   ): TextDocumentRow | null {
     const row = this.context.store.db
       .prepare(
-        `SELECT id, artifact_id, project_id, source_path, object_hash,
+        `SELECT id, artifact_id, source_path, object_hash,
                 content_hash, embedding_space, dimensions, chunk_count, updated_at
          FROM runtime_text_similarity_documents
          WHERE artifact_id=? AND embedding_space=?`,
@@ -1289,7 +1225,7 @@ class LocalSimilarityApi implements SimilarityApi {
   private textDocumentById(id: number): TextDocumentRow {
     const row = this.context.store.db
       .prepare(
-        `SELECT id, artifact_id, project_id, source_path, object_hash,
+        `SELECT id, artifact_id, source_path, object_hash,
                 content_hash, embedding_space, dimensions, chunk_count, updated_at
          FROM runtime_text_similarity_documents WHERE id=?`,
       )
@@ -1306,7 +1242,7 @@ class LocalSimilarityApi implements SimilarityApi {
   ): TextDocumentRow | null {
     const row = this.context.store.db
       .prepare(
-        `SELECT id, artifact_id, project_id, source_path, object_hash,
+        `SELECT id, artifact_id, source_path, object_hash,
                 content_hash, embedding_space, dimensions, chunk_count, updated_at
          FROM runtime_text_similarity_documents
          WHERE (object_hash=? OR content_hash=?)
@@ -1320,27 +1256,26 @@ class LocalSimilarityApi implements SimilarityApi {
   }
 
   private textDocumentsForHash(
-    projectId: string,
     column: "object_hash" | "content_hash",
     hash: string,
     provider: SimilarityTextEmbeddingProvider,
   ): TextDocumentRow[] {
     return this.context.store.db
       .prepare(
-        `SELECT id, artifact_id, project_id, source_path, object_hash,
+        `SELECT id, artifact_id, source_path, object_hash,
                 content_hash, embedding_space, dimensions, chunk_count, updated_at
          FROM runtime_text_similarity_documents
-         WHERE project_id=? AND ${column}=? AND embedding_space=?
+         WHERE ${column}=? AND embedding_space=?
            AND dimensions=?`,
       )
-      .all(projectId, hash, provider.embeddingSpace, provider.dimensions) as unknown as
+      .all(hash, provider.embeddingSpace, provider.dimensions) as unknown as
       TextDocumentRow[];
   }
 
   private textChunksForDocument(documentId: number): TextChunkRow[] {
     return this.context.store.db
       .prepare(
-        `SELECT id, document_id, artifact_id, project_id, embedding_space,
+        `SELECT id, document_id, artifact_id, embedding_space,
                 chunk_index, start_offset, end_offset, chunk_text, dimensions,
                 vector_blob, updated_at
          FROM runtime_text_similarity_chunks
@@ -1350,7 +1285,6 @@ class LocalSimilarityApi implements SimilarityApi {
   }
 
   private activeTextChunksByIds(
-    projectId: string,
     embeddingSpace: string,
     dimensions: number,
     ids: number[],
@@ -1359,7 +1293,7 @@ class LocalSimilarityApi implements SimilarityApi {
     const placeholders = ids.map(() => "?").join(", ");
     return this.context.store.db
       .prepare(
-        `SELECT c.id, c.document_id, c.artifact_id, c.project_id,
+        `SELECT c.id, c.document_id, c.artifact_id,
                 c.embedding_space, c.chunk_index, c.start_offset,
                 c.end_offset, c.chunk_text, c.dimensions, c.vector_blob,
                 c.updated_at, d.source_path, d.object_hash, d.content_hash,
@@ -1367,12 +1301,11 @@ class LocalSimilarityApi implements SimilarityApi {
          FROM runtime_text_similarity_chunks c
          JOIN runtime_text_similarity_documents d ON d.id=c.document_id
          JOIN artifacts a ON a.artifact_id=c.artifact_id
-         JOIN projects p ON p.project_id=c.project_id
-         WHERE c.project_id=? AND c.embedding_space=? AND c.dimensions=?
-           AND a.deleted_at IS NULL AND p.deleted_at IS NULL
+         WHERE c.embedding_space=? AND c.dimensions=?
+           AND a.deleted_at IS NULL
            AND c.id IN (${placeholders})`,
       )
-      .all(projectId, embeddingSpace, dimensions, ...ids) as unknown as TextChunkRow[];
+      .all(embeddingSpace, dimensions, ...ids) as unknown as TextChunkRow[];
   }
 
   private indexResult(
@@ -1381,7 +1314,6 @@ class LocalSimilarityApi implements SimilarityApi {
   ): SimilarityIndexResult {
     return {
       artifactId: row.artifact_id,
-      projectId: row.project_id,
       kind: row.kind,
       embeddingSpace: row.embedding_space,
       frameCount: row.frame_count,
@@ -1395,7 +1327,6 @@ class LocalSimilarityApi implements SimilarityApi {
   ): SimilarityIndexResult {
     return {
       artifactId: row.artifact_id,
-      projectId: row.project_id,
       kind: "text",
       embeddingSpace: row.embedding_space,
       frameCount: null,
@@ -1954,11 +1885,10 @@ function checkedTextMaxChunks(config: SimilarityTextConfig | undefined): number 
 }
 
 function indexKey(
-  projectId: string,
   kind: SimilarityKind,
   embeddingSpace: string,
 ): string {
-  return `${projectId}\u0000${kind}\u0000${embeddingSpace}`;
+  return `${kind}\u0000${embeddingSpace}`;
 }
 
 function errorMessage(error: unknown): string {

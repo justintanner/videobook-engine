@@ -1,30 +1,11 @@
 # videobook-engine
 
-A Dolt-native, local-first storage engine for Videobook projects, media,
-notebooks, and runtime coordination.
+`videobook-engine` is a local-first, Dolt-native storage engine for one
+videobook per engine root. It keeps book state, artifacts, files, metadata,
+notebook graphs, revisions, and action history in a single catalog.
 
-## Storage model
-
-Each engine instance owns one embedded database:
-
-```text
-dataDir/
-  videobook.db          # Dolt catalog: semantic + runtime tables
-  objects/sha256/       # immutable local CAS
-
-workspaceDir/
-  <project UUID>/
-    <artifact UUID>/    # disposable materialized tool workspace
-```
-
-Semantic tables are selectively staged and committed to Dolt. Runtime tables
-live in the same `videobook.db` but are never staged. There are no project Git
-repositories, JSON sidecars, `state.sqlite`, `metadata.sqlite`, or
-`runtime.sqlite` files.
-
-Projects and artifacts have stable UUIDv7 identities. Slugs are active names:
-deleting an artifact releases its slug immediately, and a replacement may use
-that exact slug with a new UUID and an isolated workspace.
+This is the 2.0 breaking model: there is no project layer. A fresh engine root
+creates one singleton Book; reopening that root always returns the same book.
 
 ## Quick start
 
@@ -32,226 +13,166 @@ that exact slug with a new UUID and an isolated workspace.
 import { createEngine } from "videobook-engine";
 
 const engine = createEngine({
-  dataDir: "/srv/videobook/data",
-  workspaceDir: "/srv/videobook/workspaces",
+  rootDir: ".videobook",
+  initialBookSlug: "my-story",
 });
-await engine.ready;
 
-const project = await engine.projects.create("story");
-if (!project.ok) throw new Error(project.error.message);
+const book = engine.book.get();
+// { bookId: "…", slug: "my-story" }
 
-const video = await engine.artifacts.create({
-  project: project.value.projectId,
-  kind: "video",
-  slug: "vid-cat",
+const script = await engine.artifacts.create({
+  kind: "script",
+  name: "opening draft",
 });
-if (!video.ok) throw new Error(video.error.message);
+if (!script.ok) throw new Error(script.error.message);
 
 await engine.files.write(
-  video.value.artifactId,
-  "original.mp4",
-  videoBytes,
-  project.value.projectId,
+  script.value.artifactId,
+  "original.md",
+  "# Opening\n\nA small cat waits by the window.",
 );
 
-await engine.artifacts.delete(
-  video.value.artifactId,
-  project.value.projectId,
-);
-
-const replacement = await engine.artifacts.create({
-  project: project.value.projectId,
-  kind: "video",
-  slug: "vid-cat",
-});
-
+const history = engine.history.artifact(script.value.artifactId);
 engine.close();
 ```
 
-`replacement.value.artifactId` differs from the deleted artifact’s identity.
-No files, jobs, leases, failures, or history leak across that reused slug.
+`initialBookSlug` is required only when `videobook.db` does not exist yet. On
+later opens it is optional and never changes the stored book. Rename the book
+explicitly with `await engine.book.rename("new-name")`.
 
-## Artifact slugs
+## Storage model
 
-Every non-final artifact needs either a `name` or a `slug`. A `name` is
-trimmed and lowercased, spaces and punctuation become hyphens, repeated
-hyphens collapse, and the result receives the canonical prefix for its kind.
-Underscores are preserved.
+Each engine root owns exactly one book:
 
-| Artifact kind | Canonical prefix | Example |
+```text
+rootDir/
+  data/
+    videobook.db       # Dolt semantic catalog and SQLite runtime state
+    objects/sha256/    # content-addressed file objects
+  workspaces/
+    <artifact UUID>/   # disposable materialized artifact files
+```
+
+Semantic tables are committed as Dolt revisions. Runtime tables (jobs, leases,
+views, caches, settings, and logs) share the same database but are never
+staged. Artifact identity is a UUIDv7; the active slug is its human-facing
+name and can be reused after the prior artifact is deleted.
+
+The current catalog format is schema version 3. It intentionally rejects older
+catalog schemas rather than migrating them; create a fresh engine root for the
+single-book model.
+
+## Artifacts and slugs
+
+Artifact slugs are canonical and kind-prefixed. Supplying a `name` derives a
+slug; supplying a `slug` validates it. Repeated name-based creation adds a
+numeric suffix when needed.
+
+| Kind | Prefix | Example |
 | --- | --- | --- |
 | `video` | `vid-` | `vid-opening-shot` |
-| `image` | `img-` | `img-cover-art` |
-| `audio` | `aud-` | `aud-narration` |
-| `script` | `script-` | `script-first-draft` |
+| `image` | `img-` | `img-cat-portrait` |
+| `audio` | `aud-` | `aud-ambient-bed` |
+| `script` | `script-` | `script-opening-draft` |
 | `character` | `char-` | `char-protagonist` |
-| `prompt` | `prompt-` | `prompt-cover-art` |
-| `scene` | `scene-` | `scene-opening-shot` |
-| `notebook` | `book-` | `book-research-notes` |
-| `final` | none | `final` |
+| `prompt` | `prompt-` | `prompt-sunrise` |
+| `scene` | `scene-` | `scene-rooftop` |
+| `final` | `final` | `final` |
 
-For example, `{ kind: "image", name: "Cover Art" }` creates
-`img-cover-art`. An explicit slug may include its canonical prefix or omit it;
-`{ kind: "scene", slug: "opening-shot" }` and
-`{ kind: "scene", slug: "scene-opening-shot" }` both create
-`scene-opening-shot`. A recognized prefix for another kind is rejected.
+There is no `notebook` artifact kind or `book-` artifact prefix. Notebook
+graphs remain available separately through `engine.notebooks`.
 
-Name-derived slugs automatically receive `-2`, `-3`, and later suffixes when
-the base slug is already active in the project. Explicit slug conflicts return
-`SLUG_CONFLICT` instead. Deleting an artifact releases its slug for exact
-reuse. Legacy `prm-`, `scn-`, and `nb-` slugs remain readable in existing
-projects, but new prompt, scene, and notebook slugs use `prompt-`, `scene-`,
-and `book-`.
+## API surface
 
-## API
+- `engine.book` — `get()` and `rename(slug)` for the singleton book
+- `engine.artifacts` — create, list, get, rename, delete, and resolve slugs
+- `engine.files` and `engine.workspaces` — immutable object-backed files and
+  disposable materialization
+- `engine.metadata` — book metadata, artifact metadata, timelines, and audio
+  waveforms
+- `engine.entities` and `engine.notebooks` — normalized characters, prompts,
+  scenes, and notebook graph documents
+- `engine.prompts` and `engine.messages` — semantic prompt and message history
+- `engine.history` — revisions, generic action graph entries, and forward
+  restores
+- `engine.jobs`, `engine.status`, `engine.settings`, and `engine.logs` —
+  runtime coordination
+- `engine.storage` — object publication and catalog backup
+- `engine.similarity` — optional local media and text similarity
 
-`createEngine()` returns a namespaced `Engine`. Await `engine.ready` during
-application startup to finish recovery of any terminal runtime jobs:
+All APIs operate in the engine's one book. No method accepts or returns a
+project ID.
 
-- `projects` — create, list, get, switch, rename, and tombstone projects
-- `artifacts` — lifecycle, stable-ID lookup, active-slug resolution and reuse
-- `files` — CAS-backed reads/writes, explicit workspace ingest, historical reads
-- `workspaces` — UUID workspace materialization and eviction
-- `metadata` — project/artifact metadata, timelines, and waveforms
-- `entities` and `notebooks` — normalized domain records
-- `history` — Dolt revisions and forward-only artifact/project restores
-- `jobs` — runtime queue, leases, pending providers, failures, and recovery
-- `settings` — unversioned application/runtime state in the main Dolt database
-- `prompts`, `messages`, and `logs` — semantic conversation data and runtime logs
-- `resolver` and `status` — active artifact resolution and derived UI status
-- `storage` — publish CAS objects, then push the Dolt catalog backup
-- `similarity` — opt-in local image, video, and text similarity lookup
+## Revisions and restores
 
-All public domain mutations return a discriminated `Result`. Runtime queue and
-lease primitives return direct values and use fencing where ownership matters.
+Every semantic mutation creates a Dolt revision. Use a revision hash (or an
+unambiguous prefix) to inspect or restore state:
 
-## Local media similarity
+```ts
+const revisions = engine.history.revisions();
 
-Enable similarity explicitly; it uses a local ONNX CLIP image encoder and an
-in-process USearch index. The first call to `prepare()` downloads the pinned
-q8 model into `modelCacheDir` (or `dataDir/similarity-models`). Video indexing
-also requires `ffmpeg` and `ffprobe` on `PATH`.
+await engine.history.restoreArtifact(
+  artifactId,
+  revisions[0]!.hash,
+  "script-restored-draft", // optional replacement slug
+);
+
+await engine.history.restore(revisions[0]!.hash);
+```
+
+`restoreArtifact` keeps the artifact UUID stable and restores its files,
+metadata, and waveform as a new forward revision. `restore` replays the whole
+book snapshot forward: book metadata, active artifacts and files, entities,
+notebooks, timelines, prompts, and messages. Runtime work is invalidated and
+active jobs are aborted during a restore.
+
+Generic action records are available for higher-level workflows:
+
+```ts
+const action = await engine.history.recordAction({
+  operation: "generate_image",
+  scope: "artifact",
+  targetArtifactId: imageId,
+  inputArtifactIds: [promptId],
+  outputArtifactIds: [imageId],
+  writeSet: [`artifact:${imageId}`],
+});
+
+const page = engine.history.actions({ limit: 50 });
+```
+
+## Similarity
+
+Similarity is opt-in. Provide a media embedding provider or use the built-in
+local CLIP configuration. Text similarity is enabled separately.
 
 ```ts
 const engine = createEngine({
-  dataDir: "/srv/videobook/data",
-  workspaceDir: "/srv/videobook/workspaces",
+  rootDir: ".videobook",
+  initialBookSlug: "reference-library",
   similarity: {
-    // allowModelDownload: false for a pre-populated local model cache
+    text: {},
   },
 });
 
-await engine.similarity.prepare();
-await engine.similarity.index(projectId, imageArtifactId);
-await engine.similarity.index(projectId, similarImageArtifactId);
+await engine.similarity.index(imageArtifactId);
+await engine.similarity.index(similarImageArtifactId);
 
-const matches = await engine.similarity.findSimilar(
-  projectId,
-  imageArtifactId,
-  { limit: 20 },
-);
-```
-
-Only active `image` artifacts with `original.png`, `original.jpg`,
-`original.jpeg`, or `original.webp`, and active `video` artifacts with
-`original.mp4`, `original.mov`, `original.webm`, `original.mkv`, or
-`original.avi` are indexable.
-Queries remain within the same project and media kind. Equal SHA-256 objects
-are marked `exactBytes`; other results are semantic similarity candidates, not
-duplicate decisions. Vectors remain runtime-only and rebuild from the CAS after
-restore.
-
-## JSON, Markdown, and text similarity
-
-Text similarity is separately opt-in under `similarity.text`. It uses the same
-project-scoped USearch vector search as media, but keeps a separate embedding
-space and stores chunk metadata in runtime tables; the in-memory ANN index is
-rebuilt from those rows after restart. `script`, `character`,
-`prompt`, `scene`, `notebook`, and `final` artifacts are eligible when they
-contain exactly one canonical `original.json`, `original.md`, or `original.txt`.
-Audio, transcripts, messages, and normalized entities are not implicitly
-indexed.
-
-The default local text model is the pinned q4
-`onnx-community/all-MiniLM-L6-v2-ONNX` model (384-dimensional embeddings).
-Set `allowModelDownload: false` when the model cache is provisioned ahead of
-time, or provide a `SimilarityTextEmbeddingProvider` for tests and other local
-inference runtimes:
-
-```ts
-const engine = createEngine({
-  dataDir: "/srv/videobook/data",
-  workspaceDir: "/srv/videobook/workspaces",
-  similarity: {
-    text: {
-      // modelCacheDir: "/srv/videobook/models",
-      // allowModelDownload: false,
-    },
-  },
+const matches = await engine.similarity.findSimilar(imageArtifactId, {
+  limit: 10,
+  minScore: 0.7,
 });
-
-await engine.similarity.prepare({ kind: "text" });
-await engine.similarity.index(projectId, scriptArtifactId);
-
-const byText = await engine.similarity.findSimilarText(
-  projectId,
-  "a quiet cat on a rug",
-  { limit: 10 },
-);
-const byArtifact = await engine.similarity.findSimilar(
-  projectId,
-  scriptArtifactId,
-  { limit: 10 },
-);
 ```
 
-JSON is parsed and emitted as stable path/value lines (object keys are sorted;
-array order is preserved), so JSON whitespace and key order do not change its
-content hash. Markdown syntax is retained; plain text and Markdown are
-normalized for BOM, Unicode NFC, line endings, trailing whitespace, and excess
-blank lines. Documents are chunked with overlapping source offsets. A match
-reports the best chunk excerpt and offsets in `match.text`, while the public
-result remains one match per artifact. Equal source bytes set `exactBytes`;
-equal normalized content sets `exactContent` and forces a score of `1`.
+Image and video sources must be named `original.<extension>`. Text similarity
+supports `original.md`, `original.txt`, and `original.json` for `script`,
+`character`, `prompt`, `scene`, and `final` artifacts. All similarity queries
+search the single book-wide pool while preserving media kind and embedding-space
+boundaries.
 
 ## Backups
 
-Configure `remoteObjects` with a `ContentStore` and `catalogBackup` with a Dolt
-remote. `engine.storage.backup()` verifies and publishes every referenced CAS
-object before it pushes `main`.
-
-The engine does not pull a live catalog into an open database. Restore or
-bootstrap a closed `videobook.db` snapshot into `dataDir` before opening the
-engine. Configure the same `remoteObjects` store and missing CAS objects hydrate
-on demand.
-
-## Development
-
-```bash
-npm run typecheck
-npm test
-npm run build
-npm run examples
-```
-
-The real-media E2E test is opt-in because it downloads/loads a model and needs
-the local test assets:
-
-```bash
-VIDEOBOOK_REAL_MEDIA_E2E=1 npm test -- tests/similarity.e2e.test.ts
-```
-
-The pinned text model E2E is independently opt-in:
-
-```bash
-VIDEOBOOK_REAL_TEXT_E2E=1 npm test -- tests/similarity.e2e.test.ts
-```
-
-It uses `vancat.mp4`, the supplied attachment image, `vancat_profile.jpg`, and
-locally generated recompressed variants. Override the two source paths with
-`VIDEOBOOK_E2E_IMAGE` and `VIDEOBOOK_E2E_VIDEO` when needed.
-
-Tests use real DoltLite databases and cover runtime/semantic separation,
-concurrent slug claims, exact slug reuse, forward restores, terminal job audit,
-interrupted-commit recovery, snapshot bootstrap, and object-before-catalog
-backup ordering.
+Configure `remoteObjects` to publish content-addressed objects and
+`catalogBackup` to push the Dolt catalog. `engine.storage.backup()` publishes
+objects first, then pushes the catalog, so a restored catalog never points to
+objects that have not been uploaded.

@@ -12,33 +12,36 @@
 
 ## Codebase Architecture
 
-### Core Pattern: Result<T, FsError>
-- All public methods return `Result<T, FsError>` -- discriminated union, no thrown exceptions for control flow
-- Defined in `src/types.ts` (Result type, ok/err helpers, and error codes)
-- Error codes: `NOT_FOUND`, `ALREADY_EXISTS`, `GIT_ERROR`, `INVALID_INPUT`, `IO_ERROR`, `LOCKED`
+### Core Pattern: Result<T, EngineError>
+- Public semantic APIs return a discriminated `Result<T, EngineError>`; runtime
+  queue and lease primitives return direct values.
+- Types and `ok`/`err` helpers live in `src/engine-types.ts`.
+- Error codes include `NOT_FOUND`, `SLUG_CONFLICT`, `INVALID_INPUT`,
+  `SCHEMA_INCOMPATIBLE`, `STALE_REVISION`, and `ACTION_CONFLICT`.
 
 ### Module Layout
-- `src/project/` -- project lifecycle (create, list, get, switch)
-- `src/asset/` -- asset lifecycle (create, delete, rename, list, manifest)
-- `src/file/` -- file I/O (read, write, delete, rename, copy, resolve, metadata)
-- `src/git/` -- git operations via `child_process.execFile`, exponential backoff retry
-- `src/lock/` -- distributed locking via `O_CREAT | O_EXCL` atomic file creation
-- `src/validation.ts` -- isSafePath, isSafeFilename, isWithinDir, invalidInput helper
+- `src/books.ts` -- the one singleton Book per engine root
+- `src/artifacts.ts`, `src/files.ts`, and `src/cas.ts` -- artifact lifecycle,
+  content-addressed files, and workspace materialization
+- `src/domain.ts`, `src/metadata.ts`, and `src/communications.ts` -- entities,
+  notebook graph documents, metadata, prompts, and messages
+- `src/schema.ts` and `src/store.ts` -- schema, Dolt staging/commits, and outbox
+  recovery
+- `src/history.ts` -- revisions, generic action graph records, and forward
+  restores
+- `src/runtime-services.ts`, `src/job-queue.ts`, and `src/status.ts` -- runtime
+  coordination
 
 ### Key Patterns
-- Zod for schema validation
-- Every mutation produces an atomic git commit
-- Mutations wrapped in `withGitLock` (in-process mutex per project dir)
-- `src/index.ts` uses `withProject` helper to resolve project dir then delegate
-- Slug generation: projects `{adjective}-{noun}-{number}`, assets `{prefix}-{slugified-name}[-{suffix}]`
-- Constants centralized in `src/constants.ts`
-- ESM package, Node.js >= 20
-
-### Known Pattern Issue
-- `withGitLock` blocks in file operations (write, delete, rename, copy) do not catch
-  filesystem errors and convert to Result. An `fs.unlink`/`fs.rename`/`fs.copyFile` failure
-  inside the lock throws past the Result boundary. This is a pre-existing pattern across
-  all file mutation modules, not introduced by any single change.
+- A new engine root requires `initialBookSlug`; existing roots reopen their
+  stored book and do not overwrite it.
+- All semantic state is scoped to that singleton Book. There are no project IDs
+  or project tables.
+- Every semantic mutation is a Dolt commit; `runtime_*` tables are never staged.
+- Workspaces are `workspaceDir/<artifact UUID>/` and are disposable.
+- Artifact slugs use canonical kind prefixes. There is no notebook artifact
+  kind; notebook graphs remain under `engine.notebooks`.
+- ESM package, Node.js >= 22.
 
 ## Common Patterns to Watch
 - `let` where `const` suffices -- always flag

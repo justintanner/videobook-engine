@@ -60,10 +60,9 @@ export function createStatusApi(context: EngineContext) {
   return {
     get: (
       artifact: string,
-      project: string,
       options?: GetArtifactStatusOptions,
     ): Promise<Result<ArtifactStatus, EngineError>> =>
-      getArtifactStatus(context, artifact, project, options),
+      getArtifactStatus(context, artifact, options),
     compute: computeArtifactStatus,
   };
 }
@@ -121,14 +120,9 @@ export function computeArtifactStatus(
   }
   if (hasPartFile) return "error";
   if (
-    artifactSlug.startsWith("book-") ||
     artifactSlug.startsWith("char-") ||
     artifactSlug.startsWith("prompt-") ||
-    artifactSlug.startsWith("scene-") ||
-    // Legacy prefixes remain readable for existing projects.
-    artifactSlug.startsWith("nb-") ||
-    artifactSlug.startsWith("prm-") ||
-    artifactSlug.startsWith("scn-")
+    artifactSlug.startsWith("scene-")
   ) {
     return "ready";
   }
@@ -154,18 +148,12 @@ export function hasPartialMediaFile(
 async function getArtifactStatus(
   context: EngineContext,
   artifactReference: string,
-  projectReference: string,
   options?: GetArtifactStatusOptions,
 ): Promise<Result<ArtifactStatus, EngineError>> {
   return resultOf(async () => {
-    const project = context.projectRow(projectReference);
-    const artifact = context.artifactRow(
-      project.project_id,
-      artifactReference,
-    );
+    const artifact = context.artifactRow(artifactReference);
     const manifestResult = await createFilesApi(context).manifest(
       artifact.artifact_id,
-      project.project_id,
       { includeDotfiles: true },
     );
     if (!manifestResult.ok) return manifestResult;
@@ -299,10 +287,7 @@ function pendingTask(
         artifactSlug: artifact.slug,
         taskId: row.task_id,
         taskType: row.task_type,
-        workspacePath: context.artifactPath(
-          artifact.project_id,
-          artifact.artifact_id,
-        ),
+        workspacePath: context.artifactPath(artifact.artifact_id),
         createdAt: row.created_at,
         meta: parseJson(row.meta_json, {}),
         completing: row.completing === 1,
@@ -337,10 +322,7 @@ function activeArtifactLock(
   context: EngineContext,
   artifact: ArtifactRow,
 ): ArtifactStatusInput["lockData"] {
-  const prefix = context.artifactPath(
-    artifact.project_id,
-    artifact.artifact_id,
-  );
+  const prefix = context.artifactPath(artifact.artifact_id);
   const row = context.store.db
     .prepare(
       `SELECT lease_id, resource_key, owner_id, acquired_at, expires_at,

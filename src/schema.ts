@@ -1,12 +1,12 @@
-export const SCHEMA_VERSION = 2;
+export const SCHEMA_VERSION = 3;
 
 export const SEMANTIC_TABLES = [
   "engine_schema",
-  "projects",
+  "book",
   "artifacts",
   "objects",
   "artifact_files",
-  "project_metadata",
+  "book_metadata",
   "artifact_metadata",
   "entities",
   "notebooks",
@@ -56,25 +56,19 @@ export const SEMANTIC_SCHEMA_SQL = `
     created_at INTEGER NOT NULL
   );
 
-  CREATE TABLE IF NOT EXISTS projects (
-    project_id TEXT PRIMARY KEY,
-    slug TEXT NOT NULL,
-    created_at INTEGER NOT NULL,
-    updated_at INTEGER NOT NULL,
-    deleted_at INTEGER
+  CREATE TABLE IF NOT EXISTS book (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    book_id TEXT NOT NULL UNIQUE,
+    slug TEXT NOT NULL
   );
-  CREATE UNIQUE INDEX IF NOT EXISTS projects_active_slug
-    ON projects(slug)
-    WHERE deleted_at IS NULL;
 
   CREATE TABLE IF NOT EXISTS artifacts (
     artifact_id TEXT PRIMARY KEY,
-    project_id TEXT NOT NULL REFERENCES projects(project_id),
     slug TEXT NOT NULL,
     kind TEXT NOT NULL CHECK (
       kind IN (
         'video','image','audio','script','character',
-        'prompt','scene','notebook','final'
+        'prompt','scene','final'
       )
     ),
     data_json TEXT NOT NULL DEFAULT '{}',
@@ -83,10 +77,10 @@ export const SEMANTIC_SCHEMA_SQL = `
     deleted_at INTEGER
   );
   CREATE UNIQUE INDEX IF NOT EXISTS artifacts_active_slug
-    ON artifacts(project_id, slug)
+    ON artifacts(slug)
     WHERE deleted_at IS NULL;
-  CREATE INDEX IF NOT EXISTS artifacts_project_created
-    ON artifacts(project_id, created_at);
+  CREATE INDEX IF NOT EXISTS artifacts_created
+    ON artifacts(created_at);
 
   CREATE TABLE IF NOT EXISTS objects (
     object_hash TEXT PRIMARY KEY,
@@ -108,12 +102,10 @@ export const SEMANTIC_SCHEMA_SQL = `
   CREATE INDEX IF NOT EXISTS artifact_files_object
     ON artifact_files(object_hash);
 
-  CREATE TABLE IF NOT EXISTS project_metadata (
-    project_id TEXT NOT NULL REFERENCES projects(project_id),
-    key TEXT NOT NULL,
+  CREATE TABLE IF NOT EXISTS book_metadata (
+    key TEXT PRIMARY KEY,
     value_json TEXT NOT NULL,
-    updated_at INTEGER NOT NULL,
-    PRIMARY KEY(project_id, key)
+    updated_at INTEGER NOT NULL
   );
 
   CREATE TABLE IF NOT EXISTS artifact_metadata (
@@ -126,7 +118,6 @@ export const SEMANTIC_SCHEMA_SQL = `
 
   CREATE TABLE IF NOT EXISTS entities (
     entity_id TEXT PRIMARY KEY,
-    project_id TEXT NOT NULL REFERENCES projects(project_id),
     type TEXT NOT NULL CHECK (type IN ('prompt','character','scene')),
     name TEXT NOT NULL,
     description TEXT,
@@ -136,12 +127,11 @@ export const SEMANTIC_SCHEMA_SQL = `
     updated_at INTEGER NOT NULL,
     deleted_at INTEGER
   );
-  CREATE INDEX IF NOT EXISTS entities_project_type
-    ON entities(project_id, type, created_at);
+  CREATE INDEX IF NOT EXISTS entities_type_created
+    ON entities(type, created_at);
 
   CREATE TABLE IF NOT EXISTS notebooks (
     notebook_id TEXT PRIMARY KEY,
-    project_id TEXT NOT NULL REFERENCES projects(project_id),
     name TEXT NOT NULL,
     version INTEGER NOT NULL,
     properties_json TEXT NOT NULL DEFAULT '{}',
@@ -149,8 +139,8 @@ export const SEMANTIC_SCHEMA_SQL = `
     updated_at INTEGER NOT NULL,
     deleted_at INTEGER
   );
-  CREATE INDEX IF NOT EXISTS notebooks_project_created
-    ON notebooks(project_id, created_at);
+  CREATE INDEX IF NOT EXISTS notebooks_created
+    ON notebooks(created_at);
 
   CREATE TABLE IF NOT EXISTS notebook_cells (
     notebook_id TEXT NOT NULL REFERENCES notebooks(notebook_id),
@@ -181,7 +171,6 @@ export const SEMANTIC_SCHEMA_SQL = `
   CREATE TABLE IF NOT EXISTS notebook_runs (
     run_id TEXT PRIMARY KEY,
     notebook_id TEXT NOT NULL REFERENCES notebooks(notebook_id),
-    project_id TEXT NOT NULL REFERENCES projects(project_id),
     status TEXT NOT NULL,
     started_at INTEGER NOT NULL,
     completed_at INTEGER,
@@ -191,28 +180,24 @@ export const SEMANTIC_SCHEMA_SQL = `
   );
 
   CREATE TABLE IF NOT EXISTS timelines (
-    project_id TEXT PRIMARY KEY REFERENCES projects(project_id),
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
     render TEXT NOT NULL DEFAULT 'landscape',
     data_json TEXT NOT NULL DEFAULT '{}',
     updated_at INTEGER NOT NULL
   );
 
   CREATE TABLE IF NOT EXISTS timeline_slots (
-    project_id TEXT NOT NULL REFERENCES projects(project_id),
-    slot_id TEXT NOT NULL,
+    slot_id TEXT PRIMARY KEY,
     artifact_id TEXT,
     ordinal INTEGER NOT NULL,
-    data_json TEXT NOT NULL DEFAULT '{}',
-    PRIMARY KEY(project_id, slot_id)
+    data_json TEXT NOT NULL DEFAULT '{}'
   );
 
   CREATE TABLE IF NOT EXISTS timeline_audio (
-    project_id TEXT NOT NULL REFERENCES projects(project_id),
-    audio_id TEXT NOT NULL,
+    audio_id TEXT PRIMARY KEY,
     artifact_id TEXT,
     ordinal INTEGER NOT NULL,
-    data_json TEXT NOT NULL DEFAULT '{}',
-    PRIMARY KEY(project_id, audio_id)
+    data_json TEXT NOT NULL DEFAULT '{}'
   );
 
   CREATE TABLE IF NOT EXISTS audio_waveforms (
@@ -223,28 +208,25 @@ export const SEMANTIC_SCHEMA_SQL = `
 
   CREATE TABLE IF NOT EXISTS prompt_entries (
     prompt_id INTEGER PRIMARY KEY AUTOINCREMENT,
-    project_id TEXT NOT NULL REFERENCES projects(project_id),
     surface TEXT NOT NULL,
     prompt TEXT NOT NULL,
     context_json TEXT NOT NULL DEFAULT '{}',
     created_at INTEGER NOT NULL
   );
   CREATE INDEX IF NOT EXISTS prompt_entries_lookup
-    ON prompt_entries(project_id, surface, created_at);
+    ON prompt_entries(surface, created_at);
 
   CREATE TABLE IF NOT EXISTS messages (
     message_id TEXT PRIMARY KEY,
-    project_id TEXT NOT NULL REFERENCES projects(project_id),
     role TEXT NOT NULL,
     body_json TEXT NOT NULL,
     created_at INTEGER NOT NULL
   );
-  CREATE INDEX IF NOT EXISTS messages_project_created
-    ON messages(project_id, created_at);
+  CREATE INDEX IF NOT EXISTS messages_created
+    ON messages(created_at);
 
   CREATE TABLE IF NOT EXISTS operations (
     operation_id TEXT PRIMARY KEY,
-    project_id TEXT NOT NULL REFERENCES projects(project_id),
     operation TEXT NOT NULL,
     artifact_id TEXT,
     details_json TEXT NOT NULL DEFAULT '{}',
@@ -253,14 +235,13 @@ export const SEMANTIC_SCHEMA_SQL = `
     created_at INTEGER NOT NULL,
     author TEXT NOT NULL
   );
-  CREATE INDEX IF NOT EXISTS operations_project_created
-    ON operations(project_id, created_at);
+  CREATE INDEX IF NOT EXISTS operations_created
+    ON operations(created_at);
   CREATE INDEX IF NOT EXISTS operations_artifact_created
     ON operations(artifact_id, created_at);
 
   CREATE TABLE IF NOT EXISTS actions (
     action_id TEXT PRIMARY KEY,
-    project_id TEXT NOT NULL REFERENCES projects(project_id),
     operation TEXT NOT NULL,
     scope TEXT NOT NULL,
     actor TEXT NOT NULL,
@@ -314,7 +295,6 @@ export const SEMANTIC_SCHEMA_SQL = `
 
   CREATE TABLE IF NOT EXISTS job_runs (
     run_id TEXT PRIMARY KEY,
-    project_id TEXT NOT NULL REFERENCES projects(project_id),
     artifact_id TEXT,
     job_type TEXT NOT NULL,
     state TEXT NOT NULL CHECK (state IN ('done','failed','aborted')),
@@ -345,7 +325,6 @@ export const RUNTIME_SCHEMA_SQL = `
   CREATE TABLE IF NOT EXISTS runtime_jobs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     operation_id TEXT NOT NULL,
-    project_id TEXT NOT NULL,
     type TEXT NOT NULL,
     artifact_id TEXT,
     external_task_id TEXT,
@@ -366,20 +345,19 @@ export const RUNTIME_SCHEMA_SQL = `
     fence INTEGER NOT NULL DEFAULT 0
   );
   CREATE INDEX IF NOT EXISTS runtime_jobs_state
-    ON runtime_jobs(project_id, state, enqueued_at);
+    ON runtime_jobs(state, enqueued_at);
   CREATE INDEX IF NOT EXISTS runtime_jobs_lease
     ON runtime_jobs(state, lease_expires_at);
   CREATE UNIQUE INDEX IF NOT EXISTS runtime_jobs_dedupe
-    ON runtime_jobs(project_id, dedupe_key)
+    ON runtime_jobs(dedupe_key)
     WHERE dedupe_key IS NOT NULL
       AND state IN ('queued','running','completing');
   CREATE UNIQUE INDEX IF NOT EXISTS runtime_jobs_external
-    ON runtime_jobs(project_id, type, external_task_id)
+    ON runtime_jobs(type, external_task_id)
     WHERE external_task_id IS NOT NULL;
 
   CREATE TABLE IF NOT EXISTS runtime_resource_leases (
     lease_id TEXT PRIMARY KEY,
-    project_id TEXT,
     artifact_id TEXT,
     resource_key TEXT NOT NULL,
     owner_id TEXT NOT NULL,
@@ -405,7 +383,6 @@ export const RUNTIME_SCHEMA_SQL = `
 
   CREATE TABLE IF NOT EXISTS runtime_workspace_entries (
     artifact_id TEXT PRIMARY KEY,
-    project_id TEXT NOT NULL,
     path TEXT NOT NULL UNIQUE,
     hydrated_at INTEGER,
     invalidated_at INTEGER,
@@ -414,7 +391,6 @@ export const RUNTIME_SCHEMA_SQL = `
 
   CREATE TABLE IF NOT EXISTS runtime_artifact_views (
     artifact_id TEXT PRIMARY KEY,
-    project_id TEXT NOT NULL,
     status TEXT NOT NULL CHECK (status IN ('pending','working','ready','error')),
     meta_json TEXT NOT NULL DEFAULT '{}',
     owner_id TEXT,
@@ -428,7 +404,6 @@ export const RUNTIME_SCHEMA_SQL = `
 
   CREATE TABLE IF NOT EXISTS runtime_pending_tasks (
     artifact_id TEXT PRIMARY KEY,
-    project_id TEXT NOT NULL,
     task_id TEXT NOT NULL,
     task_type TEXT NOT NULL,
     created_at INTEGER NOT NULL,
@@ -437,11 +412,10 @@ export const RUNTIME_SCHEMA_SQL = `
     owner_id TEXT
   );
   CREATE UNIQUE INDEX IF NOT EXISTS runtime_pending_external
-    ON runtime_pending_tasks(project_id, task_id);
+    ON runtime_pending_tasks(task_id);
 
   CREATE TABLE IF NOT EXISTS runtime_generation_errors (
     artifact_id TEXT PRIMARY KEY,
-    project_id TEXT NOT NULL,
     message TEXT NOT NULL,
     fail_code TEXT,
     prompt TEXT,
@@ -456,13 +430,12 @@ export const RUNTIME_SCHEMA_SQL = `
 
   CREATE TABLE IF NOT EXISTS runtime_logs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    project_id TEXT NOT NULL,
     name TEXT NOT NULL,
     body_json TEXT NOT NULL,
     created_at INTEGER NOT NULL
   );
   CREATE INDEX IF NOT EXISTS runtime_logs_lookup
-    ON runtime_logs(project_id, name, created_at);
+    ON runtime_logs(name, created_at);
 
   CREATE TABLE IF NOT EXISTS runtime_commit_outbox (
     operation_id TEXT PRIMARY KEY,
@@ -474,7 +447,6 @@ export const RUNTIME_SCHEMA_SQL = `
   CREATE TABLE IF NOT EXISTS runtime_similarity_embeddings (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     artifact_id TEXT NOT NULL,
-    project_id TEXT NOT NULL,
     kind TEXT NOT NULL CHECK (kind IN ('image', 'video')),
     source_path TEXT NOT NULL,
     object_hash TEXT NOT NULL,
@@ -485,17 +457,14 @@ export const RUNTIME_SCHEMA_SQL = `
     updated_at INTEGER NOT NULL,
     UNIQUE(artifact_id, embedding_space)
   );
-  CREATE INDEX IF NOT EXISTS runtime_similarity_project_kind
-    ON runtime_similarity_embeddings(
-      project_id, kind, embedding_space, updated_at
-    );
+  CREATE INDEX IF NOT EXISTS runtime_similarity_kind
+    ON runtime_similarity_embeddings(kind, embedding_space, updated_at);
   CREATE INDEX IF NOT EXISTS runtime_similarity_object
     ON runtime_similarity_embeddings(object_hash, embedding_space);
 
   CREATE TABLE IF NOT EXISTS runtime_text_similarity_documents (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     artifact_id TEXT NOT NULL,
-    project_id TEXT NOT NULL,
     source_path TEXT NOT NULL,
     object_hash TEXT NOT NULL,
     content_hash TEXT NOT NULL,
@@ -505,10 +474,8 @@ export const RUNTIME_SCHEMA_SQL = `
     updated_at INTEGER NOT NULL,
     UNIQUE(artifact_id, embedding_space)
   );
-  CREATE INDEX IF NOT EXISTS runtime_text_similarity_project
-    ON runtime_text_similarity_documents(
-      project_id, embedding_space, updated_at
-    );
+  CREATE INDEX IF NOT EXISTS runtime_text_similarity_lookup
+    ON runtime_text_similarity_documents(embedding_space, updated_at);
   CREATE INDEX IF NOT EXISTS runtime_text_similarity_object
     ON runtime_text_similarity_documents(object_hash, embedding_space);
   CREATE INDEX IF NOT EXISTS runtime_text_similarity_content
@@ -518,7 +485,6 @@ export const RUNTIME_SCHEMA_SQL = `
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     document_id INTEGER NOT NULL,
     artifact_id TEXT NOT NULL,
-    project_id TEXT NOT NULL,
     embedding_space TEXT NOT NULL,
     chunk_index INTEGER NOT NULL,
     start_offset INTEGER NOT NULL,
@@ -529,9 +495,9 @@ export const RUNTIME_SCHEMA_SQL = `
     updated_at INTEGER NOT NULL,
     UNIQUE(document_id, chunk_index)
   );
-  CREATE INDEX IF NOT EXISTS runtime_text_similarity_chunk_project
+  CREATE INDEX IF NOT EXISTS runtime_text_similarity_chunk_lookup
     ON runtime_text_similarity_chunks(
-      project_id, embedding_space, document_id, chunk_index
+      embedding_space, document_id, chunk_index
     );
   CREATE INDEX IF NOT EXISTS runtime_text_similarity_chunk_document
     ON runtime_text_similarity_chunks(document_id, chunk_index);

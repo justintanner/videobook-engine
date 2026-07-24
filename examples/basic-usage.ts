@@ -1,102 +1,57 @@
 /**
- * Basic usage of videobook-engine: create a project, add assets, write/read files.
- *
- * Run: npx tsx examples/basic-usage.ts
+ * Basic single-book usage: initialize an engine root, create an artifact,
+ * write object-backed files, and inspect semantic history.
  */
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
+
 import { createEngine } from "videobook-engine";
 
-const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), "videobook-basic-"));
+const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "videobook-basic-"));
+
 try {
-  const engine = await createEngine({
-    dataDir: path.join(tmpDir, "data"),
-    workspaceDir: path.join(tmpDir, "workspace"),
+  const engine = createEngine({
+    rootDir,
+    initialBookSlug: "story",
   });
+  try {
+    const book = engine.book.get();
+    console.log(`Opened book: ${book.slug} (${book.bookId})`);
 
-  const projectResult = await engine.projects.create("story");
-  if (!projectResult.ok) throw new Error(projectResult.error.message);
-  const project = projectResult.value;
-  console.log(`Created project: ${project.slug} (${project.projectId})`);
+    const scriptResult = await engine.artifacts.create({
+      kind: "script",
+      name: "opening draft",
+    });
+    if (!scriptResult.ok) throw new Error(scriptResult.error.message);
+    const script = scriptResult.value;
+    console.log(`Created: ${script.slug} (${script.artifactId})`);
 
-  const videoResult = await engine.artifacts.create({
-    project: project.projectId,
-    kind: "video",
-    slug: "vid-beach-sunset",
-  });
-  if (!videoResult.ok) throw new Error(videoResult.error.message);
-  const video = videoResult.value;
-  console.log(`Created video: ${video.slug} (${video.artifactId})`);
-
-  const imageResult = await engine.artifacts.create({
-    project: project.projectId,
-    kind: "image",
-    name: "Thumbnail",
-  });
-  if (!imageResult.ok) throw new Error(imageResult.error.message);
-  console.log(`Created image: ${imageResult.value.slug}`);
-
-  const writeTextResult = await engine.files.write(
-    video.artifactId,
-    "notes.txt",
-    "Shot on location at Malibu beach.",
-    project.projectId,
-  );
-  if (!writeTextResult.ok) throw new Error(writeTextResult.error.message);
-
-  const writeVideoResult = await engine.files.write(
-    video.artifactId,
-    "original.mp4",
-    Buffer.from("fake-mp4-data-for-demo"),
-    project.projectId,
-  );
-  if (!writeVideoResult.ok) {
-    throw new Error(writeVideoResult.error.message);
-  }
-
-  const readTextResult = await engine.files.read(
-    video.artifactId,
-    "notes.txt",
-    project.projectId,
-  );
-  if (!readTextResult.ok) throw new Error(readTextResult.error.message);
-  console.log(`Read notes.txt: "${readTextResult.value.toString()}"`);
-
-  const artifacts = engine.artifacts.list(project.projectId);
-  console.log(`\nArtifacts (${artifacts.length}):`);
-  for (const artifact of artifacts) {
-    console.log(
-      `  ${artifact.slug} — ${artifact.kind} — ${artifact.artifactId}`,
+    const write = await engine.files.write(
+      script.artifactId,
+      "original.md",
+      "# Opening\n\nA cat watches the sunrise.",
     );
+    if (!write.ok) throw new Error(write.error.message);
+
+    const manifest = await engine.files.manifest(script.artifactId);
+    if (!manifest.ok) throw new Error(manifest.error.message);
+    console.log(`Stored files: ${manifest.value.files.map((file) => file.name).join(", ")}`);
+
+    const timeline = await engine.metadata.book.write("timeline", {
+      render: "landscape",
+      slots: [{ id: "opening", artifactId: script.artifactId }],
+      audio: [],
+    });
+    if (!timeline.ok) throw new Error(timeline.error.message);
+
+    console.log("Recent revisions:");
+    for (const revision of engine.history.revisions(5)) {
+      console.log(`- ${revision.hash.slice(0, 10)} ${revision.operation}`);
+    }
+  } finally {
+    engine.close();
   }
-
-  const manifestResult = await engine.files.manifest(
-    video.artifactId,
-    project.projectId,
-  );
-  if (!manifestResult.ok) throw new Error(manifestResult.error.message);
-  console.log(`\nManifest for ${manifestResult.value.slug}:`);
-  for (const file of manifestResult.value.files) {
-    console.log(`  ${file.name} — ${file.sizeBytes} bytes`);
-  }
-
-  const deleted = await engine.artifacts.delete(
-    video.artifactId,
-    project.projectId,
-  );
-  if (!deleted.ok) throw new Error(deleted.error.message);
-  const replacement = await engine.artifacts.create({
-    project: project.projectId,
-    kind: "video",
-    slug: "vid-beach-sunset",
-  });
-  if (!replacement.ok) throw new Error(replacement.error.message);
-  console.log(
-    `\nReused ${replacement.value.slug} with new identity ${replacement.value.artifactId}`,
-  );
-
-  engine.close();
 } finally {
-  await fs.rm(tmpDir, { recursive: true, force: true });
+  await fs.rm(rootDir, { recursive: true, force: true });
 }

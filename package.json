@@ -1,6 +1,6 @@
 {
   "name": "videobook-engine",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "description": "Dolt-native local-first storage engine for Videobook",
   "type": "module",
   "exports": {
@@ -20,10 +20,11 @@
     "prepare": "npm run build",
     "prepack": "npm run build",
     "typecheck": "tsc --noEmit",
+    "lint": "knip",
     "test": "vitest run",
     "test:watch": "vitest",
-    "example:basic": "tsx examples/basic-usage.ts",
-    "examples": "tsx examples/basic-usage.ts"
+    "example:basic": "npm run build && tsx examples/basic-usage.ts",
+    "examples": "npm run example:basic"
   },
   "engines": {
     "node": ">=22"

@@ -1,29 +1,28 @@
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import * as path from "node:path";
+
+import { v7 as uuidv7 } from "uuid";
 
 import type {
   Artifact,
   ArtifactKind,
+  Book,
   EngineConfig,
   EngineError,
-  Project,
   Result,
 } from "./engine-types.js";
 import { err } from "./engine-types.js";
 import { ObjectStore } from "./cas.js";
-import { DoltStore, EngineFault, parseJson } from "./store.js";
+import { DoltStore, EngineFault } from "./store.js";
 
-export interface ProjectRow {
-  project_id: string;
+interface BookRow {
+  singleton: number;
+  book_id: string;
   slug: string;
-  created_at: number;
-  updated_at: number;
-  deleted_at: number | null;
 }
 
 export interface ArtifactRow {
   artifact_id: string;
-  project_id: string;
   slug: string;
   kind: ArtifactKind;
   data_json: string;
@@ -72,9 +71,28 @@ export class EngineContext {
         message: "dataDir and workspaceDir must be different directories",
       });
     }
+
+    const databasePath = path.join(storage.dataDir, "videobook.db");
+    const initialBook = !existsSync(databasePath)
+      ? (() => {
+          if (!config.initialBookSlug) {
+            throw new EngineFault({
+              code: "INVALID_INPUT",
+              message:
+                "initialBookSlug is required when creating a new engine root",
+            });
+          }
+          return {
+            bookId: uuidv7(),
+            slug: normalizeBookSlug(config.initialBookSlug),
+          };
+        })()
+      : undefined;
+
     this.store = new DoltStore({
       dataDir: this.config.dataDir,
       workspaceDir: this.config.workspaceDir,
+      initialBook,
       ...(config.catalogBackup
         ? { catalogBackup: config.catalogBackup }
         : {}),
@@ -86,30 +104,24 @@ export class EngineContext {
     );
   }
 
-  projectRow(reference: string, includeDeleted = false): ProjectRow {
+  bookRow(): BookRow {
     const row = this.store.db
-      .prepare(
-        `SELECT project_id, slug, created_at, updated_at, deleted_at
-         FROM projects
-         WHERE (project_id = ? OR slug = ?)
-           ${includeDeleted ? "" : "AND deleted_at IS NULL"}
-         ORDER BY CASE WHEN project_id = ? THEN 0 ELSE 1 END
-         LIMIT 1`,
-      )
-      .get(reference, reference, reference) as unknown as
-      | ProjectRow
-      | undefined;
+      .prepare("SELECT singleton, book_id, slug FROM book WHERE singleton=1")
+      .get() as unknown as BookRow | undefined;
     if (!row) {
       throw new EngineFault({
-        code: "NOT_FOUND",
-        message: `Project not found: ${reference}`,
+        code: "SCHEMA_INCOMPATIBLE",
+        message: "Book catalog is missing its singleton book record",
       });
     }
     return row;
   }
 
+  book(row = this.bookRow()): Book {
+    return { bookId: row.book_id, slug: row.slug };
+  }
+
   artifactRow(
-    projectId: string,
     reference: string,
     includeDeleted = false,
   ): ArtifactRow {
@@ -118,15 +130,14 @@ export class EngineContext {
       : "AND deleted_at IS NULL AND (artifact_id = ? OR slug = ?)";
     const row = this.store.db
       .prepare(
-        `SELECT artifact_id, project_id, slug, kind, data_json,
+        `SELECT artifact_id, slug, kind, data_json,
                 created_at, updated_at, deleted_at
          FROM artifacts
-         WHERE project_id = ?
-           ${deletedClause}
+         WHERE 1=1 ${deletedClause}
          ORDER BY CASE WHEN artifact_id = ? THEN 0 ELSE 1 END
          LIMIT 1`,
       )
-      .get(projectId, reference, reference, reference) as unknown as
+      .get(reference, reference, reference) as unknown as
       | ArtifactRow
       | undefined;
     if (!row) {
@@ -141,7 +152,7 @@ export class EngineContext {
   artifactRowById(artifactId: string): ArtifactRow {
     const row = this.store.db
       .prepare(
-        `SELECT artifact_id, project_id, slug, kind, data_json,
+        `SELECT artifact_id, slug, kind, data_json,
                 created_at, updated_at, deleted_at
          FROM artifacts
          WHERE artifact_id = ?`,
@@ -156,76 +167,49 @@ export class EngineContext {
     return row;
   }
 
-  project(row: ProjectRow): Project {
-    return {
-      projectId: row.project_id,
-      slug: row.slug,
-      createdAt: row.created_at,
-      updatedAt: row.updated_at,
-      path: this.projectPath(row.project_id),
-      isDefault: this.defaultProjectId() === row.project_id,
-    };
-  }
-
   artifact(row: ArtifactRow): Artifact {
     return {
       artifactId: row.artifact_id,
-      projectId: row.project_id,
       slug: row.slug,
       kind: row.kind,
       createdAt: row.created_at,
       updatedAt: row.updated_at,
-      path: this.artifactPath(row.project_id, row.artifact_id),
+      path: this.artifactPath(row.artifact_id),
     };
   }
 
-  projectPath(projectId: string): string {
-    return path.join(this.store.workspaceDir, projectId);
+  artifactPath(artifactId: string): string {
+    return path.join(this.store.workspaceDir, artifactId);
   }
 
-  artifactPath(projectId: string, artifactId: string): string {
-    return path.join(this.projectPath(projectId), artifactId);
-  }
-
-  ensureProjectWorkspace(projectId: string): string {
-    const workspace = this.projectPath(projectId);
+  ensureArtifactWorkspace(artifactId: string): string {
+    const workspace = this.artifactPath(artifactId);
     mkdirSync(workspace, { recursive: true });
     return workspace;
-  }
-
-  ensureArtifactWorkspace(projectId: string, artifactId: string): string {
-    const workspace = this.artifactPath(projectId, artifactId);
-    mkdirSync(workspace, { recursive: true });
-    return workspace;
-  }
-
-  defaultProjectId(): string | null {
-    const row = this.store.db
-      .prepare(
-        "SELECT value_json FROM runtime_settings WHERE key='default_project_id'",
-      )
-      .get() as unknown as { value_json: string } | undefined;
-    return row
-      ? parseJson<string | null>(row.value_json, null)
-      : null;
-  }
-
-  setDefaultProjectId(projectId: string | null): void {
-    this.store.runtime((now) => {
-      this.store.db
-        .prepare(
-          `INSERT INTO runtime_settings(key, value_json, updated_at)
-           VALUES ('default_project_id', ?, ?)
-           ON CONFLICT(key) DO UPDATE SET
-             value_json=excluded.value_json,
-             updated_at=excluded.updated_at`,
-        )
-        .run(JSON.stringify(projectId), now);
-    });
   }
 
   close(): void {
     this.store.close();
+  }
+}
+
+export function normalizeBookSlug(input: string): string {
+  const slug = input
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+  if (!slug || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) {
+    throw new Error(`Invalid book slug: ${input}`);
+  }
+  return slug;
+}
+
+export function isValidBookSlug(input: string): boolean {
+  try {
+    return normalizeBookSlug(input) === input;
+  } catch {
+    return false;
   }
 }
 
@@ -234,7 +218,6 @@ function toError(error: unknown): EngineError {
   const message = error instanceof Error ? error.message : String(error);
   if (
     message.includes("artifacts_active_slug") ||
-    message.includes("projects_active_slug") ||
     message.includes("UNIQUE constraint failed")
   ) {
     return { code: "SLUG_CONFLICT", message };
