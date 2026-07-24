@@ -480,7 +480,8 @@ export function artifactSlug(kind: ArtifactKind, input: string): string {
     .replace(/-+/g, "-")
     .replace(/^[-_]+|[-_]+$/g, "");
   if (!normalized) throw new Error("Artifact name or slug is required");
-  const knownPrefix = /^(vid|img|aud|script|char|prm|scn|nb)-/;
+  const knownPrefix =
+    /^(vid|img|aud|script|char|prompt|scene|book|prm|scn|nb)-/;
   if (knownPrefix.test(normalized)) {
     if (!normalized.startsWith(`${prefix}-`)) {
       throw new Error(
@@ -531,11 +532,11 @@ function prefixForKind(kind: ArtifactKind): string {
     case "character":
       return "char";
     case "prompt":
-      return "prm";
+      return "prompt";
     case "scene":
-      return "scn";
+      return "scene";
     case "notebook":
-      return "nb";
+      return "book";
     case "final":
       return "final";
   }

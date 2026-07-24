@@ -121,8 +121,12 @@ export function computeArtifactStatus(
   }
   if (hasPartFile) return "error";
   if (
-    artifactSlug.startsWith("nb-") ||
+    artifactSlug.startsWith("book-") ||
     artifactSlug.startsWith("char-") ||
+    artifactSlug.startsWith("prompt-") ||
+    artifactSlug.startsWith("scene-") ||
+    // Legacy prefixes remain readable for existing projects.
+    artifactSlug.startsWith("nb-") ||
     artifactSlug.startsWith("prm-") ||
     artifactSlug.startsWith("scn-")
   ) {

@@ -93,6 +93,10 @@ async function resolveAllArtifacts(
         `aud-${tag}`,
         `script-${tag}`,
         `char-${tag}`,
+        `prompt-${tag}`,
+        `scene-${tag}`,
+        `book-${tag}`,
+        // Legacy prefixes remain readable for existing projects.
         `prm-${tag}`,
         `scn-${tag}`,
         `nb-${tag}`,
