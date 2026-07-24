@@ -306,6 +306,26 @@ export const SEMANTIC_SCHEMA_SQL = `
   );
 `;
 
+export const RUNTIME_SIMILARITY_SCHEMA_SQL = `
+  CREATE TABLE IF NOT EXISTS runtime_similarity_embeddings (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    artifact_id TEXT NOT NULL,
+    kind TEXT NOT NULL CHECK (kind IN ('image', 'video', 'audio')),
+    source_path TEXT NOT NULL,
+    object_hash TEXT NOT NULL,
+    embedding_space TEXT NOT NULL,
+    dimensions INTEGER NOT NULL,
+    vector_blob BLOB NOT NULL,
+    frame_count INTEGER,
+    updated_at INTEGER NOT NULL,
+    UNIQUE(artifact_id, embedding_space)
+  );
+  CREATE INDEX IF NOT EXISTS runtime_similarity_kind
+    ON runtime_similarity_embeddings(kind, embedding_space, updated_at);
+  CREATE INDEX IF NOT EXISTS runtime_similarity_object
+    ON runtime_similarity_embeddings(object_hash, embedding_space);
+`;
+
 export const RUNTIME_SCHEMA_SQL = `
   CREATE TABLE IF NOT EXISTS runtime_meta (
     key TEXT PRIMARY KEY,
@@ -444,23 +464,7 @@ export const RUNTIME_SCHEMA_SQL = `
     created_at INTEGER NOT NULL
   );
 
-  CREATE TABLE IF NOT EXISTS runtime_similarity_embeddings (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    artifact_id TEXT NOT NULL,
-    kind TEXT NOT NULL CHECK (kind IN ('image', 'video')),
-    source_path TEXT NOT NULL,
-    object_hash TEXT NOT NULL,
-    embedding_space TEXT NOT NULL,
-    dimensions INTEGER NOT NULL,
-    vector_blob BLOB NOT NULL,
-    frame_count INTEGER,
-    updated_at INTEGER NOT NULL,
-    UNIQUE(artifact_id, embedding_space)
-  );
-  CREATE INDEX IF NOT EXISTS runtime_similarity_kind
-    ON runtime_similarity_embeddings(kind, embedding_space, updated_at);
-  CREATE INDEX IF NOT EXISTS runtime_similarity_object
-    ON runtime_similarity_embeddings(object_hash, embedding_space);
+  ${RUNTIME_SIMILARITY_SCHEMA_SQL}
 
   CREATE TABLE IF NOT EXISTS runtime_text_similarity_documents (
     id INTEGER PRIMARY KEY AUTOINCREMENT,

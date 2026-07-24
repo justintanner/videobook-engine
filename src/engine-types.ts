@@ -78,7 +78,7 @@ export type EngineConfig = EngineConfigBase &
     | { rootDir?: never; dataDir: string; workspaceDir: string }
   );
 
-export type SimilarityKind = "image" | "video" | "text";
+export type SimilarityKind = "image" | "video" | "audio" | "text";
 
 export interface SimilarityEmbeddingProvider {
   readonly embeddingSpace: string;
@@ -102,6 +102,26 @@ export interface SimilarityTextEmbeddingProvider {
   readonly dimensions: number;
   prepare(): Promise<void>;
   embedText(text: string): Promise<SimilarityTextChunk[]>;
+}
+
+export interface SimilarityAudioEmbeddingProvider {
+  readonly embeddingSpace: string;
+  readonly dimensions: number;
+  prepare(): Promise<void>;
+  embedAudio(sourcePath: string): Promise<Float32Array>;
+}
+
+export interface SimilarityAudioConfig {
+  /** A Hugging Face CLAP model ID or a local compatible model directory. */
+  modelId?: string;
+  /** A cache directory for the audio model. */
+  modelCacheDir?: string;
+  /** Refuse network downloads when the audio model is not already available. */
+  allowModelDownload?: boolean;
+  /** FFmpeg executable used to decode audio to mono PCM. */
+  ffmpegPath?: string;
+  /** Test and advanced-use escape hatch for a local audio embedding implementation. */
+  provider?: SimilarityAudioEmbeddingProvider;
 }
 
 export interface SimilarityTextConfig {
@@ -130,6 +150,8 @@ export interface SimilarityConfig {
   ffprobePath?: string;
   /** Test and advanced-use escape hatch for a local embedding implementation. */
   provider?: SimilarityEmbeddingProvider;
+  /** Enables local CLAP audio similarity when present. */
+  audio?: SimilarityAudioConfig;
   /** Enables semantic JSON, Markdown, and text similarity when present. */
   text?: SimilarityTextConfig;
 }
@@ -191,6 +213,7 @@ export interface SimilarityStats {
   embeddingSpace: string;
   imageCount: number;
   videoCount: number;
+  audioCount: number;
   textCount: number;
   embeddingSpaces: Partial<Record<SimilarityKind, string>>;
 }

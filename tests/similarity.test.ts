@@ -3,11 +3,13 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 
+import { DatabaseSync } from "@dolthub/doltlite";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
   createEngine,
   type Engine,
+  type SimilarityAudioEmbeddingProvider,
   type SimilarityEmbeddingProvider,
   type SimilarityTextEmbeddingProvider,
 } from "../src/index.js";
@@ -49,6 +51,15 @@ const textProvider: SimilarityTextEmbeddingProvider = {
       });
     }
     return chunks;
+  },
+};
+
+const audioProvider: SimilarityAudioEmbeddingProvider = {
+  embeddingSpace: "audio-test-v1",
+  dimensions: 3,
+  async prepare() {},
+  async embedAudio(sourcePath) {
+    return audioVector(await readFile(sourcePath, "utf8"));
   },
 };
 
@@ -135,6 +146,233 @@ describe("local similarity API", () => {
       expect(await engine.similarity.prepare()).toMatchObject({
         ok: false,
         error: { code: "FEATURE_UNAVAILABLE" },
+      });
+    } finally {
+      engine.close();
+    }
+  });
+});
+
+describe("audio similarity API", () => {
+  it("indexes audio in a separate book-wide pool and persists embeddings", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "videobook-audio-sim-"));
+    roots.push(root);
+    let engine: Engine | null = createEngine({
+      dataDir: path.join(root, "data"),
+      workspaceDir: path.join(root, "workspace"),
+      initialBookSlug: "audio",
+      similarity: { provider, audio: { provider: audioProvider } },
+    });
+    try {
+      const purr = value(
+        await engine.artifacts.create({ kind: "audio", slug: "aud-purr" }),
+      );
+      const purrVariant = value(
+        await engine.artifacts.create({ kind: "audio", slug: "aud-purr-variant" }),
+      );
+      const purrExact = value(
+        await engine.artifacts.create({ kind: "audio", slug: "aud-purr-exact" }),
+      );
+      const rain = value(
+        await engine.artifacts.create({ kind: "audio", slug: "aud-rain" }),
+      );
+      value(await engine.files.write(purr.artifactId, "original.mp3", "purr"));
+      value(
+        await engine.files.write(
+          purrVariant.artifactId,
+          "original.wav",
+          "purr variant",
+        ),
+      );
+      value(await engine.files.write(purrExact.artifactId, "original.flac", "purr"));
+      value(await engine.files.write(rain.artifactId, "original.m4a", "rain"));
+
+      expect(value(await engine.similarity.prepare({ kind: "audio" }))).toMatchObject({
+        embeddingSpaces: { audio: "audio-test-v1" },
+      });
+      expect(value(engine.similarity.status(purr.artifactId))).toMatchObject({
+        kind: "audio",
+        state: "not_indexed",
+        embeddingSpace: "audio-test-v1",
+      });
+      expect(await engine.similarity.findSimilar(purr.artifactId)).toMatchObject({
+        ok: false,
+        error: { code: "NOT_READY" },
+      });
+
+      expect(value(await engine.similarity.index(purr.artifactId)).reused).toBe(false);
+      expect(value(await engine.similarity.index(purrVariant.artifactId)).reused).toBe(false);
+      expect(value(await engine.similarity.index(purrExact.artifactId)).reused).toBe(true);
+      expect(value(await engine.similarity.index(rain.artifactId)).reused).toBe(false);
+
+      const matches = value(
+        await engine.similarity.findSimilar(purr.artifactId, { limit: 10 }),
+      );
+      expect(matches[0]).toMatchObject({
+        artifactId: purrExact.artifactId,
+        kind: "audio",
+        exactBytes: true,
+        score: 1,
+      });
+      expect(matches).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            artifactId: purrVariant.artifactId,
+            kind: "audio",
+            exactBytes: false,
+          }),
+        ]),
+      );
+      expect(value(engine.similarity.stats())).toMatchObject({
+        audioCount: 4,
+        embeddingSpaces: { audio: "audio-test-v1" },
+      });
+      expect(value(await engine.similarity.rebuild({ kind: "audio" }))).toHaveLength(4);
+
+      engine.close();
+      engine = createEngine({
+        dataDir: path.join(root, "data"),
+        workspaceDir: path.join(root, "workspace"),
+        similarity: { provider, audio: { provider: audioProvider } },
+      });
+      expect(
+        value(await engine.similarity.findSimilar(purr.artifactId))[0]?.artifactId,
+      ).toBe(purrExact.artifactId);
+    } finally {
+      engine?.close();
+    }
+  });
+
+  it("requires audio configuration and a canonical original audio file", async () => {
+    const disabledRoot = await mkdtemp(
+      path.join(tmpdir(), "videobook-audio-disabled-"),
+    );
+    roots.push(disabledRoot);
+    const disabled = createEngine({
+      dataDir: path.join(disabledRoot, "data"),
+      workspaceDir: path.join(disabledRoot, "workspace"),
+      initialBookSlug: "audio-disabled",
+      similarity: { provider },
+    });
+    try {
+      const audio = value(
+        await disabled.artifacts.create({ kind: "audio", slug: "aud-disabled" }),
+      );
+      value(await disabled.files.write(audio.artifactId, "original.mp3", "purr"));
+      expect(await disabled.similarity.index(audio.artifactId)).toMatchObject({
+        ok: false,
+        error: { code: "FEATURE_UNAVAILABLE" },
+      });
+    } finally {
+      disabled.close();
+    }
+
+    const invalidRoot = await mkdtemp(
+      path.join(tmpdir(), "videobook-audio-invalid-"),
+    );
+    roots.push(invalidRoot);
+    const invalid = createEngine({
+      dataDir: path.join(invalidRoot, "data"),
+      workspaceDir: path.join(invalidRoot, "workspace"),
+      initialBookSlug: "audio-invalid",
+      similarity: { provider, audio: { provider: audioProvider } },
+    });
+    try {
+      const audio = value(
+        await invalid.artifacts.create({ kind: "audio", slug: "aud-invalid" }),
+      );
+      value(await invalid.files.write(audio.artifactId, "track.mp3", "purr"));
+      expect(await invalid.similarity.index(audio.artifactId)).toMatchObject({
+        ok: false,
+        error: { code: "INVALID_INPUT" },
+      });
+    } finally {
+      invalid.close();
+    }
+  });
+
+  it("upgrades the legacy runtime table without losing visual embeddings", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "videobook-audio-upgrade-"));
+    roots.push(root);
+    const dataDir = path.join(root, "data");
+    const workspaceDir = path.join(root, "workspace");
+    let engine: Engine | null = createEngine({
+      dataDir,
+      workspaceDir,
+      initialBookSlug: "audio-upgrade",
+      similarity: { provider },
+    });
+    let imageId: string;
+    try {
+      const image = value(
+        await engine.artifacts.create({ kind: "image", slug: "img-preserved" }),
+      );
+      imageId = image.artifactId;
+      value(await engine.files.write(imageId, "original.jpg", "cat"));
+      value(await engine.similarity.index(imageId));
+    } finally {
+      engine.close();
+      engine = null;
+    }
+
+    const catalog = new DatabaseSync(path.join(dataDir, "videobook.db"));
+    try {
+      catalog.exec(`
+        DROP INDEX IF EXISTS runtime_similarity_kind;
+        DROP INDEX IF EXISTS runtime_similarity_object;
+        ALTER TABLE runtime_similarity_embeddings
+          RENAME TO runtime_similarity_embeddings_current;
+        CREATE TABLE runtime_similarity_embeddings (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          artifact_id TEXT NOT NULL,
+          kind TEXT NOT NULL CHECK (kind IN ('image', 'video')),
+          source_path TEXT NOT NULL,
+          object_hash TEXT NOT NULL,
+          embedding_space TEXT NOT NULL,
+          dimensions INTEGER NOT NULL,
+          vector_blob BLOB NOT NULL,
+          frame_count INTEGER,
+          updated_at INTEGER NOT NULL,
+          UNIQUE(artifact_id, embedding_space)
+        );
+        INSERT INTO runtime_similarity_embeddings(
+          id, artifact_id, kind, source_path, object_hash,
+          embedding_space, dimensions, vector_blob, frame_count, updated_at
+        )
+        SELECT
+          id, artifact_id, kind, source_path, object_hash,
+          embedding_space, dimensions, vector_blob, frame_count, updated_at
+        FROM runtime_similarity_embeddings_current;
+        DROP TABLE runtime_similarity_embeddings_current;
+        CREATE INDEX runtime_similarity_kind
+          ON runtime_similarity_embeddings(kind, embedding_space, updated_at);
+        CREATE INDEX runtime_similarity_object
+          ON runtime_similarity_embeddings(object_hash, embedding_space);
+      `);
+    } finally {
+      catalog.close();
+    }
+
+    engine = createEngine({
+      dataDir,
+      workspaceDir,
+      similarity: { provider, audio: { provider: audioProvider } },
+    });
+    try {
+      expect(value(engine.similarity.status(imageId!))).toMatchObject({
+        state: "ready",
+        kind: "image",
+      });
+      const audio = value(
+        await engine.artifacts.create({ kind: "audio", slug: "aud-after-upgrade" }),
+      );
+      value(await engine.files.write(audio.artifactId, "original.mp3", "purr"));
+      expect(value(await engine.similarity.index(audio.artifactId))).toMatchObject({
+        kind: "audio",
+      });
+      expect(value(engine.similarity.stats())).toMatchObject({
+        imageCount: 1,
+        audioCount: 1,
       });
     } finally {
       engine.close();
@@ -342,6 +580,14 @@ function textVector(content: string): Float32Array {
   const vector = new Float32Array([cat ? 1 : 0, rug ? 1 : 0, ocean ? 1 : 0, calm ? 1 : 0]);
   if (vector.every((item) => item === 0)) vector[3] = 1;
   return vector;
+}
+
+function audioVector(content: string): Float32Array {
+  if (content.startsWith("purr variant")) {
+    return new Float32Array([0.98, 0.2, 0]);
+  }
+  if (content.startsWith("purr")) return new Float32Array([1, 0, 0]);
+  return new Float32Array([0, 1, 0]);
 }
 
 function value<T>(

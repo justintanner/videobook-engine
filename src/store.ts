@@ -15,6 +15,7 @@ import type {
 } from "./engine-types.js";
 import {
   RUNTIME_SCHEMA_SQL,
+  RUNTIME_SIMILARITY_SCHEMA_SQL,
   RUNTIME_TABLES,
   SCHEMA_VERSION,
   SEMANTIC_SCHEMA_SQL,
@@ -261,6 +262,7 @@ export class DoltStore {
       }
     }
 
+    this.upgradeRuntimeSimilaritySchema();
     this.db.exec(RUNTIME_SCHEMA_SQL);
     this.db
       .prepare(
@@ -292,6 +294,42 @@ export class DoltStore {
     this.db
       .prepare("SELECT dolt_remote('add', ?, ?) AS result")
       .get(remote.name, remote.url);
+  }
+
+  private upgradeRuntimeSimilaritySchema(): void {
+    const row = this.db
+      .prepare(
+        `SELECT sql FROM sqlite_master
+         WHERE type='table' AND name='runtime_similarity_embeddings'`,
+      )
+      .get() as unknown as { sql: string } | undefined;
+    if (!row || row.sql.includes("'audio'")) return;
+
+    this.begin();
+    try {
+      this.db.exec(`
+        DROP INDEX IF EXISTS runtime_similarity_kind;
+        DROP INDEX IF EXISTS runtime_similarity_object;
+        ALTER TABLE runtime_similarity_embeddings
+          RENAME TO runtime_similarity_embeddings_legacy;
+      `);
+      this.db.exec(RUNTIME_SIMILARITY_SCHEMA_SQL);
+      this.db.exec(`
+        INSERT INTO runtime_similarity_embeddings(
+          id, artifact_id, kind, source_path, object_hash,
+          embedding_space, dimensions, vector_blob, frame_count, updated_at
+        )
+        SELECT
+          id, artifact_id, kind, source_path, object_hash,
+          embedding_space, dimensions, vector_blob, frame_count, updated_at
+        FROM runtime_similarity_embeddings_legacy;
+        DROP TABLE runtime_similarity_embeddings_legacy;
+      `);
+      this.commitSql();
+    } catch (error) {
+      this.rollback();
+      throw error;
+    }
   }
 
   private recoverOutbox(): void {

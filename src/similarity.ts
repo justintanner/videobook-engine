@@ -6,6 +6,8 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 
 import {
+  AutoProcessor,
+  ClapAudioModelWithProjection,
   pipeline,
   RawImage,
 } from "@huggingface/transformers";
@@ -22,6 +24,8 @@ import {
   type EngineError,
   type Result,
   type SimilarityApi,
+  type SimilarityAudioConfig,
+  type SimilarityAudioEmbeddingProvider,
   type SimilarityConfig,
   type SimilarityEmbeddingProvider,
   type SimilarityIndexOptions,
@@ -52,6 +56,15 @@ const DEFAULT_MODEL_REVISION =
 const DEFAULT_EMBEDDING_SPACE =
   "clip-vit-b32-q8-d15189d7028b43f1d3e65039190477f6af591c2a-v1";
 const DEFAULT_DIMENSIONS = 512;
+
+const DEFAULT_AUDIO_MODEL_ID = "Xenova/clap-htsat-unfused";
+const DEFAULT_AUDIO_MODEL_REVISION =
+  "c28f2883575e590e04d3146ff0713c2448d691ba";
+const DEFAULT_AUDIO_EMBEDDING_SPACE =
+  "clap-htsat-unfused-q8-c28f2883575e590e04d3146ff0713c2448d691ba-audio-v1";
+const DEFAULT_AUDIO_DIMENSIONS = 512;
+const DEFAULT_AUDIO_SAMPLE_RATE = 48_000;
+const DEFAULT_AUDIO_MAX_SAMPLES = 480_000;
 
 const DEFAULT_TEXT_MODEL_ID = "onnx-community/all-MiniLM-L6-v2-ONNX";
 const DEFAULT_TEXT_MODEL_REVISION =
@@ -92,6 +105,34 @@ interface TextFeaturePipeline {
   }): Promise<{ data: Float32Array; dims: number[] }>;
   tokenizer: TextTokenizer;
 }
+
+interface AudioProcessor {
+  (
+    audio: Float32Array,
+  ): Promise<Record<string, unknown>>;
+  feature_extractor?: {
+    config?: {
+      sampling_rate?: number;
+      nb_max_samples?: number;
+    };
+  };
+}
+
+interface AudioModel {
+  (
+    inputs: Record<string, unknown>,
+  ): Promise<{
+    audio_embeds: {
+      data: Float32Array;
+      dims: number[];
+    };
+  }>;
+}
+
+type MediaSimilarityKind = Exclude<SimilarityKind, "text">;
+type MediaEmbeddingProvider =
+  | SimilarityEmbeddingProvider
+  | SimilarityAudioEmbeddingProvider;
 
 interface EmbeddingRow {
   id: number;
@@ -166,6 +207,7 @@ export function createSimilarityApi(context: EngineContext): SimilarityApi {
 
 class LocalSimilarityApi implements SimilarityApi {
   private readonly provider: SimilarityEmbeddingProvider;
+  private readonly audioProvider: SimilarityAudioEmbeddingProvider | null;
   private readonly textProvider: SimilarityTextEmbeddingProvider | null;
   private readonly indexes = new Map<string, CachedIndex>();
 
@@ -174,6 +216,10 @@ class LocalSimilarityApi implements SimilarityApi {
     config: SimilarityConfig,
   ) {
     this.provider = config.provider ?? new LocalClipProvider(context, config);
+    this.audioProvider = config.audio
+      ? config.audio.provider ??
+        new LocalClapAudioProvider(context, config, config.audio)
+      : null;
     this.textProvider = config.text
       ? config.text.provider ?? new LocalTextProvider(context, config, config.text)
       : null;
@@ -193,20 +239,26 @@ class LocalSimilarityApi implements SimilarityApi {
     return resultOf(async () => {
       const kinds = options.kind
         ? [options.kind]
-        : (["image", "video", ...(this.textProvider ? ["text"] : [])] as SimilarityKind[]);
+        : ([
+            "image",
+            "video",
+            ...(this.audioProvider ? ["audio"] : []),
+            ...(this.textProvider ? ["text"] : []),
+          ] as SimilarityKind[]);
       const spaces: Partial<Record<SimilarityKind, string>> = {};
-      const preparedMedia = new Set<SimilarityEmbeddingProvider>();
+      const preparedMedia = new Set<MediaEmbeddingProvider>();
       for (const kind of kinds) {
         if (kind === "text") {
           const provider = this.requireTextProvider();
           await provider.prepare();
           spaces.text = provider.embeddingSpace;
         } else {
-          if (!preparedMedia.has(this.provider)) {
-            await this.provider.prepare();
-            preparedMedia.add(this.provider);
+          const provider = this.providerFor(kind);
+          if (!preparedMedia.has(provider)) {
+            await provider.prepare();
+            preparedMedia.add(provider);
           }
-          spaces[kind] = this.provider.embeddingSpace;
+          spaces[kind] = provider.embeddingSpace;
         }
       }
       return {
@@ -236,7 +288,12 @@ class LocalSimilarityApi implements SimilarityApi {
     return resultOf(async () => {
       const allowedKinds = options.kind
         ? [options.kind]
-        : (["image", "video", ...(this.textProvider ? ["text"] : [])] as SimilarityKind[]);
+        : ([
+            "image",
+            "video",
+            ...(this.audioProvider ? ["audio"] : []),
+            ...(this.textProvider ? ["text"] : []),
+          ] as SimilarityKind[]);
       const artifactKinds = allowedKinds.flatMap((kind) =>
         kind === "text" ? [...TEXT_ARTIFACT_KINDS] : [kind],
       );
@@ -296,16 +353,17 @@ class LocalSimilarityApi implements SimilarityApi {
           updatedAt: row.updated_at,
         } satisfies SimilarityStatus;
       }
+      const provider = this.providerFor(kind);
       const row = this.embeddingForArtifact(
         artifact.artifact_id,
-        this.provider.embeddingSpace,
+        provider.embeddingSpace,
       );
       if (!row) {
         return {
           artifactId: artifact.artifact_id,
           kind,
           state: "not_indexed",
-          embeddingSpace: this.provider.embeddingSpace,
+          embeddingSpace: provider.embeddingSpace,
         } satisfies SimilarityStatus;
       }
       return {
@@ -337,6 +395,20 @@ class LocalSimilarityApi implements SimilarityApi {
         image: this.provider.embeddingSpace,
         video: this.provider.embeddingSpace,
       };
+      let audioCount = 0;
+      if (this.audioProvider) {
+        spaces.audio = this.audioProvider.embeddingSpace;
+        const count = this.context.store.db
+          .prepare(
+            `SELECT COUNT(*) AS count
+             FROM runtime_similarity_embeddings
+             WHERE kind='audio' AND embedding_space=?`,
+          )
+          .get(this.audioProvider.embeddingSpace) as unknown as {
+          count: number;
+        };
+        audioCount = count.count;
+      }
       let textCount = 0;
       if (this.textProvider) {
         spaces.text = this.textProvider.embeddingSpace;
@@ -358,6 +430,7 @@ class LocalSimilarityApi implements SimilarityApi {
         embeddingSpaces: spaces,
         imageCount: rows.find((row) => row.kind === "image")?.count ?? 0,
         videoCount: rows.find((row) => row.kind === "video")?.count ?? 0,
+        audioCount,
         textCount,
       };
     });
@@ -411,18 +484,19 @@ class LocalSimilarityApi implements SimilarityApi {
 
   private async indexMedia(
     artifact: ArtifactRow,
-    kind: "image" | "video",
+    kind: MediaSimilarityKind,
     options: SimilarityIndexOptions,
   ): Promise<SimilarityIndexResult> {
+    const provider = this.providerFor(kind);
     const source = this.sourceFor(artifact, kind);
     const existing = this.embeddingForArtifact(
       artifact.artifact_id,
-      this.provider.embeddingSpace,
+      provider.embeddingSpace,
     );
     if (
       existing &&
       existing.object_hash === source.object_hash &&
-      existing.dimensions === this.provider.dimensions &&
+      existing.dimensions === provider.dimensions &&
       !options.force
     ) {
       this.addToCachedIndex(existing, vectorFromBlob(existing));
@@ -432,8 +506,8 @@ class LocalSimilarityApi implements SimilarityApi {
       ? this.embeddingForObject(
           source.object_hash,
           kind,
-          this.provider.embeddingSpace,
-          this.provider.dimensions,
+          provider.embeddingSpace,
+          provider.dimensions,
         )
       : null;
     const embedded = reusable
@@ -456,7 +530,7 @@ class LocalSimilarityApi implements SimilarityApi {
             kind,
             source.path,
             source.object_hash,
-            this.provider.dimensions,
+            provider.dimensions,
             vectorToBlob(embedded.vector),
             embedded.frameCount,
             now,
@@ -476,8 +550,8 @@ class LocalSimilarityApi implements SimilarityApi {
           kind,
           source.path,
           source.object_hash,
-          this.provider.embeddingSpace,
-          this.provider.dimensions,
+          provider.embeddingSpace,
+          provider.dimensions,
           vectorToBlob(embedded.vector),
           embedded.frameCount,
           now,
@@ -639,14 +713,15 @@ class LocalSimilarityApi implements SimilarityApi {
 
   private async findSimilarMedia(
     artifact: ArtifactRow,
-    kind: "image" | "video",
+    kind: MediaSimilarityKind,
     options: SimilarityQueryOptions,
   ): Promise<SimilarityMatch[]> {
     const limit = checkedLimit(options.limit);
     const minScore = checkedMinScore(options.minScore);
+    const provider = this.providerFor(kind);
     const query = this.embeddingForArtifact(
       artifact.artifact_id,
-      this.provider.embeddingSpace,
+      provider.embeddingSpace,
     );
     if (!query) {
       throw new EngineFault({
@@ -875,6 +950,15 @@ class LocalSimilarityApi implements SimilarityApi {
     const localPath = await this.context.objects.ensureLocalPath(
       source.object_hash,
     );
+    if (source.kind === "audio") {
+      const provider = this.requireAudioProvider();
+      await provider.prepare();
+      return {
+        vector: normalized(await provider.embedAudio(localPath)),
+        frameCount: null,
+        reused: false,
+      };
+    }
     await this.provider.prepare();
     if (source.kind === "image") {
       return {
@@ -995,7 +1079,9 @@ class LocalSimilarityApi implements SimilarityApi {
       ? "(?:png|jpe?g|webp)"
       : kind === "video"
         ? "(?:mp4|mov|webm|mkv|avi)"
-        : "(?:json|md|txt)";
+        : kind === "audio"
+          ? "(?:mp3|wav|ogg|flac|aac|m4a)"
+          : "(?:json|md|txt)";
     const sources = rows.filter((row) =>
       new RegExp(`(?:^|/)original\\.${extension}$`, "i").test(row.path),
     );
@@ -1039,7 +1125,7 @@ class LocalSimilarityApi implements SimilarityApi {
 
   private embeddingForObject(
     objectHash: string,
-    kind: "image" | "video",
+    kind: MediaSimilarityKind,
     embeddingSpace: string,
     dimensions: number,
   ): EmbeddingRow | null {
@@ -1070,7 +1156,7 @@ class LocalSimilarityApi implements SimilarityApi {
   }
 
   private exactObjectEmbeddings(
-    kind: "image" | "video",
+    kind: MediaSimilarityKind,
     objectHash: string,
     embeddingSpace: string,
   ): EmbeddingRow[] {
@@ -1085,7 +1171,7 @@ class LocalSimilarityApi implements SimilarityApi {
   }
 
   private activeEmbeddingsByIds(
-    kind: "image" | "video",
+    kind: MediaSimilarityKind,
     embeddingSpace: string,
     ids: number[],
   ): EmbeddingRow[] {
@@ -1106,7 +1192,7 @@ class LocalSimilarityApi implements SimilarityApi {
   }
 
   private indexFor(
-    kind: "image" | "video",
+    kind: MediaSimilarityKind,
     embeddingSpace: string,
     dimensions: number,
   ): CachedIndex {
@@ -1163,7 +1249,7 @@ class LocalSimilarityApi implements SimilarityApi {
   }
 
   private cachedIndex(
-    kind: "image" | "video",
+    kind: MediaSimilarityKind,
     embeddingSpace: string,
     dimensions: number,
     sql: string,
@@ -1335,6 +1421,20 @@ class LocalSimilarityApi implements SimilarityApi {
     };
   }
 
+  private providerFor(kind: MediaSimilarityKind): MediaEmbeddingProvider {
+    return kind === "audio" ? this.requireAudioProvider() : this.provider;
+  }
+
+  private requireAudioProvider(): SimilarityAudioEmbeddingProvider {
+    if (!this.audioProvider) {
+      throw new EngineFault({
+        code: "FEATURE_UNAVAILABLE",
+        message: "Audio similarity is disabled; configure EngineConfig.similarity.audio",
+      });
+    }
+    return this.audioProvider;
+  }
+
   private requireTextProvider(): SimilarityTextEmbeddingProvider {
     if (!this.textProvider) {
       throw new EngineFault({
@@ -1458,6 +1558,107 @@ class LocalClipProvider implements SimilarityEmbeddingProvider {
   }
 }
 
+class LocalClapAudioProvider implements SimilarityAudioEmbeddingProvider {
+  readonly embeddingSpace: string;
+  readonly dimensions = DEFAULT_AUDIO_DIMENSIONS;
+  private processor: AudioProcessor | null = null;
+  private model: AudioModel | null = null;
+  private sampleRate = DEFAULT_AUDIO_SAMPLE_RATE;
+  private maxSamples = DEFAULT_AUDIO_MAX_SAMPLES;
+
+  constructor(
+    private readonly context: EngineContext,
+    private readonly sharedConfig: SimilarityConfig,
+    private readonly config: SimilarityAudioConfig,
+  ) {
+    this.embeddingSpace =
+      config.modelId && config.modelId !== DEFAULT_AUDIO_MODEL_ID
+        ? `audio-${config.modelId.replace(/[^a-zA-Z0-9]+/g, "-")}-v1`
+        : DEFAULT_AUDIO_EMBEDDING_SPACE;
+  }
+
+  async prepare(): Promise<void> {
+    await this.loadModel();
+  }
+
+  async embedAudio(sourcePath: string): Promise<Float32Array> {
+    const { processor, model } = await this.loadModel();
+    const audio = await decodeAudioToMono(
+      this.config.ffmpegPath ?? this.sharedConfig.ffmpegPath ?? "ffmpeg",
+      sourcePath,
+      this.sampleRate,
+      this.maxSamples,
+    );
+    const inputs = await processor(audio);
+    const output = await model(inputs);
+    const dimensions = output.audio_embeds.dims;
+    if (
+      dimensions.length !== 2 ||
+      dimensions[0] !== 1 ||
+      dimensions[1] !== this.dimensions ||
+      output.audio_embeds.data.length !== this.dimensions
+    ) {
+      throw new Error(
+        `Unexpected audio embedding shape: ${dimensions.join("x")}`,
+      );
+    }
+    return output.audio_embeds.data.slice();
+  }
+
+  private async loadModel(): Promise<{
+    processor: AudioProcessor;
+    model: AudioModel;
+  }> {
+    if (this.processor && this.model) {
+      return { processor: this.processor, model: this.model };
+    }
+    const dataDir = this.context.config.dataDir;
+    if (!dataDir) throw new Error("Audio similarity requires a configured dataDir");
+    const cacheDir = this.config.modelCacheDir ??
+      this.sharedConfig.modelCacheDir ??
+      path.join(dataDir, "similarity-models");
+    await mkdir(cacheDir, { recursive: true });
+    const modelId = this.config.modelId ?? DEFAULT_AUDIO_MODEL_ID;
+    const allowDownload = this.config.allowModelDownload ??
+      this.sharedConfig.allowModelDownload;
+    const pinned = modelId === DEFAULT_AUDIO_MODEL_ID
+      ? { revision: DEFAULT_AUDIO_MODEL_REVISION }
+      : {};
+    try {
+      const processor = await AutoProcessor.from_pretrained(modelId, {
+        cache_dir: cacheDir,
+        local_files_only: allowDownload === false,
+        ...pinned,
+      }) as unknown as AudioProcessor;
+      const model = await ClapAudioModelWithProjection.from_pretrained(
+        modelId,
+        {
+          dtype: "q8",
+          cache_dir: cacheDir,
+          local_files_only: allowDownload === false,
+          ...pinned,
+        },
+      ) as unknown as AudioModel;
+      const featureConfig = processor.feature_extractor?.config;
+      this.sampleRate = checkedAudioSampleRate(
+        featureConfig?.sampling_rate,
+      );
+      this.maxSamples = checkedAudioMaxSamples(
+        featureConfig?.nb_max_samples,
+        this.sampleRate,
+      );
+      this.processor = processor;
+      this.model = model;
+      return { processor, model };
+    } catch (error) {
+      throw new EngineFault({
+        code: allowDownload === false ? "OFFLINE" : "FEATURE_UNAVAILABLE",
+        message: `Unable to load local audio similarity model: ${errorMessage(error)}`,
+      });
+    }
+  }
+}
+
 class LocalTextProvider implements SimilarityTextEmbeddingProvider {
   readonly embeddingSpace: string;
   readonly dimensions = DEFAULT_TEXT_DIMENSIONS;
@@ -1552,13 +1753,17 @@ function disabledSimilarityApi(): SimilarityApi {
 }
 
 function similarityKind(artifact: ArtifactRow): SimilarityKind {
-  if (artifact.kind === "image" || artifact.kind === "video") {
+  if (
+    artifact.kind === "image" ||
+    artifact.kind === "video" ||
+    artifact.kind === "audio"
+  ) {
     return artifact.kind;
   }
   if (TEXT_ARTIFACT_KINDS.has(artifact.kind)) return "text";
   throw new EngineFault({
     code: "INVALID_INPUT",
-    message: `Similarity supports image, video, and text artifacts, not ${artifact.kind}`,
+    message: `Similarity supports image, video, audio, and text artifacts, not ${artifact.kind}`,
   });
 }
 
@@ -1601,10 +1806,66 @@ async function probeDuration(
   return duration;
 }
 
-function runCommand(
+async function decodeAudioToMono(
+  ffmpegPath: string,
+  sourcePath: string,
+  sampleRate: number,
+  maxSamples: number,
+): Promise<Float32Array> {
+  const output = await runBinaryCommand(ffmpegPath, [
+    "-hide_banner",
+    "-loglevel",
+    "error",
+    "-nostdin",
+    "-i",
+    sourcePath,
+    "-map",
+    "0:a:0",
+    "-vn",
+    "-ac",
+    "1",
+    "-ar",
+    String(sampleRate),
+    "-t",
+    String(maxSamples / sampleRate),
+    "-f",
+    "f32le",
+    "-acodec",
+    "pcm_f32le",
+    "pipe:1",
+  ]);
+  if (output.stdout.byteLength === 0) {
+    throw new EngineFault({
+      code: "INVALID_INPUT",
+      message: `No audio samples could be decoded from ${sourcePath}`,
+    });
+  }
+  if (output.stdout.byteLength % Float32Array.BYTES_PER_ELEMENT !== 0) {
+    throw new Error("FFmpeg returned an invalid PCM byte length");
+  }
+  const bytes = new Uint8Array(output.stdout.byteLength);
+  bytes.set(output.stdout);
+  const decoded = new Float32Array(bytes.buffer);
+  return decoded.length > maxSamples
+    ? decoded.slice(0, maxSamples)
+    : decoded;
+}
+
+async function runCommand(
   command: string,
   args: string[],
 ): Promise<{ stdout: string; stderr: string }> {
+  const output = await runBinaryCommand(command, args);
+  return {
+    stdout: output.stdout.toString("utf8"),
+    stderr: output.stderr,
+  };
+}
+
+function runBinaryCommand(
+  command: string,
+  args: string[],
+): Promise<{ stdout: Buffer; stderr: string }> {
   return new Promise((resolve, reject) => {
     const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
     const stdout: Buffer[] = [];
@@ -1621,7 +1882,7 @@ function runCommand(
     });
     child.once("close", (code) => {
       const output = {
-        stdout: Buffer.concat(stdout).toString("utf8"),
+        stdout: Buffer.concat(stdout),
         stderr: Buffer.concat(stderr).toString("utf8"),
       };
       if (code === 0) {
@@ -1860,6 +2121,37 @@ function checkedMinScore(value: number | undefined): number | undefined {
     });
   }
   return value;
+}
+
+function checkedAudioSampleRate(value: number | undefined): number {
+  const sampleRate = value ?? DEFAULT_AUDIO_SAMPLE_RATE;
+  if (
+    !Number.isInteger(sampleRate) ||
+    sampleRate < 8_000 ||
+    sampleRate > 192_000
+  ) {
+    throw new Error(
+      "Audio model sampling rate must be an integer between 8000 and 192000",
+    );
+  }
+  return sampleRate;
+}
+
+function checkedAudioMaxSamples(
+  value: number | undefined,
+  sampleRate: number,
+): number {
+  const maxSamples = value ?? DEFAULT_AUDIO_MAX_SAMPLES;
+  if (
+    !Number.isInteger(maxSamples) ||
+    maxSamples < sampleRate ||
+    maxSamples > sampleRate * 60
+  ) {
+    throw new Error(
+      "Audio model window must be between 1 and 60 seconds",
+    );
+  }
+  return maxSamples;
 }
 
 function checkedTextMaxBytes(config: SimilarityTextConfig | undefined): number {

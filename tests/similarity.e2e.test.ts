@@ -16,6 +16,9 @@ const imageSource = process.env.VIDEOBOOK_E2E_IMAGE ??
 const imageDuplicate = path.resolve("vancat_profile.jpg");
 const videoSource = process.env.VIDEOBOOK_E2E_VIDEO ?? path.resolve("vancat.mp4");
 const realDescribe = process.env.VIDEOBOOK_REAL_MEDIA_E2E === "1" ? describe : describe.skip;
+const realAudioDescribe = process.env.VIDEOBOOK_REAL_AUDIO_E2E === "1"
+  ? describe
+  : describe.skip;
 const roots: string[] = [];
 
 afterEach(async () => {
@@ -109,6 +112,105 @@ realDescribe("single-book local similarity real-media E2E", () => {
         expect(value(engine.similarity.stats())).toMatchObject({ imageCount: 3, videoCount: 3 });
       } finally {
         engine?.close();
+      }
+    },
+    180_000,
+  );
+});
+
+realAudioDescribe("single-book local audio similarity real-media E2E", () => {
+  it(
+    "indexes exact and transcoded audio with the local CLAP provider",
+    async () => {
+      const root = await mkdtemp(path.join(tmpdir(), "videobook-audio-e2e-"));
+      roots.push(root);
+      const source = path.join(root, "tone.wav");
+      const transcoded = path.join(root, "tone.mp3");
+      await run("ffmpeg", [
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-f",
+        "lavfi",
+        "-i",
+        "sine=frequency=440:duration=2",
+        "-c:a",
+        "pcm_s16le",
+        source,
+      ]);
+      await run("ffmpeg", [
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-y",
+        "-i",
+        source,
+        "-b:a",
+        "64k",
+        transcoded,
+      ]);
+
+      const engine = createEngine({
+        dataDir: path.join(root, "data"),
+        workspaceDir: path.join(root, "workspaces"),
+        initialBookSlug: "real-audio",
+        similarity: {
+          audio: {
+            modelCacheDir: process.env.VIDEOBOOK_E2E_AUDIO_MODEL_CACHE ??
+              path.join(tmpdir(), "videobook-audio-model-cache"),
+          },
+        },
+      });
+      try {
+        const original = value(
+          await engine.artifacts.create({ kind: "audio", slug: "aud-source" }),
+        );
+        const exact = value(
+          await engine.artifacts.create({ kind: "audio", slug: "aud-exact" }),
+        );
+        const variant = value(
+          await engine.artifacts.create({ kind: "audio", slug: "aud-transcoded" }),
+        );
+        value(
+          await engine.files.writeFromPath(
+            original.artifactId,
+            "original.wav",
+            source,
+          ),
+        );
+        value(
+          await engine.files.writeFromPath(
+            exact.artifactId,
+            "original.wav",
+            source,
+          ),
+        );
+        value(
+          await engine.files.writeFromPath(
+            variant.artifactId,
+            "original.mp3",
+            transcoded,
+          ),
+        );
+
+        value(await engine.similarity.prepare({ kind: "audio" }));
+        for (const artifact of [original, exact, variant]) {
+          value(await engine.similarity.index(artifact.artifactId));
+        }
+        const matches = value(
+          await engine.similarity.findSimilar(original.artifactId, { limit: 10 }),
+        );
+        expect(matches[0]).toMatchObject({
+          artifactId: exact.artifactId,
+          kind: "audio",
+          exactBytes: true,
+        });
+        expect(
+          matches.find((match) => match.artifactId === variant.artifactId)?.score,
+        ).toBeGreaterThan(0.8);
+      } finally {
+        engine.close();
       }
     },
     180_000,

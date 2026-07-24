@@ -151,6 +151,7 @@ const engine = createEngine({
   rootDir: ".videobook",
   initialBookSlug: "reference-library",
   similarity: {
+    audio: {},
     text: {},
   },
 });
@@ -164,11 +165,13 @@ const matches = await engine.similarity.findSimilar(imageArtifactId, {
 });
 ```
 
-Image and video sources must be named `original.<extension>`. Text similarity
-supports `original.md`, `original.txt`, and `original.json` for `script`,
-`character`, `prompt`, `scene`, and `final` artifacts. All similarity queries
-search the single book-wide pool while preserving media kind and embedding-space
-boundaries.
+Image, video, and audio sources must be named `original.<extension>`. Audio
+similarity is opt-in through `similarity.audio` and uses local CLAP embeddings
+without Python. Supported audio extensions are MP3, WAV, OGG, FLAC, AAC, and
+M4A. Text similarity supports `original.md`, `original.txt`, and
+`original.json` for `script`, `character`, `prompt`, `scene`, and `final`
+artifacts. All similarity queries search the single book-wide pool while
+preserving media kind and embedding-space boundaries.
 
 ## Backups
 
