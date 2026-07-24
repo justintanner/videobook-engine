@@ -469,6 +469,9 @@ export function normalizeKind(input: string): ArtifactKind {
   }
 }
 
+/**
+ * Normalizes a name or slug with the canonical prefix for its artifact kind.
+ */
 export function artifactSlug(kind: ArtifactKind, input: string): string {
   if (kind === "final") return "final";
   const prefix = prefixForKind(kind);

@@ -32,7 +32,7 @@ try {
   const imageResult = await engine.artifacts.create({
     project: project.projectId,
     kind: "image",
-    slug: "img-thumbnail",
+    name: "Thumbnail",
   });
   if (!imageResult.ok) throw new Error(imageResult.error.message);
   console.log(`Created image: ${imageResult.value.slug}`);

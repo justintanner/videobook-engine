@@ -71,6 +71,38 @@ engine.close();
 `replacement.value.artifactId` differs from the deleted artifact’s identity.
 No files, jobs, leases, failures, or history leak across that reused slug.
 
+## Artifact slugs
+
+Every non-final artifact needs either a `name` or a `slug`. A `name` is
+trimmed and lowercased, spaces and punctuation become hyphens, repeated
+hyphens collapse, and the result receives the canonical prefix for its kind.
+Underscores are preserved.
+
+| Artifact kind | Canonical prefix | Example |
+| --- | --- | --- |
+| `video` | `vid-` | `vid-opening-shot` |
+| `image` | `img-` | `img-cover-art` |
+| `audio` | `aud-` | `aud-narration` |
+| `script` | `script-` | `script-first-draft` |
+| `character` | `char-` | `char-protagonist` |
+| `prompt` | `prompt-` | `prompt-cover-art` |
+| `scene` | `scene-` | `scene-opening-shot` |
+| `notebook` | `book-` | `book-research-notes` |
+| `final` | none | `final` |
+
+For example, `{ kind: "image", name: "Cover Art" }` creates
+`img-cover-art`. An explicit slug may include its canonical prefix or omit it;
+`{ kind: "scene", slug: "opening-shot" }` and
+`{ kind: "scene", slug: "scene-opening-shot" }` both create
+`scene-opening-shot`. A recognized prefix for another kind is rejected.
+
+Name-derived slugs automatically receive `-2`, `-3`, and later suffixes when
+the base slug is already active in the project. Explicit slug conflicts return
+`SLUG_CONFLICT` instead. Deleting an artifact releases its slug for exact
+reuse. Legacy `prm-`, `scn-`, and `nb-` slugs remain readable in existing
+projects, but new prompt, scene, and notebook slugs use `prompt-`, `scene-`,
+and `book-`.
+
 ## API
 
 `createEngine()` returns a namespaced `Engine`. Await `engine.ready` during

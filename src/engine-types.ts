@@ -263,14 +263,18 @@ export interface Artifact {
 export interface CreateArtifactInput {
   project: string;
   kind: ArtifactKind | string;
+  /** Name used to derive a canonical kind-prefixed slug. */
   name?: string;
+  /** Explicit slug; the canonical kind prefix is added when omitted. */
   slug?: string;
 }
 
 export interface RenameArtifactInput {
   project: string;
   artifact: string;
+  /** Name used to derive the artifact's new canonical slug. */
   name?: string;
+  /** Explicit new slug; the canonical kind prefix is added when omitted. */
   slug?: string;
 }
 
