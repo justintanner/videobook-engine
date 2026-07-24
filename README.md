@@ -77,6 +77,10 @@ The 14 local-only tables are `runtime_meta`, `runtime_jobs`,
 `runtime_logs`, `runtime_commit_outbox`, `runtime_similarity_embeddings`,
 `runtime_text_similarity_documents`, and `runtime_text_similarity_chunks`.
 
+See [the complete engine layout](docs/engine-layout.md) for every schema
+column, relationship, index, runtime/CAS structure, current editing contract,
+and the additional normalized structures a full non-linear editor will need.
+
 ## Artifacts and slugs
 
 Artifact slugs are canonical and kind-prefixed. Supplying a `name` derives a

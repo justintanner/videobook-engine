@@ -1,0 +1,489 @@
+# Videobook engine layout
+
+This document is the column-by-column layout of the engine-owned data model.
+It describes schema version 4 as implemented today, then identifies the
+additional structures needed for a full non-linear video editor.
+
+The executable source of truth remains
+[`src/schema.ts`](../src/schema.ts). If this document and the DDL disagree, the
+DDL wins. “Entire Dolt schema” below means every engine-owned, versioned table
+and index plus the committed `dolt_ignore` policy; Dolt's generated internal
+system tables are intentionally outside the application schema.
+
+## Storage boundary
+
+```text
+rootDir/
+├── data/
+│   ├── videobook.db
+│   │   ├── Dolt-versioned semantic tables
+│   │   ├── committed dolt_ignore policy
+│   │   └── ignored runtime_* tables and sqlite_sequence
+│   └── objects/
+│       └── sha256/
+│           └── <first two hash characters>/
+│               └── <full 64-character SHA-256>
+└── workspaces/
+    └── <artifact UUIDv7>/
+        └── <materialized logical artifact paths>
+```
+
+The optional remote object key has the same two-character fan-out:
+`<objectPrefix>/<first two hash characters>/<full SHA-256>`. The default
+prefix is `superlzy-media/videobook/sha256`.
+
+```mermaid
+flowchart LR
+  API[Engine APIs] --> TX[Serialized semantic mutation]
+  TX --> DB[(videobook.db)]
+  TX --> OUTBOX[runtime_commit_outbox]
+  DB --> STAGE[Allowlisted Dolt staging]
+  OUTBOX --> STAGE
+  STAGE --> REV[Dolt main revision]
+
+  FILES[Artifact file APIs] --> CAS[Immutable SHA-256 objects]
+  FILES --> MAP[Versioned artifact_files mapping]
+  CAS --> WS[Disposable artifact workspace]
+  MAP --> WS
+
+  JOBS[Jobs, leases, status, similarity] --> RUNTIME[Ignored runtime tables]
+  RUNTIME -. never staged .-> DB
+```
+
+## Global invariants
+
+- One engine catalog contains exactly one `book` row and one matching
+  `timeline` row. There is no project scope.
+- The only supported live Dolt branch is `main`.
+- Semantic mutations are SQL transactions followed by forward-only Dolt
+  commits. A restore creates a new commit; it never rewinds the live branch.
+- `SEMANTIC_TABLES` is the staging allowlist. Every mutation also records an
+  `operations` row.
+- `runtime_%` and `sqlite_sequence` are ignored by Dolt. Runtime state can be
+  rebuilt, expired, or invalidated without changing semantic history.
+- Engine-generated surrogate identities are stable UUIDv7 strings; the SQL
+  columns are `TEXT`, so UUID form is enforced by engine APIs rather than a
+  database check. Content identity is a lowercase, 64-character SHA-256.
+- Timestamps are integer Unix epoch milliseconds. Timeline positions that are
+  currently modeled use integer frames.
+- JSON is stored as canonical text with recursively sorted object keys.
+- Deletes are hard deletes. Owned rows cascade; live artifact/entity
+  references restrict deletion; immutable objects and prior Dolt revisions
+  remain available.
+
+## Dolt-versioned semantic schema
+
+Notation used below:
+
+- Unmarked columns are `NOT NULL`.
+- `?` means nullable.
+- `PK`, `UQ`, and `FK` mean primary key, unique key, and foreign key.
+- `→` names the referenced column.
+- Defaults and checks are shown inline.
+
+There are 25 allowlisted semantic tables.
+
+### Catalog, artifacts, and content
+
+| Table | Columns | Keys, constraints, and purpose |
+| --- | --- | --- |
+| `engine_schema` | `singleton INTEGER`<br>`version INTEGER`<br>`created_at INTEGER` | `singleton PK CHECK(singleton = 1)`. Records the clean-break catalog version. Version 4 rejects older catalogs rather than migrating them. |
+| `book` | `book_id TEXT`<br>`slug TEXT`<br>`created_at INTEGER` | `book_id PK`; `slug UQ`. Exactly one row per engine root. |
+| `artifacts` | `artifact_id TEXT`<br>`slug TEXT`<br>`kind TEXT`<br>`created_at INTEGER` | `artifact_id PK`; `slug UQ`; `kind CHECK IN (video, image, audio, script, character, prompt, scene, final)`. The artifact is the stable identity for source media, generated media, documents, and final renders. |
+| `objects` | `object_hash TEXT`<br>`size_bytes INTEGER`<br>`created_at INTEGER` | `object_hash PK`; `size_bytes CHECK >= 0`. This is versioned metadata for immutable bytes stored outside the database. |
+| `artifact_files` | `artifact_id TEXT`<br>`path TEXT`<br>`object_hash TEXT`<br>`mtime_ms INTEGER`<br>`created_at INTEGER` | `(artifact_id, path) PK`; `artifact_id FK → artifacts.artifact_id ON DELETE CASCADE`; `object_hash FK → objects.object_hash ON DELETE RESTRICT`. Maps a logical artifact path to immutable content. |
+| `book_metadata` | `key TEXT`<br>`value_json TEXT` | `key PK`. Singleton-book key/value metadata; no redundant `book_id`. |
+| `artifact_metadata` | `artifact_id TEXT`<br>`key TEXT`<br>`value_json TEXT` | `(artifact_id, key) PK`; `artifact_id FK → artifacts.artifact_id ON DELETE CASCADE`. Extensible artifact metadata that participates in revisions. |
+
+### Creative entities and notebook graph
+
+| Table | Columns | Keys, constraints, and purpose |
+| --- | --- | --- |
+| `entities` | `entity_id TEXT`<br>`type TEXT`<br>`name TEXT`<br>`description TEXT?`<br>`prompt TEXT?`<br>`data_json TEXT DEFAULT '{}'`<br>`created_at INTEGER` | `entity_id PK`; `type CHECK IN (prompt, character, scene)`. Normalized reusable creative concepts. |
+| `notebooks` | `notebook_id TEXT`<br>`name TEXT`<br>`properties_json TEXT DEFAULT '{}'`<br>`created_at INTEGER` | `notebook_id PK`. Owns a generation/authoring graph. |
+| `cells` | `notebook_id TEXT`<br>`cell_id TEXT`<br>`type TEXT`<br>`title TEXT`<br>`position_x REAL`<br>`position_y REAL`<br>`entity_id TEXT?`<br>`prompt TEXT?`<br>`model TEXT?`<br>`inputs_json TEXT DEFAULT '{}'`<br>`output_artifact_id TEXT?` | `(notebook_id, cell_id) PK`; notebook `FK → notebooks ON DELETE CASCADE`; entity `FK → entities ON DELETE RESTRICT`; output `FK → artifacts ON DELETE RESTRICT`; `type CHECK IN (prompt, character, scene, asset, image, video)`. |
+| `edges` | `notebook_id TEXT`<br>`edge_id TEXT`<br>`source_cell_id TEXT`<br>`target_cell_id TEXT`<br>`target_input TEXT` | `(notebook_id, edge_id) PK`; notebook `FK → notebooks ON DELETE CASCADE`; composite source and target FKs reference cells in the same notebook and cascade on cell deletion. |
+| `runs` | `run_id TEXT`<br>`notebook_id TEXT`<br>`status TEXT`<br>`started_at INTEGER`<br>`completed_at INTEGER`<br>`cell_order_json TEXT`<br>`outputs_json TEXT`<br>`error TEXT?` | `run_id PK`; notebook `FK → notebooks ON DELETE CASCADE`; `status CHECK IN (completed, failed, aborted)`. Terminal, versioned notebook execution records. |
+
+### Current timeline and media editing state
+
+| Table | Columns | Keys, constraints, and purpose |
+| --- | --- | --- |
+| `timeline` | `book_id TEXT`<br>`render TEXT DEFAULT 'landscape'` | `book_id PK FK → book.book_id ON DELETE CASCADE`; `render CHECK IN (landscape, portrait, square)`. One sequence-level orientation row. |
+| `timeline_slots` | `slot_id TEXT`<br>`artifact_id TEXT`<br>`ordinal INTEGER`<br>`volume REAL?`<br>`audio_fade_in REAL?`<br>`audio_fade_out REAL?` | `slot_id PK`; artifact `FK → artifacts ON DELETE RESTRICT`; `ordinal CHECK >= 0`; volume and fades are null or `>= 0`. A single ordered visual lane; ownership by the singleton timeline is implicit. |
+| `timeline_audio` | `audio_id TEXT`<br>`artifact_id TEXT`<br>`ordinal INTEGER`<br>`start_frame INTEGER`<br>`duration_frames INTEGER`<br>`volume REAL?`<br>`fade_in REAL?`<br>`fade_out REAL?` | `audio_id PK`; artifact `FK → artifacts ON DELETE RESTRICT`; ordinal/start `CHECK >= 0`; duration `CHECK > 0`; volume and fades are null or `>= 0`. Ordered overlays with explicit timeline timing. |
+| `audio_waveforms` | `artifact_id TEXT`<br>`peaks_json TEXT` | `artifact_id PK FK → artifacts.artifact_id ON DELETE CASCADE`. Versioned waveform peaks used by editing UI. |
+
+The normalized current relationship is:
+
+```mermaid
+erDiagram
+  BOOK ||--|| TIMELINE : owns
+  ARTIFACTS ||--o{ TIMELINE_SLOTS : supplies
+  ARTIFACTS ||--o{ TIMELINE_AUDIO : supplies
+  ARTIFACTS ||--o| AUDIO_WAVEFORMS : has
+  ARTIFACTS ||--o{ ARTIFACT_FILES : maps
+  OBJECTS ||--o{ ARTIFACT_FILES : backs
+```
+
+`timeline_slots` order is defined by `(ordinal, slot_id)`. It does not
+currently store timeline start, source in/out, duration, track, transform,
+speed, opacity, effects, or transitions. `timeline_audio` does store start and
+duration frames, but there is no catalog-level frame-rate/timebase row yet.
+
+### Prompts and messages
+
+| Table | Columns | Keys, constraints, and purpose |
+| --- | --- | --- |
+| `prompt_entries` | `prompt_id TEXT`<br>`surface TEXT`<br>`prompt TEXT`<br>`context_json TEXT DEFAULT '{}'`<br>`created_at INTEGER` | `prompt_id PK`. Semantic prompt history grouped by UI or agent surface. |
+| `messages` | `message_id TEXT`<br>`role TEXT`<br>`body_json TEXT`<br>`created_at INTEGER` | `message_id PK`. Structured semantic conversation history. |
+
+### Operations, action graph, and terminal jobs
+
+| Table | Columns | Keys, constraints, and purpose |
+| --- | --- | --- |
+| `operations` | `operation_id TEXT`<br>`operation TEXT`<br>`artifact_id TEXT?`<br>`details_json TEXT DEFAULT '{}'`<br>`write_set_json TEXT DEFAULT '[]'`<br>`base_revision TEXT?`<br>`created_at INTEGER`<br>`author TEXT` | `operation_id PK`. One low-level provenance row is written with every semantic mutation. Artifact and revision references are deliberately loose so audit history survives deletion. |
+| `actions` | `action_id TEXT`<br>`operation TEXT`<br>`scope TEXT`<br>`actor TEXT`<br>`lane TEXT`<br>`phase TEXT`<br>`base_revision TEXT?`<br>`target_artifact_id TEXT?`<br>`target_action_id TEXT?`<br>`layout_json TEXT?`<br>`details_json TEXT DEFAULT '{}'`<br>`created_at INTEGER` | `action_id PK`; scope `CHECK IN (book, artifact, layout, external, system)`; phase `CHECK IN (requested, started, completed, failed, cancelled, conflicted)`. High-level workflow/action projection. Targets are loose audit references. |
+| `action_events` | `event_id TEXT`<br>`action_id TEXT`<br>`operation_id TEXT`<br>`phase TEXT`<br>`details_json TEXT DEFAULT '{}'`<br>`created_at INTEGER` | `event_id PK`; action `FK → actions ON DELETE CASCADE`; same phase check as `actions`. `operation_id` is a loose provenance link. |
+| `action_parents` | `action_id TEXT`<br>`parent_action_id TEXT` | `(action_id, parent_action_id) PK`; child `FK → actions ON DELETE CASCADE`; parent `FK → actions ON DELETE RESTRICT`. Forms the action DAG. |
+| `action_artifacts` | `action_id TEXT`<br>`artifact_id TEXT`<br>`direction TEXT` | `(action_id, artifact_id, direction) PK`; action `FK → actions ON DELETE CASCADE`; `direction CHECK IN (input, output)`. Artifact ID is deliberately loose for durable lineage. |
+| `action_write_set` | `action_id TEXT`<br>`resource TEXT` | `(action_id, resource) PK`; action `FK → actions ON DELETE CASCADE`. Normalized resources used for overlap/conflict reasoning. |
+| `job_runs` | `run_id TEXT`<br>`artifact_id TEXT?`<br>`job_type TEXT`<br>`state TEXT`<br>`payload_json TEXT`<br>`result_json TEXT?`<br>`error_json TEXT?`<br>`started_at INTEGER?`<br>`finished_at INTEGER` | `run_id PK`; `state CHECK IN (done, failed, aborted)`. Terminal job audit. Artifact references are loose so completed history survives artifact deletion. |
+
+`actions.layout_json` currently maps to the public
+`HistoryLayout { stage: number; column: number }`. It is workflow layout
+metadata, not spatial video composition.
+
+### Committed Dolt policy table
+
+`dolt_ignore` is created and staged separately from the 25-table allowlist:
+
+| Column | Constraint |
+| --- | --- |
+| `pattern TEXT` | `PK` |
+| `ignored TINYINT` | `NOT NULL` |
+
+Its committed rows are:
+
+| Pattern | Ignored | Meaning |
+| --- | ---: | --- |
+| `runtime_%` | `1` | Never version any engine runtime table. |
+| `sqlite_sequence` | `1` | Never version local AUTOINCREMENT counters. |
+
+### Semantic indexes
+
+Primary keys and unique declarations create their own backing indexes. The
+schema additionally defines every index below.
+
+| Index | Table and ordered columns |
+| --- | --- |
+| `artifacts_created` | `artifacts(created_at, artifact_id)` |
+| `artifact_files_object` | `artifact_files(object_hash)` |
+| `entities_type_created` | `entities(type, created_at, entity_id)` |
+| `notebooks_created` | `notebooks(created_at, notebook_id)` |
+| `cells_entity` | `cells(entity_id)` |
+| `cells_output_artifact` | `cells(output_artifact_id)` |
+| `edges_source` | `edges(notebook_id, source_cell_id)` |
+| `edges_target` | `edges(notebook_id, target_cell_id)` |
+| `runs_notebook_completed` | `runs(notebook_id, completed_at, run_id)` |
+| `timeline_slots_order` | `timeline_slots(ordinal, slot_id)` |
+| `timeline_slots_artifact` | `timeline_slots(artifact_id)` |
+| `timeline_audio_order` | `timeline_audio(ordinal, audio_id)` |
+| `timeline_audio_artifact` | `timeline_audio(artifact_id)` |
+| `prompt_entries_lookup` | `prompt_entries(surface, created_at, prompt_id)` |
+| `messages_created` | `messages(created_at, message_id)` |
+| `operations_created` | `operations(created_at, operation_id)` |
+| `operations_artifact_created` | `operations(artifact_id, created_at, operation_id)` |
+| `action_events_action_created` | `action_events(action_id, created_at, event_id)` |
+
+## Local-only runtime schema
+
+All 14 runtime tables live in `videobook.db`, but match `runtime_%` and must
+never be staged. They coordinate work or cache derivable data.
+
+### Engine coordination
+
+| Table | Columns | Keys, constraints, and purpose |
+| --- | --- | --- |
+| `runtime_meta` | `key TEXT`<br>`value_json TEXT`<br>`updated_at INTEGER` | `key PK`. Local engine metadata, including the runtime schema-version marker. |
+| `runtime_jobs` | `id INTEGER AUTOINCREMENT`<br>`operation_id TEXT`<br>`type TEXT`<br>`artifact_id TEXT?`<br>`external_task_id TEXT?`<br>`state TEXT`<br>`payload_json TEXT`<br>`result_json TEXT?`<br>`dedupe_key TEXT?`<br>`enqueued_at INTEGER`<br>`started_at INTEGER?`<br>`finished_at INTEGER?`<br>`pid INTEGER?`<br>`lease_expires_at INTEGER?`<br>`attempts INTEGER DEFAULT 0`<br>`max_attempts INTEGER DEFAULT 1`<br>`error_json TEXT?`<br>`fence INTEGER DEFAULT 0` | `id PK`; `state CHECK IN (queued, running, completing, done, failed, aborted)`. Retryable local work queue with deduplication, leases, and fencing. |
+| `runtime_resource_leases` | `lease_id TEXT`<br>`artifact_id TEXT?`<br>`resource_key TEXT`<br>`owner_id TEXT`<br>`owner_kind TEXT`<br>`pid INTEGER?`<br>`state TEXT?`<br>`data_json TEXT DEFAULT '{}'`<br>`fence INTEGER`<br>`acquired_at INTEGER`<br>`expires_at INTEGER`<br>`revoked_at INTEGER?` | `lease_id PK`. Fenced ownership for artifacts or arbitrary resources. |
+| `runtime_object_publications` | `object_hash TEXT`<br>`published_at INTEGER` | `object_hash PK`. Tracks objects verified in remote content storage. |
+| `runtime_workspace_entries` | `artifact_id TEXT`<br>`path TEXT`<br>`hydrated_at INTEGER?`<br>`invalidated_at INTEGER?`<br>`last_accessed_at INTEGER` | `artifact_id PK`; `path UQ`. Tracks disposable workspace materialization. |
+| `runtime_artifact_views` | `artifact_id TEXT`<br>`status TEXT`<br>`meta_json TEXT DEFAULT '{}'`<br>`owner_id TEXT?`<br>`owner_kind TEXT?`<br>`pid INTEGER?`<br>`deadline_at INTEGER?`<br>`updated_at INTEGER`<br>`seen_at INTEGER?`<br>`fence INTEGER DEFAULT 0` | `artifact_id PK`; `status CHECK IN (pending, working, ready, error)`. Current UI/runtime projection of artifact work. |
+| `runtime_pending_tasks` | `artifact_id TEXT`<br>`task_id TEXT`<br>`task_type TEXT`<br>`created_at INTEGER`<br>`meta_json TEXT DEFAULT '{}'`<br>`completing INTEGER DEFAULT 0`<br>`owner_id TEXT?` | `artifact_id PK`; `task_id UQ`. Compatibility projection for active external tasks. |
+| `runtime_generation_errors` | `artifact_id TEXT`<br>`message TEXT`<br>`fail_code TEXT?`<br>`prompt TEXT?`<br>`failed_at INTEGER` | `artifact_id PK`. Latest local generation failure per artifact. |
+| `runtime_settings` | `key TEXT`<br>`value_json TEXT`<br>`updated_at INTEGER` | `key PK`. Local preferences such as viewer orientation. |
+| `runtime_logs` | `id INTEGER AUTOINCREMENT`<br>`name TEXT`<br>`body_json TEXT`<br>`created_at INTEGER` | `id PK`. Structured local logs. |
+| `runtime_commit_outbox` | `operation_id TEXT`<br>`tables_json TEXT`<br>`message TEXT`<br>`created_at INTEGER` | `operation_id PK`. Crash-recovery bridge between a committed SQL mutation and its Dolt commit. |
+
+### Similarity and search caches
+
+| Table | Columns | Keys, constraints, and purpose |
+| --- | --- | --- |
+| `runtime_similarity_embeddings` | `id INTEGER AUTOINCREMENT`<br>`artifact_id TEXT`<br>`kind TEXT`<br>`source_path TEXT`<br>`object_hash TEXT`<br>`embedding_space TEXT`<br>`dimensions INTEGER`<br>`vector_blob BLOB`<br>`frame_count INTEGER?`<br>`updated_at INTEGER` | `id PK`; `(artifact_id, embedding_space) UQ`; `kind CHECK IN (image, video, audio)`. Derivable media vectors. |
+| `runtime_text_similarity_documents` | `id INTEGER AUTOINCREMENT`<br>`artifact_id TEXT`<br>`source_path TEXT`<br>`object_hash TEXT`<br>`content_hash TEXT`<br>`embedding_space TEXT`<br>`dimensions INTEGER`<br>`chunk_count INTEGER`<br>`updated_at INTEGER` | `id PK`; `(artifact_id, embedding_space) UQ`. One derivable text-index document per artifact and embedding space. |
+| `runtime_text_similarity_chunks` | `id INTEGER AUTOINCREMENT`<br>`document_id INTEGER`<br>`artifact_id TEXT`<br>`embedding_space TEXT`<br>`chunk_index INTEGER`<br>`start_offset INTEGER`<br>`end_offset INTEGER`<br>`chunk_text TEXT`<br>`dimensions INTEGER`<br>`vector_blob BLOB`<br>`updated_at INTEGER` | `id PK`; `(document_id, chunk_index) UQ`; document `FK → runtime_text_similarity_documents.id ON DELETE CASCADE`. Derivable chunk vectors and source spans. |
+
+### Runtime indexes
+
+| Index | Table and ordered columns or predicate |
+| --- | --- |
+| `runtime_jobs_state` | `runtime_jobs(state, enqueued_at)` |
+| `runtime_jobs_lease` | `runtime_jobs(state, lease_expires_at)` |
+| `runtime_jobs_dedupe` | `UNIQUE runtime_jobs(dedupe_key)` where key is non-null and state is queued/running/completing |
+| `runtime_jobs_external` | `UNIQUE runtime_jobs(type, external_task_id)` where external task ID is non-null |
+| `runtime_resource_active` | `UNIQUE runtime_resource_leases(resource_key)` where `revoked_at IS NULL` |
+| `runtime_resource_artifact` | `runtime_resource_leases(artifact_id, revoked_at)` |
+| `runtime_pending_external` | `UNIQUE runtime_pending_tasks(task_id)` |
+| `runtime_logs_lookup` | `runtime_logs(name, created_at)` |
+| `runtime_similarity_kind` | `runtime_similarity_embeddings(kind, embedding_space, updated_at)` |
+| `runtime_similarity_object` | `runtime_similarity_embeddings(object_hash, embedding_space)` |
+| `runtime_text_similarity_lookup` | `runtime_text_similarity_documents(embedding_space, updated_at)` |
+| `runtime_text_similarity_object` | `runtime_text_similarity_documents(object_hash, embedding_space)` |
+| `runtime_text_similarity_content` | `runtime_text_similarity_documents(content_hash, embedding_space)` |
+| `runtime_text_similarity_chunk_lookup` | `runtime_text_similarity_chunks(embedding_space, document_id, chunk_index)` |
+| `runtime_text_similarity_chunk_document` | `runtime_text_similarity_chunks(document_id, chunk_index)` |
+
+## Revision and recovery structures
+
+A semantic mutation crosses two atomicity domains and uses the runtime outbox
+to recover safely:
+
+1. Start `BEGIN IMMEDIATE`.
+2. Change the requested semantic rows.
+3. Insert the mutation's `operations` row.
+4. Insert `runtime_commit_outbox(operation_id, tables_json, message, created_at)`.
+5. Commit the SQL transaction.
+6. Stage only changed names from `SEMANTIC_TABLES`.
+7. Create a Dolt commit on `main`.
+8. Delete the runtime outbox row in a runtime transaction.
+
+On reopen, the engine drains any surviving outbox record. Runtime staging is
+checked before writes and after commits. Historical reads use
+`dolt_at_<semantic_table>(revision)`; history and conflict projections use
+Dolt log, status, and diff APIs. Remote catalog support is push-backup only.
+
+## Video-editing structures exposed today
+
+The SQL schema is only one part of the editing model. These structures and
+conventions are also important.
+
+### Timeline contract
+
+```ts
+type TimelineRender = "landscape" | "portrait" | "square";
+
+interface Timeline {
+  bookId: string;
+  render: TimelineRender;
+  slots: TimelineSlot[];
+  audio: TimelineAudio[];
+}
+
+interface TimelineSlot {
+  id: string;                 // UUIDv7
+  artifactId: string;
+  volume?: number;
+  audioFadeIn?: number;
+  audioFadeOut?: number;
+}
+
+interface TimelineAudio {
+  id: string;                 // UUIDv7
+  artifactId: string;
+  startFrame: number;
+  durationFrames: number;
+  volume?: number;
+  fadeIn?: number;
+  fadeOut?: number;
+}
+```
+
+`engine.timeline.set()` replaces/synchronizes the normalized rows while
+preserving caller-supplied stable IDs. `getAtRevision()` projects the three
+timeline tables at a Dolt revision.
+
+### Artifact manifest and content
+
+```ts
+interface ArtifactManifestFile {
+  name: string;
+  sizeBytes: number;
+  extension: string | null;
+  mtimeMs: number;
+  mimeType?: string;
+  objectHash: string;
+}
+
+interface ArtifactManifest {
+  artifactId: string;
+  slug: string;
+  path: string;               // disposable workspace path
+  fileCount: number;
+  files: ArtifactManifestFile[];
+  directories?: Record<string, string[]>;
+}
+```
+
+The manifest is a projection of `artifacts`, `artifact_files`, and `objects`.
+The bytes live in CAS; workspaces are materialized copies. Version history
+changes the logical path-to-hash mapping, never an existing object.
+
+Media lookup follows file conventions rather than additional SQL rows:
+
+- source media normally uses `original.<extension>`;
+- recognized video extensions are MP4, MOV, WebM, AVI, and MKV;
+- recognized audio extensions are MP3, WAV, OGG, FLAC, AAC, and M4A;
+- video artifacts may expose extracted audio as `audio_original.mp3`;
+- the `final` artifact uses `timeline_landscape.mp4`,
+  `timeline_portrait.mp4`, or `timeline_square.mp4`.
+
+### Creative graph
+
+The notebook document is a normalized graph projection:
+
+```text
+NotebookDocument
+├── properties
+├── cells[]
+│   ├── position { x, y }
+│   ├── optional entity reference
+│   ├── prompt/model/inputs
+│   └── optional output artifact reference
+└── edges[]
+    └── source cell → target cell / target input
+```
+
+Terminal `NotebookRun` values preserve evaluated cell order, artifact outputs,
+status, and error. Entities provide structured prompts, characters, and scenes.
+
+### Provenance and concurrency
+
+- `Revision` projects Dolt commit hash, operation, artifact, details, and file
+  changes.
+- `HistoryAction` projects the action DAG, lifecycle events, input/output
+  artifact lineage, workflow layout, and write set.
+- `base_revision` plus normalized write sets detect overlapping semantic
+  actions.
+- Runtime jobs, resource leases, artifact views, owner IDs, expiry times, and
+  monotonic fences coordinate processors without polluting Dolt history.
+
+### Derived editing support
+
+- `audio_waveforms.peaks_json` is the current waveform data contract.
+- Media similarity uses image/video/audio vectors; text similarity uses
+  document/chunk vectors. These are local, rebuildable caches.
+- Work kinds cover rendering, trimming, cropping, splicing, reversing, speed
+  changes, audio replacement, transcription, isolation, cut/SFX application,
+  and finalization. These describe running work; they are not yet normalized
+  edit decisions.
+
+## Full NLE structures not yet implemented
+
+Schema v4 can assemble one ordered visual lane plus timed audio overlays. It is
+not yet a complete non-linear editor model. The following is a concrete
+candidate layout for a future clean-break schema. Every name in this section
+is proposed and does **not** exist in schema v4.
+
+### Core sequence model
+
+| Candidate structure | Minimum normalized fields | Why it matters |
+| --- | --- | --- |
+| `sequences` | `sequence_id`, `book_id`, `name`, `width`, `height`, `pixel_aspect_num`, `pixel_aspect_den`, `frame_rate_num`, `frame_rate_den`, `audio_sample_rate`, `audio_channel_layout`, `background_rgba`, `created_at` | Supports multiple/nested sequences and defines an unambiguous rational timebase and render canvas. |
+| `sequence_tracks` | `track_id`, `sequence_id`, `kind` (video/audio/caption), `ordinal`, `name`, `enabled`, `locked`, `muted`, `solo`, `blend_mode` | Adds compositing order, multiple lanes, track controls, and stable merge boundaries. |
+| `clips` | `clip_id`, `track_id`, `source_artifact_id?`, `source_stream_id?`, `nested_sequence_id?`, `timeline_start_frame`, `duration_frames`, `source_in_tick?`, `source_duration_ticks?`, `speed_num`, `speed_den`, `reverse`, `enabled` | Separates source time from timeline time and makes trims, gaps, overlaps, speed changes, stills, and compound clips first-class. A check should require one artifact/stream source or one nested sequence source. Source ticks use the selected media stream's rational timebase. |
+| `clip_links` | `link_group_id`, `clip_id`, `role` | Keeps split video/audio, captions, and related angles synchronized while permitting unlink/relink. |
+| `clip_transforms` | `clip_id`, position, scale, anchor, rotation, crop edges, opacity, `blend_mode` | Makes spatial composition and crop/opacity editable and revisioned instead of hiding them in ad hoc JSON. |
+
+Use integer frames for sequence/timeline coordinates, source ticks for timed
+media, and rational pairs for frame rates, source timebases, and speed. Do not
+use floating-point seconds as authoritative edit positions. Audio sample
+offsets can be added where sub-frame precision is required.
+
+### Transitions, effects, and animation
+
+| Candidate structure | Minimum normalized fields | Why it matters |
+| --- | --- | --- |
+| `transitions` | `transition_id`, `track_id`, `outgoing_clip_id?`, `incoming_clip_id?`, `kind`, `duration_frames`, `alignment`, `parameters_json` | Represents crossfades, wipes, dip-to-color, and one-sided transitions with explicit adjacency. |
+| `effects` | `effect_id`, `owner_kind`, `owner_id`, `ordinal`, `plugin_id`, `plugin_version`, `enabled`, `parameters_json` | Provides ordered clip/track/sequence video and audio processing while allowing plugin-specific parameters. |
+| `keyframes` | `keyframe_id`, `effect_id?`, `owner_kind`, `owner_id`, `property_path`, `frame`, `value_json`, `interpolation`, in/out tangent values | Animates transforms, effect parameters, opacity, volume, and pan with stable row identities. |
+| `masks` | `mask_id`, `effect_id`, `kind`, `path_json`, `feather`, `opacity`, `inverted` | Supports selective effects and compositing. Mask-path animation can reuse keyframes. |
+| `tracking_data` | `track_data_id`, `mask_id?`, `clip_id`, `source_object_hash`, `points_blob` or chunk rows, `algorithm` | Stores or references expensive motion-tracking results and pins them to exact source bytes. |
+
+Core effect identity, ordering, enablement, and ownership should be normalized.
+Plugin payloads are appropriate JSON; IDs, timing, ordering, and references
+should not be hidden inside JSON arrays.
+
+### Audio model
+
+| Candidate structure | Minimum normalized fields | Why it matters |
+| --- | --- | --- |
+| `audio_buses` | `bus_id`, `sequence_id`, `parent_bus_id?`, `name`, `ordinal`, `gain_db`, `pan`, `muted`, `solo` | Supports master/submix buses and stable routing. |
+| `audio_routes` | `route_id`, `source_kind`, `source_id`, `destination_bus_id`, `send_gain_db`, `pre_fader` | Routes tracks and clips through submixes and sidechains. |
+| `automation_points` | `point_id`, `owner_kind`, `owner_id`, `property`, `frame` or `sample`, `value`, `interpolation` | Models volume, pan, effect, and ducking automation with sub-frame precision where needed. |
+| `audio_analysis` | `artifact_id`, `object_hash`, loudness fields, peak, channel count, sample rate, analysis version | Enables normalization, clipping warnings, and reproducible loudness targets. Derivable analysis can remain runtime-only unless accepted values affect a render. |
+
+### Captions, transcripts, and navigation
+
+| Candidate structure | Minimum normalized fields | Why it matters |
+| --- | --- | --- |
+| `caption_tracks` | `caption_track_id`, `sequence_id`, `language`, `kind`, `name`, `style_id?`, `ordinal` | Separates subtitles, captions, translations, and burned-in text lanes. |
+| `caption_cues` | `cue_id`, `caption_track_id`, `start_frame`, `end_frame`, `text`, `speaker_id?`, `style_overrides_json` | Makes cue timing and text independently mergeable and exportable. |
+| `caption_styles` | `style_id`, font, size, color, outline, background, alignment, safe-area and position fields | Provides reusable, revisioned caption appearance. |
+| `markers` | `marker_id`, `sequence_id`, `start_frame`, `end_frame?`, `kind`, `label`, `color`, `details_json` | Supports edit notes, chapters, beats, ranges, review flags, and navigation. |
+| `transcript_segments` | `segment_id`, `artifact_id`, `start_time_num`, `start_time_den`, `end_time_num`, `end_time_den`, `speaker_id?`, `text`, confidence and word-timing data | Preserves source-relative transcription separately from sequence captions. |
+
+### Media facts, proxies, and delivery
+
+| Candidate structure | Minimum normalized fields | Why it matters |
+| --- | --- | --- |
+| `media_streams` | `stream_id`, `artifact_id`, `path`, `object_hash`, `stream_index`, `kind`, codec/profile, timebase numerator/denominator, duration ticks, width/height, sample rate/channels, rotation, color metadata | Pins probe facts to exact bytes and removes ambiguity around VFR media, rotation, codecs, and channel layouts. |
+| `media_derivatives` | `derivative_id`, `source_object_hash`, `kind` (proxy/optimized/thumbnail/waveform), `profile`, `object_hash`, dimensions/rate fields, `created_at` | Maps reproducible proxies and previews to a source object and processing profile. |
+| `render_presets` | `preset_id`, `name`, container/video/audio codec settings, dimensions, frame rate, rate-control and color settings | Makes delivery settings revisioned and reusable. |
+| `render_deliverables` | `deliverable_id`, `sequence_id`, `preset_id`, `range_start_frame`, `range_end_frame`, `output_artifact_id?`, `state`, `requested_revision` | Pins a render request to an exact edit revision, range, preset, and resulting artifact. Active progress belongs in runtime jobs. |
+| `analysis_markers` | `analysis_id`, `artifact_id`, `object_hash`, `kind` (cut/beat/silence/face/object), source-time range, score, model/version, `data_json` | Supports scene detection and assisted editing while keeping derived results tied to source bytes. |
+
+Probe results, proxies, thumbnails, tracking, and analysis are rebuildable. Keep
+them local-only when they are merely caches. Version a compact accepted
+projection when a result changes edit semantics, must merge across forks, or
+must reproduce a render.
+
+### Schema rules for a future editing model
+
+- Give every independently editable or reorderable row a UUIDv7 primary key.
+- Keep an explicit owner FK on every track, clip, transition, effect, cue, and
+  marker; schema v4's implicit singleton timeline ownership should not be
+  repeated.
+- Use `ON DELETE RESTRICT` for live source references and `CASCADE` only for
+  truly owned children.
+- Preserve loose references only in audit/lineage records that must outlive the
+  target.
+- Keep order as an integer plus stable ID tie-breaker, or use a documented
+  fractional ordering key if frequent insertion warrants it.
+- Put user intent and accepted edit decisions in Dolt. Put playhead position,
+  selections, UI panels, decode caches, thumbnails, temporary renders, active
+  jobs, locks, and presence in ignored runtime tables.
+- Pin renders and derived analysis to source object hashes and a Dolt revision,
+  not mutable artifact slugs or workspace paths.
+- Treat color space, transfer function, matrix, range, alpha mode, rotation,
+  sample rate, channel layout, and variable-frame-rate timing as first-class
+  media facts.
+- Maintain schema/source compatibility as a clean break: a future expanded
+  catalog should increment `SCHEMA_VERSION` and update DDL, public types,
+  history restore, staging tests, and this layout together.
+
+## Source map
+
+| Concern | Implementation |
+| --- | --- |
+| DDL, table allowlists, indexes | [`src/schema.ts`](../src/schema.ts) |
+| SQL transactions, Dolt staging, commits, outbox recovery | [`src/store.ts`](../src/store.ts) |
+| Engine paths and row projections | [`src/context.ts`](../src/context.ts) |
+| Immutable object layout and remote keys | [`src/cas.ts`](../src/cas.ts) |
+| Artifact mappings and workspace materialization | [`src/files.ts`](../src/files.ts) |
+| Current timeline API and row synchronization | [`src/timeline.ts`](../src/timeline.ts) |
+| Public timeline, manifest, job, status, and similarity types | [`src/engine-types.ts`](../src/engine-types.ts) |
+| Entity/notebook graph types | [`src/notebook/types.ts`](../src/notebook/types.ts) |
+| Revision and action projections/restores | [`src/history.ts`](../src/history.ts), [`src/history-types.ts`](../src/history-types.ts) |
+| Media naming and discovery conventions | [`src/media.ts`](../src/media.ts) |
