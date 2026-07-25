@@ -63,6 +63,7 @@ const MERGE_SCHEMA_SQL = `
   CREATE TABLE notebooks (
     notebook_id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
+    grid_json TEXT NOT NULL,
     properties_json TEXT NOT NULL,
     created_at INTEGER NOT NULL
   );
@@ -71,8 +72,8 @@ const MERGE_SCHEMA_SQL = `
     cell_id TEXT NOT NULL,
     type TEXT NOT NULL,
     title TEXT NOT NULL,
-    position_x REAL NOT NULL,
-    position_y REAL NOT NULL,
+    grid_row INTEGER NOT NULL,
+    grid_column INTEGER NOT NULL,
     entity_id TEXT,
     prompt TEXT,
     model TEXT,
@@ -239,9 +240,9 @@ describe("single-book Dolt engine", () => {
     suppliedAgain.close();
   });
 
-  it("creates the exact normalized v6 semantic and runtime schema", async () => {
+  it("creates the exact normalized v7 semantic and runtime schema", async () => {
     const { engine, dataDir } = await setup();
-    expect(SCHEMA_VERSION).toBe(6);
+    expect(SCHEMA_VERSION).toBe(7);
     engine.close();
 
     const db = new DatabaseSync(path.join(dataDir, "videobook.db"));
@@ -283,6 +284,7 @@ describe("single-book Dolt engine", () => {
     expect(columns("notebooks")).toEqual([
       "notebook_id",
       "name",
+      "grid_json",
       "properties_json",
       "created_at",
     ]);
@@ -291,8 +293,8 @@ describe("single-book Dolt engine", () => {
       "cell_id",
       "type",
       "title",
-      "position_x",
-      "position_y",
+      "grid_row",
+      "grid_column",
       "entity_id",
       "prompt",
       "provider",
@@ -316,7 +318,7 @@ describe("single-book Dolt engine", () => {
       (db
         .prepare("SELECT version FROM engine_schema WHERE singleton=1")
         .get() as { version: number }).version,
-    ).toBe(6);
+    ).toBe(7);
     expect(
       db
         .prepare(
@@ -503,7 +505,7 @@ describe("single-book Dolt engine", () => {
     const cell = engine.notebooks.createCell({
       type: "image",
       title: "Image",
-      position: { x: 0, y: 0 },
+      slot: { row: 0, column: 0 },
       entityId: entity.id,
       outputArtifactId: artifact.artifactId,
     });
@@ -574,7 +576,7 @@ describe("single-book Dolt engine", () => {
     const generatedCell = engine.notebooks.createCell({
       type: "prompt",
       title: "Prompt",
-      position: { x: 1, y: 2 },
+      slot: { row: 1, column: 2 },
     });
     expect(generatedCell.id[14]).toBe("7");
     expect(
@@ -628,8 +630,13 @@ describe("single-book Dolt engine", () => {
                (?, 'scene', 'Right', '{}', 0)`,
     ).run(leftEntity, rightEntity);
     db.prepare(
-      `INSERT INTO notebooks(notebook_id, name, properties_json, created_at)
-       VALUES (?, 'Merge graph', '{}', 0)`,
+      `INSERT INTO notebooks(
+        notebook_id, name, grid_json, properties_json, created_at
+      ) VALUES (
+        ?, 'Merge graph',
+        '{"columns":[{"id":"column-1"},{"id":"column-2"}]}',
+        '{}', 0
+      )`,
     ).run(notebookId);
     db.prepare(
       "INSERT INTO timeline(book_id, render) VALUES (?, 'landscape')",
@@ -651,7 +658,7 @@ describe("single-book Dolt engine", () => {
       .run(leftEntity);
     db.prepare(
       `INSERT INTO cells(
-        notebook_id, cell_id, type, title, position_x, position_y,
+        notebook_id, cell_id, type, title, grid_row, grid_column,
         entity_id, inputs_json
       ) VALUES (?, ?, 'scene', 'Left cell', 0, 0, ?, '{}')`,
     ).run(notebookId, leftCell, leftEntity);
@@ -684,7 +691,7 @@ describe("single-book Dolt engine", () => {
       .run(rightEntity);
     db.prepare(
       `INSERT INTO cells(
-        notebook_id, cell_id, type, title, position_x, position_y,
+        notebook_id, cell_id, type, title, grid_row, grid_column,
         entity_id, inputs_json
       ) VALUES (?, ?, 'scene', 'Right cell', 1, 1, ?, '{}')`,
     ).run(notebookId, rightCell, rightEntity);

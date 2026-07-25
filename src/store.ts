@@ -278,9 +278,7 @@ export class DoltStore {
             + `${SCHEMA_VERSION}`,
         });
       }
-      if (row.version === 5 && SCHEMA_VERSION === 6) {
-        this.migrateCellsV5ToV6();
-      } else if (row.version !== SCHEMA_VERSION) {
+      if (row.version !== SCHEMA_VERSION) {
         this.db.close();
         throw new EngineFault({
           code: "SCHEMA_INCOMPATIBLE",
@@ -318,120 +316,6 @@ export class DoltStore {
       .run(String(SCHEMA_VERSION), Date.now());
     this.assertRuntimeUnstaged();
     this.recoverOutbox();
-  }
-
-  private migrateCellsV5ToV6(): void {
-    this.db.exec("PRAGMA foreign_keys=OFF");
-    this.db.exec(`
-      CREATE TABLE cells_v6 (
-        notebook_id TEXT NOT NULL
-          REFERENCES notebooks(notebook_id) ON DELETE CASCADE,
-        cell_id TEXT NOT NULL,
-        type TEXT NOT NULL CHECK (
-          type IN (
-            'source','audio','transcript','note','search','selects',
-            'prompt','character','scene','asset','image','video','sequence',
-            'analysis','split','frame','export'
-          )
-        ),
-        title TEXT NOT NULL,
-        position_x REAL NOT NULL,
-        position_y REAL NOT NULL,
-        entity_id TEXT
-          REFERENCES entities(entity_id) ON DELETE RESTRICT,
-        prompt TEXT,
-        provider TEXT,
-        model TEXT,
-        operation TEXT,
-        tool TEXT,
-        inputs_json TEXT NOT NULL DEFAULT '{}',
-        output_artifact_id TEXT
-          REFERENCES artifacts(artifact_id) ON DELETE RESTRICT,
-        PRIMARY KEY(notebook_id, cell_id)
-      );
-    `);
-    const rows = this.db
-      .prepare(
-        `SELECT notebook_id, cell_id, type, title, position_x, position_y,
-                entity_id, prompt, model, inputs_json, output_artifact_id
-         FROM cells`,
-      )
-      .all() as unknown as Array<{
-      notebook_id: string;
-      cell_id: string;
-      type: string;
-      title: string;
-      position_x: number;
-      position_y: number;
-      entity_id: string | null;
-      prompt: string | null;
-      model: string | null;
-      inputs_json: string;
-      output_artifact_id: string | null;
-    }>;
-    const insert = this.db.prepare(
-      `INSERT INTO cells_v6(
-        notebook_id, cell_id, type, title, position_x, position_y,
-        entity_id, prompt, provider, model, operation, tool,
-        inputs_json, output_artifact_id
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-    );
-    for (const row of rows) {
-      let provider: string | null = null;
-      let operation: string | null = null;
-      let tool: string | null = null;
-      try {
-        const inputs = JSON.parse(row.inputs_json || "{}") as Record<
-          string,
-          unknown
-        >;
-        if (typeof inputs.provider === "string" && inputs.provider.trim()) {
-          provider = inputs.provider.trim();
-        }
-        if (typeof inputs.operation === "string" && inputs.operation.trim()) {
-          operation = inputs.operation.trim();
-        }
-      } catch {
-        // keep legacy inputs_json as-is when it is not valid JSON
-      }
-      if (
-        typeof row.model === "string"
-        && (row.model.startsWith("generate_") || row.model.includes("/"))
-      ) {
-        tool = row.model;
-      }
-      insert.run(
-        row.notebook_id,
-        row.cell_id,
-        row.type,
-        row.title,
-        row.position_x,
-        row.position_y,
-        row.entity_id,
-        row.prompt,
-        provider,
-        row.model,
-        operation,
-        tool,
-        row.inputs_json,
-        row.output_artifact_id,
-      );
-    }
-    this.db.exec("DROP TABLE cells");
-    this.db.exec("ALTER TABLE cells_v6 RENAME TO cells");
-    this.db.exec(`
-      CREATE INDEX IF NOT EXISTS cells_entity
-        ON cells(entity_id);
-      CREATE INDEX IF NOT EXISTS cells_output_artifact
-        ON cells(output_artifact_id);
-    `);
-    this.db.exec("PRAGMA foreign_keys=ON");
-    this.db
-      .prepare("UPDATE engine_schema SET version=? WHERE singleton=1")
-      .run(SCHEMA_VERSION);
-    this.stageTables(["engine_schema", "cells"]);
-    this.assertOnlyVersionedStaged();
-    this.sqlCommit("Migrate notebook cells schema v5 to v6");
   }
 
   private configureRemote(remote: CatalogBackupConfig): void {

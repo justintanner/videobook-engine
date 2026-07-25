@@ -100,6 +100,7 @@ interface EntitySnapshotRow {
 interface NotebookSnapshotRow {
   notebook_id: string;
   name: string;
+  grid_json: string;
   properties_json: string;
   created_at: number;
 }
@@ -109,8 +110,8 @@ interface NotebookCellSnapshotRow {
   cell_id: string;
   type: string;
   title: string;
-  position_x: number;
-  position_y: number;
+  grid_row: number;
+  grid_column: number;
   entity_id: string | null;
   prompt: string | null;
   model: string | null;
@@ -602,7 +603,7 @@ async function restoreBook(
       .all(revision.hash) as unknown as EntitySnapshotRow[];
     const notebooks = context.store.db
       .prepare(
-        `SELECT notebook_id, name, properties_json, created_at
+        `SELECT notebook_id, name, grid_json, properties_json, created_at
          FROM dolt_at_notebooks(?)`,
       )
       .all(revision.hash) as unknown as NotebookSnapshotRow[];
@@ -610,7 +611,7 @@ async function restoreBook(
     const notebookCells = rowsForNotebookIds<NotebookCellSnapshotRow>(
       context,
       "cells",
-      `notebook_id, cell_id, type, title, position_x, position_y,
+      `notebook_id, cell_id, type, title, grid_row, grid_column,
        entity_id, prompt, model, inputs_json, output_artifact_id`,
       revision.hash,
       notebookIds,
@@ -768,13 +769,14 @@ async function restoreBook(
 
         const insertNotebook = context.store.db.prepare(
           `INSERT INTO notebooks(
-            notebook_id, name, properties_json, created_at
-          ) VALUES (?, ?, ?, ?)`,
+            notebook_id, name, grid_json, properties_json, created_at
+          ) VALUES (?, ?, ?, ?, ?)`,
         );
         for (const row of notebooks) {
           insertNotebook.run(
             row.notebook_id,
             row.name,
+            row.grid_json,
             row.properties_json,
             row.created_at,
           );
@@ -1406,7 +1408,7 @@ function insertNotebookChildren(
 ): void {
   const insertCell = context.store.db.prepare(
     `INSERT INTO cells(
-      notebook_id, cell_id, type, title, position_x, position_y,
+      notebook_id, cell_id, type, title, grid_row, grid_column,
       entity_id, prompt, model, inputs_json, output_artifact_id
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
@@ -1416,8 +1418,8 @@ function insertNotebookChildren(
       row.cell_id,
       row.type,
       row.title,
-      row.position_x,
-      row.position_y,
+      row.grid_row,
+      row.grid_column,
       row.entity_id,
       row.prompt,
       row.model,

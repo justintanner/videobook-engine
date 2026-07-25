@@ -30,13 +30,13 @@ import {
   type V4MigrationResult,
 } from "../src/index.js";
 
-describe("v6 MVP public contracts", () => {
+describe("v7 MVP public contracts", () => {
   it("fixes one compatibility envelope without replacing v4 in place", () => {
     expect(MVP_CONTRACT_VERSION).toBe(1);
-    expect(MVP_SCHEMA_VERSION).toBe(6);
+    expect(MVP_SCHEMA_VERSION).toBe(7);
     expect(MVP_CONTRACT_COMPATIBILITY).toEqual({
       contractVersion: 1,
-      schemaVersion: 6,
+      schemaVersion: 7,
       minimumReaderContractVersion: 1,
       legacySchemaVersions: [4, 5],
       legacyTimelineApi: "compile-to-sequence",
@@ -69,7 +69,7 @@ describe("v6 MVP public contracts", () => {
     expect(intent.sequenceId).toBe(sequence.sequenceId);
     expect(searchPage.hits[0]?.location.kind).toBe("timed");
     expect(migration.sourceSchemaVersion).toBe(4);
-    expect(migration.destinationSchemaVersion).toBe(6);
+    expect(migration.destinationSchemaVersion).toBe(7);
   });
 
   it("pins the checked-in JSON fixture to the typed fixture", async () => {

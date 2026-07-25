@@ -52,16 +52,25 @@ export interface PinnedSearchResult {
   createdAt: number;
 }
 
-export interface NotebookPosition {
-  x: number;
-  y: number;
+export interface NotebookGridColumn {
+  id: string;
+  label?: string;
+}
+
+export interface NotebookGrid {
+  columns: NotebookGridColumn[];
+}
+
+export interface NotebookGridSlot {
+  row: number;
+  column: number;
 }
 
 export interface NotebookCell {
   id: string;
   type: NotebookCellType;
   title: string;
-  position: NotebookPosition;
+  slot: NotebookGridSlot;
   entityId?: string;
   prompt?: string;
   provider?: string;
@@ -84,6 +93,7 @@ export interface NotebookEdge {
 export interface NotebookDocument {
   id: string;
   name: string;
+  grid: NotebookGrid;
   properties?: Record<string, unknown>;
   cells: NotebookCell[];
   edges: NotebookEdge[];

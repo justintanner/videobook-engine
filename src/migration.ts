@@ -229,7 +229,13 @@ export async function migrateV4(
     destinationDatabase.exec("PRAGMA foreign_keys=OFF");
     clearFreshDestination(destinationDatabase);
     for (const table of COPY_TABLES) {
-      copyTable(sourceDatabase, destinationDatabase, table);
+      if (table === "notebooks") {
+        copyLegacyNotebooks(sourceDatabase, destinationDatabase);
+      } else if (table === "cells") {
+        copyLegacyCells(sourceDatabase, destinationDatabase);
+      } else {
+        copyTable(sourceDatabase, destinationDatabase, table);
+      }
     }
     destinationDatabase
       .prepare("UPDATE engine_schema SET version=? WHERE singleton=1")
@@ -436,6 +442,75 @@ function copyTable(
   );
   for (const row of rows) {
     insert.run(...shared.map((column) => row[column] ?? null));
+  }
+}
+
+function copyLegacyNotebooks(
+  source: DatabaseSync,
+  destination: DatabaseSync,
+): void {
+  const rows = source
+    .prepare(
+      `SELECT notebook_id, name, properties_json, created_at
+       FROM notebooks ORDER BY notebook_id`,
+    )
+    .all() as unknown as Array<{
+      notebook_id: string;
+      name: string;
+      properties_json: string;
+      created_at: number;
+    }>;
+  const grid = JSON.stringify({
+    columns: Array.from({ length: 4 }, (_, index) => ({
+      id: `column-${index + 1}`,
+    })),
+  });
+  const insert = destination.prepare(
+    `INSERT INTO notebooks(
+      notebook_id, name, grid_json, properties_json, created_at
+    ) VALUES (?, ?, ?, ?, ?)`,
+  );
+  for (const row of rows) {
+    insert.run(
+      row.notebook_id,
+      row.name,
+      grid,
+      row.properties_json,
+      row.created_at,
+    );
+  }
+}
+
+function copyLegacyCells(
+  source: DatabaseSync,
+  destination: DatabaseSync,
+): void {
+  const sourceColumns = columns(source, "cells");
+  const destinationColumns = new Set(columns(destination, "cells"));
+  const shared = sourceColumns.filter((column) =>
+    destinationColumns.has(column)
+  );
+  const rows = source
+    .prepare(
+      `SELECT ${shared.join(", ")} FROM cells
+       ORDER BY notebook_id, cell_id`,
+    )
+    .all() as unknown as SqlRow[];
+  const insert = destination.prepare(
+    `INSERT INTO cells(
+      ${shared.join(", ")}, grid_row, grid_column
+    ) VALUES (${[...shared, "grid_row", "grid_column"].map(() => "?").join(", ")})`,
+  );
+  const ordinals = new Map<string, number>();
+  for (const row of rows) {
+    const notebookId = String(row.notebook_id);
+    const ordinal = ordinals.get(notebookId) ?? 0;
+    ordinals.set(notebookId, ordinal + 1);
+    insert.run(
+      ...shared.map((column) => row[column] ?? null),
+      Math.floor(ordinal / 4),
+      ordinal % 4,
+    );
   }
 }
 

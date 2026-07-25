@@ -1,4 +1,4 @@
-export const SCHEMA_VERSION = 6;
+export const SCHEMA_VERSION = 7;
 
 export const NOTEBOOK_CELL_TYPES = [
   "source",
@@ -25,8 +25,8 @@ export const CELLS_TABLE_COLUMNS = [
   "cell_id",
   "type",
   "title",
-  "position_x",
-  "position_y",
+  "grid_row",
+  "grid_column",
   "entity_id",
   "prompt",
   "provider",
@@ -190,6 +190,7 @@ export const SEMANTIC_SCHEMA_SQL = `
   CREATE TABLE IF NOT EXISTS notebooks (
     notebook_id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
+    grid_json TEXT NOT NULL,
     properties_json TEXT NOT NULL DEFAULT '{}',
     created_at INTEGER NOT NULL
   );
@@ -205,8 +206,8 @@ export const SEMANTIC_SCHEMA_SQL = `
       )
     ),
     title TEXT NOT NULL,
-    position_x REAL NOT NULL,
-    position_y REAL NOT NULL,
+    grid_row INTEGER NOT NULL CHECK (grid_row >= 0),
+    grid_column INTEGER NOT NULL CHECK (grid_column >= 0),
     entity_id TEXT
       REFERENCES entities(entity_id) ON DELETE RESTRICT,
     prompt TEXT,
@@ -217,7 +218,8 @@ export const SEMANTIC_SCHEMA_SQL = `
     inputs_json TEXT NOT NULL DEFAULT '{}',
     output_artifact_id TEXT
       REFERENCES artifacts(artifact_id) ON DELETE RESTRICT,
-    PRIMARY KEY(notebook_id, cell_id)
+    PRIMARY KEY(notebook_id, cell_id),
+    UNIQUE(notebook_id, grid_row, grid_column)
   );
   CREATE TABLE IF NOT EXISTS edges (
     notebook_id TEXT NOT NULL

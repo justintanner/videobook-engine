@@ -75,11 +75,14 @@ export type {
   NotebookCellType,
   NotebookDocument,
   NotebookEdge,
-  NotebookPosition,
+  NotebookGrid,
+  NotebookGridColumn,
+  NotebookGridSlot,
   NotebookReferenceKind,
   NotebookRun,
   PinnedSearchResult,
 } from "./notebook/types.js";
+export { extendNotebookGrid } from "./notebook/grid.js";
 
 export type {
   GetHistoryActionsOptions,

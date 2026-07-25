@@ -5,6 +5,7 @@ import type {
   NotebookCellReference,
   NotebookDocument,
   NotebookEdge,
+  NotebookGrid,
   NotebookReferenceKind,
   NotebookRun,
   PinnedSearchResult,
@@ -39,6 +40,7 @@ interface EntityRow {
 interface NotebookRow {
   notebook_id: string;
   name: string;
+  grid_json: string;
   properties_json: string;
   created_at: number;
 }
@@ -47,8 +49,8 @@ interface NotebookCellRow {
   cell_id: string;
   type: NotebookCell["type"];
   title: string;
-  position_x: number;
-  position_y: number;
+  grid_row: number;
+  grid_column: number;
   entity_id: string | null;
   prompt: string | null;
   provider: string | null;
@@ -111,6 +113,17 @@ interface PinnedSearchResultRow {
 
 type NewNotebookCell = Omit<NotebookCell, "id"> & { id?: string };
 type NewNotebookEdge = Omit<NotebookEdge, "id"> & { id?: string };
+
+const DEFAULT_NOTEBOOK_COLUMN_COUNT = 4;
+
+function defaultNotebookGrid(): NotebookGrid {
+  return {
+    columns: Array.from(
+      { length: DEFAULT_NOTEBOOK_COLUMN_COUNT },
+      (_, index) => ({ id: `column-${index + 1}` }),
+    ),
+  };
+}
 
 export function createEntitiesApi(context: EngineContext) {
   return {
@@ -313,10 +326,15 @@ async function createNotebook(
         context.store.db
           .prepare(
             `INSERT INTO notebooks(
-              notebook_id, name, properties_json, created_at
-            ) VALUES (?, ?, '{}', ?)`,
+              notebook_id, name, grid_json, properties_json, created_at
+            ) VALUES (?, ?, ?, '{}', ?)`,
           )
-          .run(notebookId, normalizedName, now);
+          .run(
+            notebookId,
+            normalizedName,
+            canonicalJson(defaultNotebookGrid()),
+            now,
+          );
       },
     );
     return ok(requiredNotebook(context, notebookId), mutation.revision);
@@ -358,11 +376,12 @@ async function writeNotebook(
       () => {
         context.store.db
           .prepare(
-            `UPDATE notebooks SET name=?, properties_json=?
+            `UPDATE notebooks SET name=?, grid_json=?, properties_json=?
              WHERE notebook_id=?`,
           )
           .run(
             requiredText(notebook.name, "Notebook name"),
+            canonicalJson(notebook.grid),
             canonicalJson(notebook.properties ?? {}),
             notebook.id,
           );
@@ -482,10 +501,11 @@ function notebookFromRows(
 ): NotebookDocument {
   const cells = context.store.db
     .prepare(
-      `SELECT cell_id, type, title, position_x, position_y, entity_id,
+      `SELECT cell_id, type, title, grid_row, grid_column, entity_id,
               prompt, provider, model, operation, tool,
               inputs_json, output_artifact_id
-       FROM cells WHERE notebook_id=? ORDER BY cell_id`,
+       FROM cells WHERE notebook_id=?
+       ORDER BY grid_row, grid_column, cell_id`,
     )
     .all(row.notebook_id) as unknown as NotebookCellRow[];
   const edges = context.store.db
@@ -515,6 +535,7 @@ function notebookFromRows(
   return {
     id: row.notebook_id,
     name: row.name,
+    grid: parseJson<NotebookGrid>(row.grid_json, defaultNotebookGrid()),
     properties: parseJson<Record<string, unknown>>(row.properties_json, {}),
     cells: cells.map((cell) =>
       rowToCell(
@@ -532,7 +553,9 @@ function validateNotebook(
   context: EngineContext,
   notebook: NotebookDocument,
 ): void {
+  validateNotebookGrid(notebook.grid);
   const cellIds = new Set<string>();
+  const occupiedSlots = new Set<string>();
   for (const cell of notebook.cells) {
     assertUuidV7(cell.id, "Cell ID");
     if (cellIds.has(cell.id)) throw new Error(`Duplicate cell ID: ${cell.id}`);
@@ -540,9 +563,18 @@ function validateNotebook(
     if (!NOTEBOOK_CELL_TYPE_SET.has(cell.type)) {
       throw new Error(`Invalid cell type: ${cell.type}`);
     }
-    if (!Number.isFinite(cell.position.x) || !Number.isFinite(cell.position.y)) {
-      throw new Error(`Cell position must be finite: ${cell.id}`);
+    if (
+      !Number.isInteger(cell.slot.row)
+      || cell.slot.row < 0
+      || !Number.isInteger(cell.slot.column)
+      || cell.slot.column < 0
+      || cell.slot.column >= notebook.grid.columns.length
+    ) {
+      throw new Error(`Cell slot is outside the notebook grid: ${cell.id}`);
     }
+    const slot = `${cell.slot.row}:${cell.slot.column}`;
+    if (occupiedSlots.has(slot)) throw new Error(`Duplicate cell slot: ${slot}`);
+    occupiedSlots.add(slot);
     if (cell.entityId) {
       assertUuidV7(cell.entityId, "Cell entity ID");
       requiredEntity(context, cell.entityId);
@@ -566,6 +598,21 @@ function validateNotebook(
   }
 }
 
+function validateNotebookGrid(grid: NotebookGrid): void {
+  if (!grid || !Array.isArray(grid.columns) || grid.columns.length === 0) {
+    throw new Error("Notebook grid must contain at least one column");
+  }
+  const columnIds = new Set<string>();
+  for (const column of grid.columns) {
+    const id = requiredText(column.id, "Notebook grid column ID");
+    if (columnIds.has(id)) throw new Error(`Duplicate notebook grid column: ${id}`);
+    columnIds.add(id);
+    if (column.label !== undefined) {
+      requiredText(column.label, "Notebook grid column label");
+    }
+  }
+}
+
 function synchronizeNotebookChildren(
   context: EngineContext,
   notebook: NotebookDocument,
@@ -584,18 +631,27 @@ function synchronizeNotebookChildren(
     notebook.id,
     notebook.cells.map((cell) => cell.id),
   );
+  const existingMaxRow = context.store.db
+    .prepare(
+      `SELECT COALESCE(MAX(grid_row), -1) AS max_row
+       FROM cells WHERE notebook_id=?`,
+    )
+    .get(notebook.id) as unknown as { max_row: number };
+  context.store.db
+    .prepare("UPDATE cells SET grid_row=grid_row+? WHERE notebook_id=?")
+    .run(existingMaxRow.max_row + 1, notebook.id);
 
   const upsertCell = context.store.db.prepare(
     `INSERT INTO cells(
-      notebook_id, cell_id, type, title, position_x, position_y,
+      notebook_id, cell_id, type, title, grid_row, grid_column,
       entity_id, prompt, provider, model, operation, tool,
       inputs_json, output_artifact_id
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(notebook_id, cell_id) DO UPDATE SET
       type=excluded.type,
       title=excluded.title,
-      position_x=excluded.position_x,
-      position_y=excluded.position_y,
+      grid_row=excluded.grid_row,
+      grid_column=excluded.grid_column,
       entity_id=excluded.entity_id,
       prompt=excluded.prompt,
       provider=excluded.provider,
@@ -612,8 +668,8 @@ function synchronizeNotebookChildren(
       normalized.id,
       normalized.type,
       requiredText(normalized.title, "Cell title"),
-      normalized.position.x,
-      normalized.position.y,
+      normalized.slot.row,
+      normalized.slot.column,
       normalized.entityId ?? null,
       normalized.prompt ?? null,
       normalized.provider ?? null,
@@ -882,7 +938,7 @@ function rowToCell(
     id: row.cell_id,
     type: row.type,
     title: row.title,
-    position: { x: row.position_x, y: row.position_y },
+    slot: { row: row.grid_row, column: row.grid_column },
     ...(row.entity_id ? { entityId: row.entity_id } : {}),
     ...(row.prompt ? { prompt: row.prompt } : {}),
     ...(provider ? { provider } : {}),
@@ -986,6 +1042,6 @@ const ENTITY_SELECT = `
 `;
 
 const NOTEBOOK_SELECT = `
-  SELECT notebook_id, name, properties_json, created_at
+  SELECT notebook_id, name, grid_json, properties_json, created_at
   FROM notebooks
 `;

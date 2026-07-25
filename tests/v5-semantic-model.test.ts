@@ -281,7 +281,7 @@ describe("v5 semantic media model", () => {
     const cell = engine.notebooks.createCell({
       type: "search",
       title: "Find the intro",
-      position: { x: 2, y: 3 },
+      slot: { row: 2, column: 3 },
       references: [
         {
           id: uuidv7(),
