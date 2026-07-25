@@ -723,6 +723,8 @@ function mimeTypeFor(filename: string): string | null {
       return "video/quicktime";
     case ".webm":
       return "video/webm";
+    case ".weba":
+      return "audio/webm";
     case ".mp3":
       return "audio/mpeg";
     case ".wav":

@@ -12,6 +12,7 @@ import type {
   CatalogBackupConfig,
   EngineError,
   OperationInput,
+  SemanticCommitBoundary,
 } from "./engine-types.js";
 import {
   RUNTIME_SCHEMA_SQL,
@@ -65,16 +66,24 @@ export class DoltStore {
   readonly workspaceDir: string;
 
   private writeChain: Promise<void> = Promise.resolve();
+  private readonly semanticCommitBoundary:
+    | ((boundary: SemanticCommitBoundary, operationId: string) => void)
+    | undefined;
 
   constructor(input: {
     dataDir: string;
     workspaceDir: string;
     initialBook?: { bookId: string; slug: string };
     catalogBackup?: CatalogBackupConfig;
+    semanticCommitBoundary?: (
+      boundary: SemanticCommitBoundary,
+      operationId: string,
+    ) => void;
   }) {
     this.dataDir = path.resolve(input.dataDir);
     this.workspaceDir = path.resolve(input.workspaceDir);
     this.databasePath = path.join(this.dataDir, "videobook.db");
+    this.semanticCommitBoundary = input.semanticCommitBoundary;
     this.objectsDir = path.join(this.dataDir, "objects", "sha256");
     mkdirSync(this.dataDir, { recursive: true });
     mkdirSync(this.objectsDir, { recursive: true });
@@ -142,12 +151,14 @@ export class DoltStore {
             commitMessage(input, operationId),
             now,
           );
+        this.semanticCommitBoundary?.("before-sql-commit", operationId);
         this.commitSql();
       } catch (error) {
         this.rollback();
         throw error;
       }
 
+      this.semanticCommitBoundary?.("after-sql-commit", operationId);
       const revision = this.commitOutbox(operationId);
       return { value, revision, operationId };
     });
@@ -246,6 +257,7 @@ export class DoltStore {
           "INSERT INTO timeline(book_id, render) VALUES (?, 'landscape')",
         )
         .run(initialBook.bookId);
+      this.initializePrimarySequence(initialBook.bookId, now);
       this.stageTables(SEMANTIC_TABLES);
       this.db
         .prepare("SELECT dolt_add('dolt_ignore') AS result")
@@ -317,6 +329,51 @@ export class DoltStore {
       .get(remote.name, remote.url);
   }
 
+  private initializePrimarySequence(bookId: string, now: number): void {
+    const sequenceId = uuidv7();
+    this.db
+      .prepare(
+        `INSERT INTO sequences(
+          sequence_id, book_id, name, is_primary, width, height,
+          pixel_aspect_numerator, pixel_aspect_denominator,
+          frame_rate_numerator, frame_rate_denominator,
+          audio_sample_rate_hz, audio_channel_layout,
+          background_rgba_json, created_at
+        ) VALUES (?, ?, 'Main', 1, 1920, 1080, 1, 1, 30, 1, 48000, 'stereo', ?, ?)`,
+      )
+      .run(sequenceId, bookId, canonicalJson([0, 0, 0, 1]), now);
+    const insertTrack = this.db.prepare(
+      `INSERT INTO sequence_tracks(
+        track_id, sequence_id, kind, ordinal, name,
+        enabled, locked, muted, solo, blend_mode
+      ) VALUES (?, ?, ?, ?, ?, 1, 0, ?, ?, ?)`,
+    );
+    insertTrack.run(uuidv7(), sequenceId, "video", 0, "Video 1", null, null, "normal");
+    insertTrack.run(uuidv7(), sequenceId, "video", 1, "Video 2", null, null, "normal");
+    for (let ordinal = 0; ordinal < 4; ordinal += 1) {
+      insertTrack.run(
+        uuidv7(),
+        sequenceId,
+        "audio",
+        ordinal,
+        `Audio ${ordinal + 1}`,
+        0,
+        0,
+        null,
+      );
+    }
+    insertTrack.run(
+      uuidv7(),
+      sequenceId,
+      "caption",
+      0,
+      "Captions",
+      null,
+      null,
+      null,
+    );
+  }
+
   private recoverOutbox(): void {
     const rows = this.db
       .prepare(
@@ -364,6 +421,7 @@ export class DoltStore {
       .doltStatus()
       .some((entry) => entry.staged === 1);
     const revision = hasStaged ? this.sqlCommit(row.message) : this.head;
+    this.semanticCommitBoundary?.("after-dolt-commit", operationId);
     this.runtime(() => {
       this.db
         .prepare(

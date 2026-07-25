@@ -89,6 +89,7 @@ export class EngineContext {
       dataDir: this.config.dataDir,
       workspaceDir: this.config.workspaceDir,
       initialBook,
+      semanticCommitBoundary: config.semanticCommitBoundary,
       ...(config.catalogBackup
         ? { catalogBackup: config.catalogBackup }
         : {}),

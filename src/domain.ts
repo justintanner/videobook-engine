@@ -2,12 +2,21 @@ import type {
   EntityDocument,
   EntityType,
   NotebookCell,
+  NotebookCellReference,
   NotebookDocument,
   NotebookEdge,
+  NotebookReferenceKind,
   NotebookRun,
+  PinnedSearchResult,
 } from "./notebook/types.js";
 import type { EngineError, Result, Revision } from "./engine-types.js";
+import type {
+  SearchQuery,
+  SearchSignal,
+} from "./mvp-contracts.js";
+import type { SearchLocation } from "./mvp-time.js";
 import { ok } from "./engine-types.js";
+import { normalizeSearchLocation } from "./mvp-time.js";
 import {
   EngineContext,
   resultOf,
@@ -52,6 +61,29 @@ interface NotebookEdgeRow {
   source_cell_id: string;
   target_cell_id: string;
   target_input: string;
+}
+
+interface NotebookReferenceRow {
+  cell_id: string;
+  reference_id: string;
+  kind: NotebookReferenceKind;
+  target_id: string;
+  snapshot_json: string;
+  ordinal: number;
+}
+
+interface PinnedSearchResultRow {
+  cell_id: string;
+  result_id: string;
+  artifact_id: string;
+  object_hash: string;
+  location_json: string;
+  representative_json: string | null;
+  query_json: string;
+  signals_json: string;
+  selected_revision: string;
+  ordinal: number;
+  created_at: number;
 }
 
 type NewNotebookCell = Omit<NotebookCell, "id"> & { id?: string };
@@ -293,7 +325,13 @@ async function writeNotebook(
           ...notebook.edges.map((edge) => `edge:${notebook.id}:${edge.id}`),
         ],
       },
-      ["notebooks", "cells", "edges"],
+      [
+        "notebooks",
+        "cells",
+        "edges",
+        "cell_references",
+        "pinned_search_results",
+      ],
       () => {
         context.store.db
           .prepare(
@@ -432,11 +470,35 @@ function notebookFromRows(
        FROM edges WHERE notebook_id=? ORDER BY edge_id`,
     )
     .all(row.notebook_id) as unknown as NotebookEdgeRow[];
+  const references = context.store.db
+    .prepare(
+      `SELECT cell_id, reference_id, kind, target_id, snapshot_json, ordinal
+       FROM cell_references
+       WHERE notebook_id=?
+       ORDER BY cell_id, ordinal, reference_id`,
+    )
+    .all(row.notebook_id) as unknown as NotebookReferenceRow[];
+  const pinnedResults = context.store.db
+    .prepare(
+      `SELECT cell_id, result_id, artifact_id, object_hash, location_json,
+              representative_json, query_json, signals_json,
+              selected_revision, ordinal, created_at
+       FROM pinned_search_results
+       WHERE notebook_id=?
+       ORDER BY cell_id, ordinal, result_id`,
+    )
+    .all(row.notebook_id) as unknown as PinnedSearchResultRow[];
   return {
     id: row.notebook_id,
     name: row.name,
     properties: parseJson<Record<string, unknown>>(row.properties_json, {}),
-    cells: cells.map(rowToCell),
+    cells: cells.map((cell) =>
+      rowToCell(
+        cell,
+        references.filter((reference) => reference.cell_id === cell.cell_id),
+        pinnedResults.filter((result) => result.cell_id === cell.cell_id),
+      ),
+    ),
     edges: edges.map(rowToEdge),
     createdAt: new Date(row.created_at).toISOString(),
   };
@@ -452,9 +514,21 @@ function validateNotebook(
     if (cellIds.has(cell.id)) throw new Error(`Duplicate cell ID: ${cell.id}`);
     cellIds.add(cell.id);
     if (
-      !["prompt", "character", "scene", "asset", "image", "video"].includes(
-        cell.type,
-      )
+      ![
+        "source",
+        "audio",
+        "transcript",
+        "note",
+        "search",
+        "selects",
+        "prompt",
+        "character",
+        "scene",
+        "asset",
+        "image",
+        "video",
+        "sequence",
+      ].includes(cell.type)
     ) {
       throw new Error(`Invalid cell type: ${cell.type}`);
     }
@@ -469,6 +543,8 @@ function validateNotebook(
       assertUuidV7(cell.outputArtifactId, "Cell output artifact ID");
       context.artifactRowById(cell.outputArtifactId);
     }
+    validateCellReferences(context, notebook, cell);
+    validatePinnedResults(context, cell);
   }
   const edgeIds = new Set<string>();
   for (const edge of notebook.edges) {
@@ -532,6 +608,8 @@ function synchronizeNotebookChildren(
       cell.outputArtifactId ?? null,
     );
   }
+  synchronizeCellReferences(context, notebook);
+  synchronizePinnedResults(context, notebook);
 
   const upsertEdge = context.store.db.prepare(
     `INSERT INTO edges(
@@ -575,7 +653,207 @@ function deleteMissing(
     .run(notebookId, ...ids);
 }
 
-function rowToCell(row: NotebookCellRow): NotebookCell {
+function validateCellReferences(
+  context: EngineContext,
+  notebook: NotebookDocument,
+  cell: NotebookCell,
+): void {
+  const ids = new Set<string>();
+  const ordinals = new Set<number>();
+  for (const reference of cell.references ?? []) {
+    assertUuidV7(reference.id, "Cell reference ID");
+    if (ids.has(reference.id)) {
+      throw new Error(`Duplicate cell reference ID: ${reference.id}`);
+    }
+    ids.add(reference.id);
+    validateOrdinal(reference.ordinal, "Cell reference ordinal");
+    if (ordinals.has(reference.ordinal)) {
+      throw new Error(`Duplicate cell reference ordinal: ${reference.ordinal}`);
+    }
+    ordinals.add(reference.ordinal);
+    requiredText(reference.targetId, "Cell reference target ID");
+    assertReferenceTarget(context, notebook, reference);
+  }
+}
+
+function assertReferenceTarget(
+  context: EngineContext,
+  notebook: NotebookDocument,
+  reference: NotebookCellReference,
+): void {
+  if (reference.kind === "artifact") {
+    context.artifactRowById(reference.targetId);
+    return;
+  }
+  if (reference.kind === "cell-output") {
+    if (!notebook.cells.some((cell) => cell.id === reference.targetId)) {
+      throw new Error(`Cell output target not found: ${reference.targetId}`);
+    }
+    return;
+  }
+  const table = reference.kind === "transcript"
+    ? "transcripts"
+    : reference.kind === "sequence"
+      ? "sequences"
+      : "artifact_streams";
+  const column = reference.kind === "transcript"
+    ? "transcript_id"
+    : reference.kind === "sequence"
+      ? "sequence_id"
+      : "stream_id";
+  const found = context.store.db
+    .prepare(`SELECT 1 AS present FROM ${table} WHERE ${column}=?`)
+    .get(reference.targetId);
+  if (!found) {
+    throw new Error(`${reference.kind} target not found: ${reference.targetId}`);
+  }
+}
+
+function validatePinnedResults(
+  context: EngineContext,
+  cell: NotebookCell,
+): void {
+  const ids = new Set<string>();
+  const ordinals = new Set<number>();
+  for (const result of cell.pinnedResults ?? []) {
+    assertUuidV7(result.id, "Pinned search result ID");
+    if (ids.has(result.id)) {
+      throw new Error(`Duplicate pinned search result ID: ${result.id}`);
+    }
+    ids.add(result.id);
+    validateOrdinal(result.ordinal, "Pinned search result ordinal");
+    if (ordinals.has(result.ordinal)) {
+      throw new Error(`Duplicate pinned search result ordinal: ${result.ordinal}`);
+    }
+    ordinals.add(result.ordinal);
+    context.artifactRowById(result.artifactId);
+    requiredText(result.objectHash, "Pinned search result object hash");
+    normalizeSearchLocation(result.location);
+    requiredText(result.selectedRevision, "Pinned search result revision");
+    if (!Number.isSafeInteger(result.createdAt) || result.createdAt < 0) {
+      throw new Error("Pinned search result createdAt must be a positive integer");
+    }
+    const object = context.store.db
+      .prepare("SELECT 1 AS present FROM objects WHERE object_hash=?")
+      .get(result.objectHash);
+    if (!object) {
+      throw new Error(`Pinned search result object not found: ${result.objectHash}`);
+    }
+  }
+}
+
+function validateOrdinal(value: number, label: string): void {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`${label} must be a non-negative safe integer`);
+  }
+}
+
+function synchronizeCellReferences(
+  context: EngineContext,
+  notebook: NotebookDocument,
+): void {
+  context.store.db
+    .prepare("DELETE FROM cell_references WHERE notebook_id=?")
+    .run(notebook.id);
+  const insert = context.store.db.prepare(
+    `INSERT INTO cell_references(
+      notebook_id, cell_id, reference_id, kind,
+      target_id, snapshot_json, ordinal
+    ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+  );
+  for (const cell of notebook.cells) {
+    for (const reference of cell.references ?? []) {
+      insert.run(
+        notebook.id,
+        cell.id,
+        reference.id,
+        reference.kind,
+        reference.targetId,
+        canonicalJson(reference.snapshot),
+        reference.ordinal,
+      );
+    }
+  }
+}
+
+function synchronizePinnedResults(
+  context: EngineContext,
+  notebook: NotebookDocument,
+): void {
+  context.store.db
+    .prepare("DELETE FROM pinned_search_results WHERE notebook_id=?")
+    .run(notebook.id);
+  const insert = context.store.db.prepare(
+    `INSERT INTO pinned_search_results(
+      notebook_id, cell_id, result_id, artifact_id, object_hash,
+      location_json, representative_json, query_json, signals_json,
+      selected_revision, ordinal, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  for (const cell of notebook.cells) {
+    for (const result of cell.pinnedResults ?? []) {
+      insert.run(
+        notebook.id,
+        cell.id,
+        result.id,
+        result.artifactId,
+        result.objectHash,
+        canonicalJson(normalizeSearchLocation(result.location)),
+        result.representativeTick === undefined
+          ? null
+          : canonicalJson(result.representativeTick),
+        canonicalJson(result.query),
+        canonicalJson(result.signals),
+        result.selectedRevision,
+        result.ordinal,
+        result.createdAt,
+      );
+    }
+  }
+}
+
+function rowToCellReference(row: NotebookReferenceRow): NotebookCellReference {
+  return {
+    id: row.reference_id,
+    kind: row.kind,
+    targetId: row.target_id,
+    snapshot: parseJson<Record<string, unknown>>(row.snapshot_json, {}),
+    ordinal: row.ordinal,
+  };
+}
+
+function rowToPinnedSearchResult(
+  row: PinnedSearchResultRow,
+): PinnedSearchResult {
+  const representativeTick = row.representative_json === null
+    ? undefined
+    : parseJson<number | undefined>(row.representative_json, undefined);
+  return {
+    id: row.result_id,
+    artifactId: row.artifact_id,
+    objectHash: row.object_hash,
+    location: normalizeSearchLocation(
+      parseJson<SearchLocation>(row.location_json, {
+        kind: "still",
+        artifactId: row.artifact_id,
+        sourcePath: "unknown",
+        objectHash: row.object_hash,
+      }),
+    ),
+    ...(representativeTick === undefined ? {} : { representativeTick }),
+    query: parseJson<SearchQuery>(row.query_json, {}),
+    signals: parseJson<SearchSignal[]>(row.signals_json, []),
+    selectedRevision: row.selected_revision,
+    ordinal: row.ordinal,
+    createdAt: row.created_at,
+  };
+}
+
+function rowToCell(
+  row: NotebookCellRow,
+  references: NotebookReferenceRow[],
+  pinnedResults: PinnedSearchResultRow[],
+): NotebookCell {
   return {
     id: row.cell_id,
     type: row.type,
@@ -588,6 +866,8 @@ function rowToCell(row: NotebookCellRow): NotebookCell {
     ...(row.output_artifact_id
       ? { outputArtifactId: row.output_artifact_id }
       : {}),
+    references: references.map(rowToCellReference),
+    pinnedResults: pinnedResults.map(rowToPinnedSearchResult),
   };
 }
 

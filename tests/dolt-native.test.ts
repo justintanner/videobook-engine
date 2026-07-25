@@ -18,11 +18,98 @@ import type { ContentStore } from "../src/engine-types.js";
 import {
   RUNTIME_TABLES,
   SCHEMA_VERSION,
-  SEMANTIC_SCHEMA_SQL,
   SEMANTIC_TABLES,
 } from "../src/schema.js";
 
 const roots: string[] = [];
+const MERGE_TABLES = [
+  "engine_schema",
+  "book",
+  "artifacts",
+  "entities",
+  "notebooks",
+  "cells",
+  "prompt_entries",
+  "actions",
+  "timeline",
+  "timeline_slots",
+] as const;
+const MERGE_SCHEMA_SQL = `
+  CREATE TABLE engine_schema (
+    singleton INTEGER PRIMARY KEY,
+    version INTEGER NOT NULL,
+    created_at INTEGER NOT NULL
+  );
+  CREATE TABLE book (
+    book_id TEXT PRIMARY KEY,
+    slug TEXT NOT NULL UNIQUE,
+    created_at INTEGER NOT NULL
+  );
+  CREATE TABLE artifacts (
+    artifact_id TEXT PRIMARY KEY,
+    slug TEXT NOT NULL UNIQUE,
+    kind TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  );
+  CREATE TABLE entities (
+    entity_id TEXT PRIMARY KEY,
+    type TEXT NOT NULL,
+    name TEXT NOT NULL,
+    description TEXT,
+    prompt TEXT,
+    data_json TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  );
+  CREATE TABLE notebooks (
+    notebook_id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    properties_json TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  );
+  CREATE TABLE cells (
+    notebook_id TEXT NOT NULL,
+    cell_id TEXT NOT NULL,
+    type TEXT NOT NULL,
+    title TEXT NOT NULL,
+    position_x REAL NOT NULL,
+    position_y REAL NOT NULL,
+    entity_id TEXT,
+    prompt TEXT,
+    model TEXT,
+    inputs_json TEXT NOT NULL,
+    output_artifact_id TEXT,
+    PRIMARY KEY(notebook_id, cell_id)
+  );
+  CREATE TABLE prompt_entries (
+    prompt_id TEXT PRIMARY KEY,
+    surface TEXT NOT NULL,
+    prompt TEXT NOT NULL,
+    context_json TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  );
+  CREATE TABLE actions (
+    action_id TEXT PRIMARY KEY,
+    operation TEXT NOT NULL,
+    scope TEXT NOT NULL,
+    actor TEXT NOT NULL,
+    lane TEXT NOT NULL,
+    phase TEXT NOT NULL,
+    details_json TEXT NOT NULL,
+    created_at INTEGER NOT NULL
+  );
+  CREATE TABLE timeline (
+    book_id TEXT PRIMARY KEY,
+    render TEXT NOT NULL
+  );
+  CREATE TABLE timeline_slots (
+    slot_id TEXT PRIMARY KEY,
+    artifact_id TEXT NOT NULL,
+    ordinal INTEGER NOT NULL,
+    volume REAL,
+    audio_fade_in REAL,
+    audio_fade_out REAL
+  );
+`;
 
 afterEach(async () => {
   await Promise.all(roots.splice(0).map(removeRoot));
@@ -152,9 +239,9 @@ describe("single-book Dolt engine", () => {
     suppliedAgain.close();
   });
 
-  it("creates the exact normalized v4 semantic and runtime schema", async () => {
+  it("creates the exact normalized v5 semantic and runtime schema", async () => {
     const { engine, dataDir } = await setup();
-    expect(SCHEMA_VERSION).toBe(4);
+    expect(SCHEMA_VERSION).toBe(5);
     engine.close();
 
     const db = new DatabaseSync(path.join(dataDir, "videobook.db"));
@@ -172,7 +259,7 @@ describe("single-book Dolt engine", () => {
     expect(tables).toEqual(
       [...SEMANTIC_TABLES, ...RUNTIME_TABLES].sort(),
     );
-    expect(tables).toHaveLength(39);
+    expect(tables).toHaveLength(61);
 
     const columns = (table: string) =>
       (
@@ -199,12 +286,21 @@ describe("single-book Dolt engine", () => {
       "properties_json",
       "created_at",
     ]);
+    expect(columns("artifact_streams")).toContain("time_base_numerator");
+    expect(columns("transcripts")).toContain("object_hash");
+    expect(columns("sequences")).toContain("frame_rate_numerator");
+    expect(columns("sequence_clips")).toContain("source_duration_ticks");
+    expect(columns("caption_cues")).toContain("transcript_revision");
+    expect(columns("edit_batches")).toContain("preview_hash");
+    expect(columns("runtime_media_segments")).toContain("source_range_json");
+    expect(columns("runtime_segment_embeddings")).toContain("embedding_space");
+    expect(columns("runtime_index_coverage")).toContain("covered_ranges_json");
     expect(columns("prompt_entries")[0]).toBe("prompt_id");
     expect(
       (db
         .prepare("SELECT version FROM engine_schema WHERE singleton=1")
         .get() as { version: number }).version,
-    ).toBe(4);
+    ).toBe(5);
     expect(
       db
         .prepare(
@@ -219,8 +315,8 @@ describe("single-book Dolt engine", () => {
     db.close();
   });
 
-  it("rejects v3 catalogs instead of migrating them", async () => {
-    const root = await mkdtemp(path.join(tmpdir(), "videobook-old-schema-"));
+  it.each([3, 4])("rejects v%s catalogs without an explicit migration", async (version) => {
+    const root = await mkdtemp(path.join(tmpdir(), `videobook-v${version}-schema-`));
     roots.push(root);
     const dataDir = path.join(root, "data");
     await mkdir(dataDir, { recursive: true });
@@ -232,7 +328,7 @@ describe("single-book Dolt engine", () => {
         created_at INTEGER NOT NULL
       );
       INSERT INTO engine_schema(singleton, version, created_at)
-      VALUES (1, 3, 0);`,
+      VALUES (1, ${version}, 0);`,
     );
     db.close();
 
@@ -241,7 +337,7 @@ describe("single-book Dolt engine", () => {
         dataDir,
         workspaceDir: path.join(root, "workspace"),
       }),
-    ).toThrow("Database schema 3 is not supported");
+    ).toThrow(`Database schema ${version} is not supported`);
   });
 
   it("keeps semantic history and runtime state in one database without projects", async () => {
@@ -493,7 +589,7 @@ describe("single-book Dolt engine", () => {
     roots.push(root);
     const mergeDatabasePath = path.join(root, "merge.db");
     const db = new DatabaseSync(mergeDatabasePath);
-    db.exec(SEMANTIC_SCHEMA_SQL);
+    db.exec(MERGE_SCHEMA_SQL);
     const bookId = uuidv7();
     const notebookId = uuidv7();
     const leftEntity = uuidv7();
@@ -501,7 +597,7 @@ describe("single-book Dolt engine", () => {
     const leftArtifact = uuidv7();
     const rightArtifact = uuidv7();
     db.prepare(
-      "INSERT INTO engine_schema(singleton, version, created_at) VALUES (1, 4, 0)",
+      "INSERT INTO engine_schema(singleton, version, created_at) VALUES (1, 5, 0)",
     ).run();
     db.prepare("INSERT INTO book(book_id, slug, created_at) VALUES (?, 'merge-book', 0)")
       .run(bookId);
@@ -522,7 +618,7 @@ describe("single-book Dolt engine", () => {
     db.prepare(
       "INSERT INTO timeline(book_id, render) VALUES (?, 'landscape')",
     ).run(bookId);
-    commitTables(db, [...SEMANTIC_TABLES], "initial merge fixture");
+    commitTables(db, [...MERGE_TABLES], "initial merge fixture");
 
     const leftCell = uuidv7();
     const rightCell = uuidv7();
@@ -598,10 +694,6 @@ describe("single-book Dolt engine", () => {
 
     db.doltCheckout("main");
     db.doltReset("--hard");
-    // DoltLite 0.11 leaves the last checked-out insert in the base working
-    // set for this empty child table; restore the committed base before merge.
-    db.prepare("DELETE FROM timeline_slots").run();
-    commitTables(db, ["timeline_slots"], "restore merge base");
     expect(db.doltMerge("fork-left").conflicts).toBe(0);
     expect(db.doltMerge("fork-right").conflicts).toBe(0);
     expect(
@@ -667,6 +759,48 @@ describe("single-book Dolt engine", () => {
       deadlineAt: null,
     });
     expect(value(await engine.status.get(artifact.artifactId))).toBe("generating");
+    engine.close();
+  });
+
+  it("propagates durable cancellation into a running handler", async () => {
+    const { engine } = await setup();
+    let started: (() => void) | undefined;
+    const running = new Promise<void>((resolve) => {
+      started = resolve;
+    });
+    let observedReason: unknown;
+    const runner = engine.jobs.queue.createRunner({
+      concurrency: 1,
+      pollIntervalMs: 10,
+      resolveHandler: () => async (_job, signal) => {
+        started?.();
+        await new Promise<void>((resolve) => {
+          if (signal?.aborted) {
+            observedReason = signal.reason;
+            resolve();
+            return;
+          }
+          signal?.addEventListener("abort", () => {
+            observedReason = signal.reason;
+            resolve();
+          }, { once: true });
+        });
+      },
+    });
+    runner.start();
+    const enqueued = engine.jobs.queue.enqueue({
+      type: "cancel-test",
+      payload: {},
+    });
+    await running;
+    expect(await engine.jobs.queue.abort(enqueued.job.id, "Cancelled in test")).toBe(true);
+    await runner.waitFor(enqueued.job.id).catch(() => undefined);
+    expect(observedReason).toMatchObject({
+      name: "AbortError",
+      message: "Cancelled in test",
+    });
+    expect(engine.jobs.queue.get(enqueued.job.id)?.state).toBe("aborted");
+    await runner.stop();
     engine.close();
   });
 

@@ -1,0 +1,1922 @@
+import { createHash } from "node:crypto";
+
+import type { ArtifactKind, EngineError, Result } from "./engine-types.js";
+import type {
+  CommitTemporalIndexBatchInput,
+  IndexBatchResult,
+  IndexCoverage,
+  IndexManifest,
+  IndexPhase,
+  SearchCoverage,
+  SearchHit,
+  SearchModality,
+  SearchPage,
+  SearchQuery,
+  SearchReference,
+  SearchSignal,
+  TemporalIndexObservation,
+  TemporalIndexPlan,
+  TemporalSearchProvider,
+  TemporalSearchStats,
+} from "./mvp-contracts.js";
+import type { SearchLocation, SourceRange } from "./mvp-time.js";
+import {
+  normalizeSourcePoint,
+  normalizeSourceRange,
+  rationalEquals,
+  sourceRangeEndTick,
+} from "./mvp-time.js";
+import { EngineContext, resultOf, syncResultOf } from "./context.js";
+import { newUuidV7 } from "./ids.js";
+import { canonicalJson, EngineFault, parseJson } from "./store.js";
+
+interface ManifestRow {
+  manifest_id: string;
+  provider: string;
+  model_id: string;
+  model_revision: string;
+  license: string | null;
+  embedding_space: string;
+  dimensions: number;
+  modalities_json: string;
+  supported_languages_json: string;
+  preprocessing_version: string;
+  extractor_version: string;
+  created_at: number;
+}
+
+interface GenerationRow {
+  embedding_space: string;
+  generation: string;
+  manifest_id: string;
+  state: "building" | "active" | "retired";
+}
+
+interface CoverageRow {
+  artifact_id: string;
+  object_hash: string;
+  manifest_id: string;
+  generation: string;
+  phase: IndexPhase;
+  state: IndexCoverage["state"];
+  covered_ranges_json: string;
+  indexed_units: number;
+  total_units: number | null;
+  retryable: number;
+  error_json: string | null;
+  cursor: string | null;
+  updated_at: number;
+}
+
+interface SegmentRow {
+  segment_id: string;
+  artifact_id: string;
+  artifact_slug: string;
+  artifact_kind: ArtifactKind;
+  artifact_created_at: number;
+  stream_id: string | null;
+  object_hash: string;
+  source_range_json: string | null;
+  source_path: string | null;
+  segment_kind: string;
+  representative_tick: number | null;
+  generation: string;
+  manifest_id: string;
+}
+
+interface TextRow {
+  segment_id: string;
+  kind: string;
+  text: string;
+}
+
+interface EmbeddingRow {
+  segment_id: string;
+  embedding_space: string;
+  modality: Exclude<SearchModality, "auto" | "metadata">;
+  dimensions: number;
+  vector_blob: Uint8Array;
+}
+
+interface Candidate {
+  segment: SegmentRow;
+  signals: SearchSignal[];
+  excerpt?: string;
+  score: number;
+}
+
+const INDEX_PHASES: IndexPhase[] = [
+  "probe",
+  "segment",
+  "transcript",
+  "ocr",
+  "visual",
+  "audio",
+  "lexical",
+  "activate",
+];
+
+export function createTemporalSearchApi(context: EngineContext) {
+  const providers = new Map<string, TemporalSearchProvider>();
+  return {
+    providers: {
+      register: (provider: TemporalSearchProvider): void => {
+        requiredText(provider.manifestId, "Provider manifest ID");
+        providers.set(provider.manifestId, provider);
+      },
+      list: (): string[] => [...providers.keys()].sort(),
+    },
+    manifests: {
+      register: (manifest: IndexManifest): Result<IndexManifest, EngineError> =>
+        syncResultOf(() => registerManifest(context, manifest)),
+      list: (): IndexManifest[] => listManifests(context),
+      get: (manifestId: string): Result<IndexManifest, EngineError> =>
+        syncResultOf(() => requiredManifest(context, manifestId)),
+    },
+    plan: (
+      artifact: string,
+      objectHash: string,
+      manifestId: string,
+      generation: string,
+    ): Result<TemporalIndexPlan, EngineError> =>
+      syncResultOf(() =>
+        indexPlan(context, artifact, objectHash, manifestId, generation),
+      ),
+    commitBatch: (
+      input: CommitTemporalIndexBatchInput,
+    ): Result<IndexBatchResult, EngineError> =>
+      syncResultOf(() => commitIndexBatch(context, input)),
+    activate: (
+      manifestId: string,
+      generation: string,
+    ): Result<{ manifestId: string; generation: string }, EngineError> =>
+      syncResultOf(() => activateGeneration(context, manifestId, generation)),
+    coverage: (artifact?: string): Result<SearchCoverage, EngineError> =>
+      syncResultOf(() => searchCoverage(context, artifact)),
+    query: (
+      query: SearchQuery,
+    ): Promise<Result<SearchPage, EngineError>> =>
+      queryTemporalIndex(context, providers, query),
+    invalidate: (
+      artifact: string,
+      objectHash?: string,
+    ): Result<number, EngineError> =>
+      syncResultOf(() => invalidateCoverage(context, artifact, objectHash)),
+    cleanup: (): Result<{ removedSegments: number }, EngineError> =>
+      syncResultOf(() => cleanupRetired(context)),
+    stats: (): TemporalSearchStats => temporalStats(context),
+  };
+}
+
+function registerManifest(
+  context: EngineContext,
+  manifest: IndexManifest,
+): IndexManifest {
+  validateManifest(manifest);
+  const existing = context.store.db
+    .prepare("SELECT * FROM runtime_index_manifests WHERE manifest_id=?")
+    .get(manifest.manifestId) as unknown as ManifestRow | undefined;
+  if (existing) {
+    const projected = manifestFromRow(existing);
+    if (canonicalJson(projected) !== canonicalJson(manifest)) {
+      throw new EngineFault({
+        code: "MANIFEST_INCOMPATIBLE",
+        message: `Index manifest is immutable: ${manifest.manifestId}`,
+      });
+    }
+    return projected;
+  }
+  context.store.runtime(() => {
+    context.store.db
+      .prepare(
+        `INSERT INTO runtime_index_manifests(
+          manifest_id, provider, model_id, model_revision, license,
+          embedding_space, dimensions, modalities_json,
+          supported_languages_json, preprocessing_version,
+          extractor_version, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        manifest.manifestId,
+        manifest.provider,
+        manifest.modelId,
+        manifest.modelRevision,
+        manifest.license ?? null,
+        manifest.embeddingSpace,
+        manifest.dimensions,
+        canonicalJson(manifest.modalities),
+        canonicalJson(manifest.supportedLanguages),
+        manifest.preprocessingVersion,
+        manifest.extractorVersion,
+        manifest.createdAt,
+      );
+  });
+  return manifest;
+}
+
+function validateManifest(manifest: IndexManifest): void {
+  requiredText(manifest.manifestId, "Manifest ID");
+  requiredText(manifest.provider, "Manifest provider");
+  requiredText(manifest.modelId, "Manifest model ID");
+  requiredText(manifest.modelRevision, "Manifest model revision");
+  requiredText(manifest.embeddingSpace, "Manifest embedding space");
+  safeIntegerAtLeast(manifest.dimensions, 1, "Manifest dimensions");
+  if (manifest.modalities.length === 0) {
+    throw new Error("Manifest must support at least one modality");
+  }
+  requiredText(manifest.preprocessingVersion, "Preprocessing version");
+  requiredText(manifest.extractorVersion, "Extractor version");
+  safeIntegerAtLeast(manifest.createdAt, 0, "Manifest createdAt");
+}
+
+function listManifests(context: EngineContext): IndexManifest[] {
+  return (
+    context.store.db
+      .prepare(
+        `SELECT * FROM runtime_index_manifests
+         ORDER BY created_at, manifest_id`,
+      )
+      .all() as unknown as ManifestRow[]
+  ).map(manifestFromRow);
+}
+
+function requiredManifest(
+  context: EngineContext,
+  manifestId: string,
+): IndexManifest {
+  const row = context.store.db
+    .prepare("SELECT * FROM runtime_index_manifests WHERE manifest_id=?")
+    .get(manifestId) as unknown as ManifestRow | undefined;
+  if (!row) {
+    throw new EngineFault({
+      code: "NOT_FOUND",
+      message: `Index manifest not found: ${manifestId}`,
+    });
+  }
+  return manifestFromRow(row);
+}
+
+function manifestFromRow(row: ManifestRow): IndexManifest {
+  return {
+    manifestId: row.manifest_id,
+    provider: row.provider,
+    modelId: row.model_id,
+    modelRevision: row.model_revision,
+    ...(row.license ? { license: row.license } : {}),
+    embeddingSpace: row.embedding_space,
+    dimensions: row.dimensions,
+    modalities: parseJson<IndexManifest["modalities"]>(row.modalities_json, []),
+    supportedLanguages: parseJson<string[]>(row.supported_languages_json, []),
+    preprocessingVersion: row.preprocessing_version,
+    extractorVersion: row.extractor_version,
+    createdAt: row.created_at,
+  };
+}
+
+function indexPlan(
+  context: EngineContext,
+  artifactReference: string,
+  objectHash: string,
+  manifestId: string,
+  generation: string,
+): TemporalIndexPlan {
+  const artifact = context.artifactRow(artifactReference);
+  assertArtifactObject(context, artifact.artifact_id, objectHash);
+  requiredManifest(context, manifestId);
+  requiredText(generation, "Index generation");
+  const coverage = coverageRows(
+    context,
+    "WHERE artifact_id=? AND object_hash=? AND manifest_id=? AND generation=?",
+    [artifact.artifact_id, objectHash, manifestId, generation],
+  );
+  const completed = new Set(
+    coverage
+      .filter((item) => item.state === "ready")
+      .map((item) => item.phase),
+  );
+  return {
+    artifactId: artifact.artifact_id,
+    objectHash,
+    manifestId,
+    generation,
+    phases: INDEX_PHASES,
+    pendingPhases: INDEX_PHASES.filter((phase) => !completed.has(phase)),
+    coverage,
+  };
+}
+
+function commitIndexBatch(
+  context: EngineContext,
+  input: CommitTemporalIndexBatchInput,
+): IndexBatchResult {
+  const artifact = context.artifactRow(input.artifactId);
+  const manifest = requiredManifest(context, input.manifestId);
+  if (artifact.artifact_id !== input.artifactId) {
+    throw new EngineFault({
+      code: "INVALID_INPUT",
+      message: "Index batches require a canonical artifact ID",
+    });
+  }
+  assertArtifactObject(context, artifact.artifact_id, input.objectHash);
+  requiredText(input.generation, "Index generation");
+  safeIntegerAtLeast(input.maxUnits, 1, "Index batch max units");
+  if (input.observations.length > input.maxUnits) {
+    throw new EngineFault({
+      code: "RESOURCE_EXHAUSTED",
+      message: "Index batch exceeds maxUnits",
+    });
+  }
+  const batchKey = hashJson({
+    artifactId: input.artifactId,
+    objectHash: input.objectHash,
+    manifestId: input.manifestId,
+    generation: input.generation,
+    phase: input.phase,
+    cursor: input.cursor ?? null,
+    observations: input.observations,
+  });
+  const existing = context.store.db
+    .prepare("SELECT result_json FROM runtime_index_batches WHERE batch_key=?")
+    .get(batchKey) as unknown as { result_json: string } | undefined;
+  if (existing) {
+    return parseJson<IndexBatchResult>(existing.result_json, {
+      artifactId: input.artifactId,
+      manifestId: input.manifestId,
+      phase: input.phase,
+      committedUnits: 0,
+      coveredRanges: [],
+      complete: false,
+      generation: input.generation,
+    });
+  }
+  const observations = input.observations.map((observation, index) =>
+    normalizeObservation(context, manifest, input, observation, index),
+  );
+  const coveredRanges = input.coveredRanges.map(normalizeSourceRange);
+  const result: IndexBatchResult = {
+    artifactId: input.artifactId,
+    manifestId: input.manifestId,
+    phase: input.phase,
+    committedUnits: observations.length,
+    coveredRanges,
+    ...(input.nextCursor ? { nextCursor: input.nextCursor } : {}),
+    complete: input.complete,
+    generation: input.generation,
+  };
+  context.store.runtime((now) => {
+    ensureGeneration(context, manifest, input.generation, now);
+    for (const observation of observations) {
+      upsertObservation(context, input, observation, now);
+    }
+    const prior = context.store.db
+      .prepare(
+        `SELECT indexed_units FROM runtime_index_coverage
+         WHERE artifact_id=? AND object_hash=? AND manifest_id=?
+           AND generation=? AND phase=?`,
+      )
+      .get(
+        input.artifactId,
+        input.objectHash,
+        input.manifestId,
+        input.generation,
+        input.phase,
+      ) as unknown as { indexed_units: number } | undefined;
+    context.store.db
+      .prepare(
+        `INSERT INTO runtime_index_coverage(
+          artifact_id, object_hash, manifest_id, generation, phase,
+          state, covered_ranges_json, indexed_units, total_units,
+          retryable, error_json, cursor, updated_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, NULL, ?, ?)
+        ON CONFLICT(
+          artifact_id, object_hash, manifest_id, generation, phase
+        ) DO UPDATE SET
+          state=excluded.state,
+          covered_ranges_json=excluded.covered_ranges_json,
+          indexed_units=excluded.indexed_units,
+          total_units=excluded.total_units,
+          retryable=1,
+          error_json=NULL,
+          cursor=excluded.cursor,
+          updated_at=excluded.updated_at`,
+      )
+      .run(
+        input.artifactId,
+        input.objectHash,
+        input.manifestId,
+        input.generation,
+        input.phase,
+        input.complete ? "ready" : "partial",
+        canonicalJson(coveredRanges),
+        (prior?.indexed_units ?? 0) + observations.length,
+        input.totalUnits ?? null,
+        input.nextCursor ?? null,
+        now,
+      );
+    context.store.db
+      .prepare(
+        `INSERT INTO runtime_index_batches(
+          batch_key, artifact_id, object_hash, manifest_id, generation,
+          phase, cursor, result_json, committed_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      )
+      .run(
+        batchKey,
+        input.artifactId,
+        input.objectHash,
+        input.manifestId,
+        input.generation,
+        input.phase,
+        input.cursor ?? null,
+        canonicalJson(result),
+        now,
+      );
+  });
+  return result;
+}
+
+function normalizeObservation(
+  context: EngineContext,
+  manifest: IndexManifest,
+  batch: CommitTemporalIndexBatchInput,
+  input: TemporalIndexObservation,
+  index: number,
+): TemporalIndexObservation & { segmentId: string } {
+  if (
+    input.artifactId !== batch.artifactId
+    || input.objectHash !== batch.objectHash
+  ) {
+    throw new EngineFault({
+      code: "INVALID_INPUT",
+      message: "Index observation source does not match its batch",
+    });
+  }
+  const segmentId =
+    input.segmentId
+    ?? deterministicUuid(
+      batch.generation,
+      `${batch.artifactId}:${batch.phase}:${batch.cursor ?? "start"}:${index}`,
+    );
+  if (input.range) {
+    const range = normalizeSourceRange(input.range);
+    if (
+      range.objectHash !== batch.objectHash
+      || (input.streamId && range.streamId !== input.streamId)
+    ) {
+      throw new EngineFault({
+        code: "INVALID_RANGE",
+        message: "Observation range does not match its stream identity",
+      });
+    }
+    const stream = context.store.db
+      .prepare(
+        `SELECT artifact_id, object_hash, duration_ticks,
+                time_base_numerator, time_base_denominator
+         FROM artifact_streams WHERE stream_id=?`,
+      )
+      .get(range.streamId) as unknown as
+      | {
+          artifact_id: string;
+          object_hash: string;
+          duration_ticks: number;
+          time_base_numerator: number;
+          time_base_denominator: number;
+        }
+      | undefined;
+    if (
+      !stream
+      || stream.artifact_id !== batch.artifactId
+      || stream.object_hash !== batch.objectHash
+      || sourceRangeEndTick(range) > stream.duration_ticks
+      || !rationalEquals(range.timeBase, {
+        numerator: stream.time_base_numerator,
+        denominator: stream.time_base_denominator,
+      })
+    ) {
+      throw new EngineFault({
+        code: "INVALID_RANGE",
+        message: "Observation range exceeds or mismatches its source stream",
+      });
+    }
+  } else if (!input.sourcePath) {
+    throw new EngineFault({
+      code: "INVALID_INPUT",
+      message: "Untimed observations require a source path",
+    });
+  }
+  requiredText(input.segmentationVersion, "Segmentation version");
+  for (const text of input.texts) {
+    requiredText(text.text, "Segment text");
+    if (
+      text.startUtf8Byte !== undefined
+      || text.endUtf8Byte !== undefined
+    ) {
+      safeIntegerAtLeast(text.startUtf8Byte ?? -1, 0, "Text start byte");
+      safeIntegerAtLeast(text.endUtf8Byte ?? -1, 1, "Text end byte");
+      if ((text.endUtf8Byte ?? 0) <= (text.startUtf8Byte ?? 0)) {
+        throw new EngineFault({
+          code: "INVALID_RANGE",
+          message: "Text byte range must be positive and half-open",
+        });
+      }
+    }
+  }
+  for (const embedding of input.embeddings) {
+    if (embedding.embeddingSpace !== manifest.embeddingSpace) {
+      throw new EngineFault({
+        code: "MANIFEST_INCOMPATIBLE",
+        message: "Observation embedding space does not match its manifest",
+      });
+    }
+    if (embedding.vector.length !== manifest.dimensions) {
+      throw new EngineFault({
+        code: "MANIFEST_INCOMPATIBLE",
+        message: "Observation vector dimensions do not match its manifest",
+      });
+    }
+    if (!embedding.vector.every(Number.isFinite)) {
+      throw new Error("Observation vectors must contain finite numbers");
+    }
+  }
+  return {
+    ...structuredClone(input),
+    segmentId,
+    ...(input.range ? { range: normalizeSourceRange(input.range) } : {}),
+  };
+}
+
+function ensureGeneration(
+  context: EngineContext,
+  manifest: IndexManifest,
+  generation: string,
+  now: number,
+): void {
+  const existing = context.store.db
+    .prepare(
+      `SELECT manifest_id FROM runtime_index_generations
+       WHERE embedding_space=? AND generation=?`,
+    )
+    .get(manifest.embeddingSpace, generation) as unknown as
+    | { manifest_id: string }
+    | undefined;
+  if (existing && existing.manifest_id !== manifest.manifestId) {
+    throw new EngineFault({
+      code: "MANIFEST_INCOMPATIBLE",
+      message: "Generation is already bound to another manifest",
+    });
+  }
+  context.store.db
+    .prepare(
+      `INSERT OR IGNORE INTO runtime_index_generations(
+        embedding_space, generation, manifest_id, state,
+        activated_at, created_at
+      ) VALUES (?, ?, ?, 'building', NULL, ?)`,
+    )
+    .run(manifest.embeddingSpace, generation, manifest.manifestId, now);
+}
+
+function upsertObservation(
+  context: EngineContext,
+  batch: CommitTemporalIndexBatchInput,
+  observation: TemporalIndexObservation & { segmentId: string },
+  now: number,
+): void {
+  context.store.db
+    .prepare(
+      `INSERT INTO runtime_media_segments(
+        segment_id, artifact_id, stream_id, object_hash,
+        source_range_json, source_path, segment_kind,
+        representative_tick, segmentation_version,
+        generation, manifest_id, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(segment_id) DO UPDATE SET
+        source_range_json=excluded.source_range_json,
+        source_path=excluded.source_path,
+        segment_kind=excluded.segment_kind,
+        representative_tick=excluded.representative_tick,
+        segmentation_version=excluded.segmentation_version`,
+    )
+    .run(
+      observation.segmentId,
+      observation.artifactId,
+      observation.streamId ?? observation.range?.streamId ?? null,
+      observation.objectHash,
+      observation.range ? canonicalJson(observation.range) : null,
+      observation.sourcePath ?? null,
+      observation.kind,
+      observation.representativeTick ?? null,
+      observation.segmentationVersion,
+      batch.generation,
+      batch.manifestId,
+      now,
+    );
+  context.store.db
+    .prepare("DELETE FROM runtime_segment_text WHERE segment_id=?")
+    .run(observation.segmentId);
+  context.store.db
+    .prepare("DELETE FROM runtime_segment_embeddings WHERE segment_id=?")
+    .run(observation.segmentId);
+  context.store.db
+    .prepare("DELETE FROM runtime_segment_fingerprints WHERE segment_id=?")
+    .run(observation.segmentId);
+  const insertText = context.store.db.prepare(
+    `INSERT INTO runtime_segment_text(
+      text_id, segment_id, kind, language, text,
+      start_utf8_byte, end_utf8_byte, confidence,
+      provenance_json, generation
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  observation.texts.forEach((text, index) => {
+    insertText.run(
+      text.textId ?? deterministicUuid(observation.segmentId, `text:${index}`),
+      observation.segmentId,
+      text.kind,
+      text.language ?? null,
+      text.text,
+      text.startUtf8Byte ?? null,
+      text.endUtf8Byte ?? null,
+      text.confidence ?? null,
+      canonicalJson(text.provenance ?? {}),
+      batch.generation,
+    );
+  });
+  const insertEmbedding = context.store.db.prepare(
+    `INSERT INTO runtime_segment_embeddings(
+      embedding_id, segment_id, modality, embedding_space,
+      dimensions, vector_blob, source_hash, generation, updated_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  );
+  observation.embeddings.forEach((embedding, index) => {
+    insertEmbedding.run(
+      embedding.embeddingId
+        ?? deterministicUuid(observation.segmentId, `embedding:${index}`),
+      observation.segmentId,
+      embedding.modality,
+      embedding.embeddingSpace,
+      embedding.vector.length,
+      vectorToBlob(embedding.vector),
+      embedding.sourceHash,
+      batch.generation,
+      now,
+    );
+  });
+  const insertFingerprint = context.store.db.prepare(
+    `INSERT INTO runtime_segment_fingerprints(
+      fingerprint_id, segment_id, kind, value,
+      extractor_version, generation
+    ) VALUES (?, ?, ?, ?, ?, ?)`,
+  );
+  observation.fingerprints.forEach((fingerprint, index) => {
+    insertFingerprint.run(
+      fingerprint.fingerprintId
+        ?? deterministicUuid(observation.segmentId, `fingerprint:${index}`),
+      observation.segmentId,
+      fingerprint.kind,
+      fingerprint.value,
+      fingerprint.extractorVersion,
+      batch.generation,
+    );
+  });
+}
+
+function activateGeneration(
+  context: EngineContext,
+  manifestId: string,
+  generation: string,
+): { manifestId: string; generation: string } {
+  const manifest = requiredManifest(context, manifestId);
+  const row = context.store.db
+    .prepare(
+      `SELECT state FROM runtime_index_generations
+       WHERE embedding_space=? AND generation=? AND manifest_id=?`,
+    )
+    .get(manifest.embeddingSpace, generation, manifestId) as unknown as
+    | { state: GenerationRow["state"] }
+    | undefined;
+  if (!row) {
+    throw new EngineFault({
+      code: "NOT_FOUND",
+      message: `Index generation not found: ${generation}`,
+    });
+  }
+  const ready = context.store.db
+    .prepare(
+      `SELECT 1 AS present FROM runtime_index_coverage
+       WHERE manifest_id=? AND generation=?
+         AND state IN ('ready','partial') LIMIT 1`,
+    )
+    .get(manifestId, generation);
+  if (!ready) {
+    throw new EngineFault({
+      code: "INDEX_INCOMPLETE",
+      message: "Generation has no searchable coverage",
+    });
+  }
+  context.store.runtime((now) => {
+    context.store.db
+      .prepare(
+        `UPDATE runtime_index_generations
+         SET state='retired'
+         WHERE embedding_space=? AND state='active' AND generation<>?`,
+      )
+      .run(manifest.embeddingSpace, generation);
+    context.store.db
+      .prepare(
+        `UPDATE runtime_index_generations
+         SET state='active', activated_at=?
+         WHERE embedding_space=? AND generation=?`,
+      )
+      .run(now, manifest.embeddingSpace, generation);
+  });
+  return { manifestId, generation };
+}
+
+async function queryTemporalIndex(
+  context: EngineContext,
+  providers: Map<string, TemporalSearchProvider>,
+  query: SearchQuery,
+): Promise<Result<SearchPage, EngineError>> {
+  return resultOf(async () => {
+    validateQuery(query);
+    const active = activeGenerations(context);
+    const generationKey = hashJson(
+      active.map((item) => [item.embedding_space, item.generation]),
+    );
+    const offset = decodeCursor(query.cursor, generationKey);
+    const segments = querySegments(context, active, query);
+    const candidates = new Map<string, Candidate>(
+      segments.map((segment) => [
+        segment.segment_id,
+        { segment, signals: [], score: 0 },
+      ]),
+    );
+    if (query.text) {
+      if (allowsLexical(query.modalities)) {
+        addLexicalSignals(context, candidates, query.text, active);
+      }
+      if (allowsSemanticVector(query.modalities)) {
+        await addTextVectorSignals(
+          context,
+          providers,
+          candidates,
+          query.text,
+          active,
+        );
+      }
+    }
+    if (query.reference) {
+      addReferenceSignals(context, candidates, query.reference, active);
+    }
+    const ranked = [...candidates.values()]
+      .filter(
+        (candidate) =>
+          (!query.sourceArtifactIds
+            || query.sourceArtifactIds.includes(candidate.segment.artifact_id))
+          && (!query.artifactKinds
+            || query.artifactKinds.includes(candidate.segment.artifact_kind)),
+      )
+      .map((candidate) => ({
+        ...candidate,
+        signals: candidate.signals.filter((signal) =>
+          allowsSignal(query.modalities, signal.kind),
+        ),
+      }))
+      .filter((candidate) => candidate.signals.length > 0)
+      .map(finalizeCandidate)
+      .filter((candidate) => candidate.score >= (query.minScore ?? 0))
+      .sort(compareCandidates);
+    const deduplicated = collapseOverlaps(ranked);
+    const limit = Math.min(query.limit ?? 20, 100);
+    const page = deduplicated.slice(offset, offset + limit);
+    return {
+      hits: page.map(candidateToHit),
+      ...(offset + limit < deduplicated.length
+        ? {
+            nextCursor: encodeCursor(generationKey, offset + limit),
+          }
+        : {}),
+      coverage: searchCoverage(context),
+    };
+  });
+}
+
+function allowsLexical(modalities: SearchModality[] | undefined): boolean {
+  return (
+    !modalities
+    || modalities.includes("auto")
+    || modalities.some((item) =>
+      item === "speech" || item === "ocr" || item === "metadata"
+    )
+  );
+}
+
+function allowsSemanticVector(
+  modalities: SearchModality[] | undefined,
+): boolean {
+  return (
+    !modalities
+    || modalities.includes("auto")
+    || modalities.some((item) =>
+      item === "visual"
+      || item === "audio"
+      || item === "speech"
+      || item === "ocr"
+    )
+  );
+}
+
+function allowsSignal(
+  modalities: SearchModality[] | undefined,
+  signal: SearchSignal["kind"],
+): boolean {
+  if (!modalities || modalities.includes("auto")) return true;
+  if (signal === "exact" || signal === "near") return true;
+  return modalities.includes(signal);
+}
+
+function activeGenerations(context: EngineContext): GenerationRow[] {
+  return context.store.db
+    .prepare(
+      `SELECT embedding_space, generation, manifest_id, state
+       FROM runtime_index_generations
+       WHERE state='active'
+       ORDER BY embedding_space, generation`,
+    )
+    .all() as unknown as GenerationRow[];
+}
+
+function querySegments(
+  context: EngineContext,
+  active: GenerationRow[],
+  query: SearchQuery,
+): SegmentRow[] {
+  if (active.length === 0) return [];
+  const generations = active.map((item) => item.generation);
+  const placeholders = generations.map(() => "?").join(",");
+  const rows = context.store.db
+    .prepare(
+      `SELECT s.segment_id, s.artifact_id, a.slug AS artifact_slug,
+              a.kind AS artifact_kind, a.created_at AS artifact_created_at,
+              s.stream_id, s.object_hash,
+              s.source_range_json, s.source_path, s.segment_kind,
+              s.representative_tick, s.generation, s.manifest_id
+       FROM runtime_media_segments s
+       JOIN artifacts a ON a.artifact_id=s.artifact_id
+       WHERE s.generation IN (${placeholders})
+       ORDER BY s.artifact_id, s.stream_id, s.representative_tick, s.segment_id`,
+    )
+    .all(...generations) as unknown as SegmentRow[];
+  return rows.filter((row) => {
+    if (query.artifactKinds && !query.artifactKinds.includes(row.artifact_kind)) {
+      return false;
+    }
+    if (
+      query.sourceArtifactIds
+      && !query.sourceArtifactIds.includes(row.artifact_id)
+    ) {
+      return false;
+    }
+    if (
+      query.createdAfter !== undefined
+      && row.artifact_created_at <= query.createdAfter
+    ) {
+      return false;
+    }
+    if (
+      query.createdBefore !== undefined
+      && row.artifact_created_at >= query.createdBefore
+    ) {
+      return false;
+    }
+    if (query.labels && !artifactHasLabels(context, row.artifact_id, query.labels)) {
+      return false;
+    }
+    if (
+      query.orientations
+      && !query.orientations.includes(artifactOrientation(context, row.artifact_id))
+    ) {
+      return false;
+    }
+    if (
+      query.indexingStates
+      && !query.indexingStates.includes(
+        artifactGenerationState(context, row.artifact_id, row.generation),
+      )
+    ) {
+      return false;
+    }
+    if (query.durationMs) {
+      const range = segmentRange(row);
+      if (range) {
+        const durationMs =
+          (range.durationTicks * range.timeBase.numerator * 1_000)
+          / range.timeBase.denominator;
+        if (
+          (query.durationMs.min !== undefined
+            && durationMs < query.durationMs.min)
+          || (query.durationMs.max !== undefined
+            && durationMs > query.durationMs.max)
+        ) {
+          return false;
+        }
+      }
+    }
+    return true;
+  });
+}
+
+function artifactHasLabels(
+  context: EngineContext,
+  artifactId: string,
+  requested: string[],
+): boolean {
+  const row = context.store.db
+    .prepare(
+      `SELECT value_json FROM artifact_metadata
+       WHERE artifact_id=? AND key='labels'`,
+    )
+    .get(artifactId) as unknown as { value_json: string } | undefined;
+  const labels = row ? parseJson<string[]>(row.value_json, []) : [];
+  return requested.every((label) => labels.includes(label));
+}
+
+function artifactOrientation(
+  context: EngineContext,
+  artifactId: string,
+): "landscape" | "portrait" | "square" {
+  const row = context.store.db
+    .prepare(
+      `SELECT profile_json FROM artifact_streams
+       WHERE artifact_id=? AND kind='video'
+       ORDER BY stream_index LIMIT 1`,
+    )
+    .get(artifactId) as unknown as { profile_json: string } | undefined;
+  const profile = row
+    ? parseJson<{ video?: { width?: number; height?: number } }>(
+        row.profile_json,
+        {},
+      )
+    : {};
+  const width = profile.video?.width ?? 1;
+  const height = profile.video?.height ?? 1;
+  if (width === height) return "square";
+  return width > height ? "landscape" : "portrait";
+}
+
+function artifactGenerationState(
+  context: EngineContext,
+  artifactId: string,
+  generation: string,
+): IndexCoverage["state"] {
+  const rows = context.store.db
+    .prepare(
+      `SELECT state FROM runtime_index_coverage
+       WHERE artifact_id=? AND generation=?`,
+    )
+    .all(artifactId, generation) as unknown as Array<{
+    state: IndexCoverage["state"];
+  }>;
+  return aggregateCoverageState(rows);
+}
+
+function addLexicalSignals(
+  context: EngineContext,
+  candidates: Map<string, Candidate>,
+  text: string,
+  active: GenerationRow[],
+): void {
+  const generations = active.map((item) => item.generation);
+  if (generations.length === 0) return;
+  const rows = context.store.db
+    .prepare(
+      `SELECT segment_id, kind, text
+       FROM runtime_segment_text
+       WHERE generation IN (${generations.map(() => "?").join(",")})
+       ORDER BY segment_id, kind, text`,
+    )
+    .all(...generations) as unknown as TextRow[];
+  const normalized = text.trim().toLocaleLowerCase();
+  const quoted = [...text.matchAll(/"([^"]+)"/g)]
+    .map((match) => match[1]?.trim().toLocaleLowerCase())
+    .filter((item): item is string => Boolean(item));
+  const terms = normalized
+    .replaceAll('"', "")
+    .split(/\s+/)
+    .filter((term) => term.length > 1);
+  const matches = rows
+    .map((row) => {
+      const haystack = row.text.toLocaleLowerCase();
+      const exact = quoted.some((phrase) => haystack.includes(phrase));
+      const termCount = terms.filter((term) => haystack.includes(term)).length;
+      return {
+        row,
+        exact,
+        score:
+          (exact ? 2 : 0)
+          + (terms.length === 0 ? 0 : termCount / terms.length),
+      };
+    })
+    .filter((item) => item.score > 0)
+    .sort(
+      (left, right) =>
+        right.score - left.score
+        || left.row.segment_id.localeCompare(right.row.segment_id),
+    );
+  matches.forEach((match, index) => {
+    const candidate = candidates.get(match.row.segment_id);
+    if (!candidate) return;
+    candidate.signals.push({
+      kind:
+        match.row.kind === "ocr"
+          ? "ocr"
+          : match.row.kind === "transcript"
+            ? "speech"
+            : "metadata",
+      rank: index + 1,
+      score: match.score,
+      explanation: match.exact
+        ? "Exact quoted text matched this moment"
+        : "Query terms matched indexed text",
+    });
+    if (!candidate.excerpt || match.exact) candidate.excerpt = match.row.text;
+  });
+}
+
+async function addTextVectorSignals(
+  context: EngineContext,
+  providers: Map<string, TemporalSearchProvider>,
+  candidates: Map<string, Candidate>,
+  text: string,
+  active: GenerationRow[],
+): Promise<void> {
+  for (const generation of active) {
+    const provider = providers.get(generation.manifest_id);
+    if (!provider) continue;
+    const manifest = requiredManifest(context, generation.manifest_id);
+    await provider.prepare();
+    const queryVector = provider.embedText(text);
+    const resolved = await queryVector;
+    if (resolved.length !== manifest.dimensions) {
+      throw new EngineFault({
+        code: "MANIFEST_INCOMPATIBLE",
+        message: "Query provider returned incompatible vector dimensions",
+      });
+    }
+    for (const modality of manifest.modalities) {
+      if (modality === "metadata") continue;
+      rankVectorRows(
+        context,
+        candidates,
+        generation,
+        resolved,
+        modality,
+        `Text-to-${modality} semantic similarity`,
+      );
+    }
+  }
+}
+
+function addReferenceSignals(
+  context: EngineContext,
+  candidates: Map<string, Candidate>,
+  reference: SearchReference,
+  active: GenerationRow[],
+): void {
+  for (const generation of active) {
+    if (reference.kind === "video") {
+      addOrderedVideoSignals(context, candidates, reference.range, generation);
+      continue;
+    }
+    const queryRows = referenceEmbeddingRows(context, reference, generation);
+    if (queryRows.length === 0) continue;
+    const queryVector = averageVectors(
+      queryRows.map((row) => blobToVector(row.vector_blob, row.dimensions)),
+    );
+    const modality = reference.kind === "audio" ? "audio" : "visual";
+    rankVectorRows(
+      context,
+      candidates,
+      generation,
+      queryVector,
+      modality,
+      `${reference.kind} reference similarity`,
+    );
+    addFingerprintSignals(context, candidates, queryRows, generation);
+  }
+}
+
+interface OrderedEmbedding {
+  segment: SegmentRow;
+  range: SourceRange;
+  vector: Float32Array;
+}
+
+function addOrderedVideoSignals(
+  context: EngineContext,
+  candidates: Map<string, Candidate>,
+  rangeInput: SourceRange,
+  generation: GenerationRow,
+): void {
+  const range = normalizeSourceRange(rangeInput);
+  const query = orderedEmbeddings(
+    context,
+    generation,
+    (segmentRangeValue) =>
+      segmentRangeValue.streamId === range.streamId
+      && segmentRangeValue.objectHash === range.objectHash
+      && rangesOverlap(
+        segmentRangeValue.startTick,
+        sourceRangeEndTick(segmentRangeValue),
+        range.startTick,
+        sourceRangeEndTick(range),
+      ),
+  );
+  if (query.length === 0) return;
+  const sample = evenlySample(query, Math.min(query.length, 16));
+  const all = orderedEmbeddings(context, generation, () => true);
+  const byStream = new Map<string, OrderedEmbedding[]>();
+  for (const item of all) {
+    const values = byStream.get(item.range.streamId) ?? [];
+    values.push(item);
+    byStream.set(item.range.streamId, values);
+  }
+  const windows: Array<{
+    values: OrderedEmbedding[];
+    score: number;
+    coherence: number;
+  }> = [];
+  for (const values of byStream.values()) {
+    values.sort(
+      (left, right) =>
+        left.range.startTick - right.range.startTick
+        || left.segment.segment_id.localeCompare(right.segment.segment_id),
+    );
+    if (values.length < sample.length) continue;
+    for (let start = 0; start <= values.length - sample.length; start += 1) {
+      const window = values.slice(start, start + sample.length);
+      const aligned = sample.reduce(
+        (sum, item, index) =>
+          sum + cosineSimilarity(item.vector, window[index]!.vector),
+        0,
+      ) / sample.length;
+      const coherence = transitionCoherence(sample, window);
+      windows.push({
+        values: window,
+        score: aligned * 0.75 + coherence * 0.25,
+        coherence,
+      });
+    }
+  }
+  windows
+    .sort(
+      (left, right) =>
+        right.score - left.score
+        || left.values[0]!.segment.segment_id.localeCompare(
+          right.values[0]!.segment.segment_id,
+        ),
+    )
+    .forEach((window, index) => {
+      const first = window.values[0]!;
+      const last = window.values.at(-1)!;
+      const combined: SourceRange = {
+        ...first.range,
+        durationTicks: sourceRangeEndTick(last.range) - first.range.startTick,
+      };
+      const segmentId = `ordered:${generation.generation}:${first.segment.segment_id}:${last.segment.segment_id}`;
+      const candidate: Candidate = {
+        segment: {
+          ...first.segment,
+          segment_id: segmentId,
+          source_range_json: canonicalJson(combined),
+          representative_tick:
+            first.range.startTick + Math.floor(combined.durationTicks / 2),
+        },
+        signals: [
+          {
+            kind: "visual",
+            rank: index + 1,
+            score: window.score,
+            explanation: `Ordered video alignment with temporal coherence ${window.coherence.toFixed(3)}`,
+          },
+        ],
+        score: 0,
+      };
+      candidates.set(segmentId, candidate);
+    });
+}
+
+function orderedEmbeddings(
+  context: EngineContext,
+  generation: GenerationRow,
+  include: (range: SourceRange) => boolean,
+): OrderedEmbedding[] {
+  const rows = context.store.db
+    .prepare(
+      `SELECT s.segment_id, s.artifact_id, a.slug AS artifact_slug,
+              a.kind AS artifact_kind, a.created_at AS artifact_created_at,
+              s.stream_id, s.object_hash, s.source_range_json,
+              s.source_path, s.segment_kind, s.representative_tick,
+              s.generation, s.manifest_id, e.dimensions, e.vector_blob
+       FROM runtime_media_segments s
+       JOIN artifacts a ON a.artifact_id=s.artifact_id
+       JOIN runtime_segment_embeddings e ON e.segment_id=s.segment_id
+       WHERE s.generation=? AND e.embedding_space=?
+         AND e.modality='visual' AND s.source_range_json IS NOT NULL
+       ORDER BY s.stream_id, s.representative_tick, s.segment_id`,
+    )
+    .all(generation.generation, generation.embedding_space) as unknown as Array<
+    SegmentRow & { dimensions: number; vector_blob: Uint8Array }
+  >;
+  return rows.flatMap((row) => {
+    const range = segmentRange(row);
+    return range && include(range)
+      ? [{
+          segment: row,
+          range,
+          vector: blobToVector(row.vector_blob, row.dimensions),
+        }]
+      : [];
+  });
+}
+
+function transitionCoherence(
+  query: OrderedEmbedding[],
+  candidate: OrderedEmbedding[],
+): number {
+  if (query.length < 2) return 1;
+  let score = 0;
+  for (let index = 1; index < query.length; index += 1) {
+    score += cosineSimilarity(
+      vectorDifference(query[index]!.vector, query[index - 1]!.vector),
+      vectorDifference(
+        candidate[index]!.vector,
+        candidate[index - 1]!.vector,
+      ),
+    );
+  }
+  return score / (query.length - 1);
+}
+
+function vectorDifference(
+  left: Float32Array,
+  right: Float32Array,
+): Float32Array {
+  const result = new Float32Array(left.length);
+  for (let index = 0; index < left.length; index += 1) {
+    result[index] = left[index]! - right[index]!;
+  }
+  return result;
+}
+
+function evenlySample<T>(values: T[], count: number): T[] {
+  if (count <= 1) return values.length === 0 ? [] : [values[0]!];
+  if (count >= values.length) return values;
+  return Array.from({ length: count }, (_, index) => {
+    const position = Math.round((index * (values.length - 1)) / (count - 1));
+    return values[position]!;
+  });
+}
+
+function rankVectorRows(
+  context: EngineContext,
+  candidates: Map<string, Candidate>,
+  generation: GenerationRow,
+  queryVector: Float32Array,
+  modality: Exclude<SearchModality, "auto" | "metadata">,
+  explanation: string,
+): void {
+  const rows = context.store.db
+    .prepare(
+      `SELECT segment_id, embedding_space, modality, dimensions, vector_blob
+       FROM runtime_segment_embeddings
+       WHERE generation=? AND embedding_space=?
+         AND modality=?
+       ORDER BY segment_id`,
+    )
+    .all(generation.generation, generation.embedding_space, modality) as unknown as
+    EmbeddingRow[];
+  rows
+    .map((row) => ({
+      row,
+      score: cosineSimilarity(
+        queryVector,
+        blobToVector(row.vector_blob, row.dimensions),
+      ),
+    }))
+    .filter((item) => Number.isFinite(item.score))
+    .sort(
+      (left, right) =>
+        right.score - left.score
+        || left.row.segment_id.localeCompare(right.row.segment_id),
+    )
+    .forEach((item, index) => {
+      const candidate = candidates.get(item.row.segment_id);
+      if (!candidate) return;
+      candidate.signals.push({
+        kind: modality,
+        rank: index + 1,
+        score: item.score,
+        explanation,
+      });
+    });
+}
+
+function referenceEmbeddingRows(
+  context: EngineContext,
+  reference: SearchReference,
+  generation: GenerationRow,
+): EmbeddingRow[] {
+  const segments = referenceSegments(context, reference, generation.generation);
+  if (segments.length === 0) return [];
+  const placeholders = segments.map(() => "?").join(",");
+  return context.store.db
+    .prepare(
+      `SELECT segment_id, embedding_space, modality, dimensions, vector_blob
+       FROM runtime_segment_embeddings
+       WHERE segment_id IN (${placeholders})
+         AND embedding_space=?
+       ORDER BY segment_id`,
+    )
+    .all(...segments, generation.embedding_space) as unknown as EmbeddingRow[];
+}
+
+function referenceSegments(
+  context: EngineContext,
+  reference: SearchReference,
+  generation: string,
+): string[] {
+  if (reference.kind === "image") {
+    const artifact = context.artifactRow(reference.artifact);
+    return (
+      context.store.db
+        .prepare(
+          `SELECT segment_id FROM runtime_media_segments
+           WHERE generation=? AND artifact_id=?
+           ORDER BY segment_id`,
+        )
+        .all(generation, artifact.artifact_id) as unknown as Array<{
+        segment_id: string;
+      }>
+    ).map((row) => row.segment_id);
+  }
+  const range =
+    reference.kind === "frame"
+      ? undefined
+      : normalizeSourceRange(reference.range);
+  const point =
+    reference.kind === "frame"
+      ? normalizeSourcePoint(reference.source)
+      : undefined;
+  const rows = context.store.db
+    .prepare(
+      `SELECT segment_id, source_range_json
+       FROM runtime_media_segments
+       WHERE generation=? AND stream_id=? AND object_hash=?
+       ORDER BY representative_tick, segment_id`,
+    )
+    .all(
+      generation,
+      point?.streamId ?? range?.streamId,
+      point?.objectHash ?? range?.objectHash,
+    ) as unknown as Array<{
+    segment_id: string;
+    source_range_json: string | null;
+  }>;
+  return rows
+    .filter((row) => {
+      if (!row.source_range_json) return false;
+      const candidate = parseJson<SourceRange | null>(row.source_range_json, null);
+      if (!candidate) return false;
+      if (point) {
+        return (
+          candidate.startTick <= point.tick
+          && point.tick < sourceRangeEndTick(candidate)
+        );
+      }
+      return range
+        ? rangesOverlap(
+            candidate.startTick,
+            sourceRangeEndTick(candidate),
+            range.startTick,
+            sourceRangeEndTick(range),
+          )
+        : false;
+    })
+    .map((row) => row.segment_id);
+}
+
+function addFingerprintSignals(
+  context: EngineContext,
+  candidates: Map<string, Candidate>,
+  queryRows: EmbeddingRow[],
+  generation: GenerationRow,
+): void {
+  const segmentIds = unique(queryRows.map((row) => row.segment_id));
+  if (segmentIds.length === 0) return;
+  const fingerprints = context.store.db
+    .prepare(
+      `SELECT kind, value FROM runtime_segment_fingerprints
+       WHERE segment_id IN (${segmentIds.map(() => "?").join(",")})
+       ORDER BY kind, value`,
+    )
+    .all(...segmentIds) as unknown as Array<{ kind: string; value: string }>;
+  for (const fingerprint of fingerprints) {
+    const rows = context.store.db
+      .prepare(
+        `SELECT segment_id FROM runtime_segment_fingerprints
+         WHERE generation=? AND kind=? AND value=?
+         ORDER BY segment_id`,
+      )
+      .all(
+        generation.generation,
+        fingerprint.kind,
+        fingerprint.value,
+      ) as unknown as Array<{ segment_id: string }>;
+    rows.forEach((row, index) => {
+      const candidate = candidates.get(row.segment_id);
+      if (!candidate) return;
+      candidate.signals.push({
+        kind: fingerprint.kind === "sha256" ? "exact" : "near",
+        rank: index + 1,
+        score: 1,
+        explanation:
+          fingerprint.kind === "sha256"
+            ? "Exact source fingerprint matched"
+            : "Near-duplicate fingerprint matched",
+      });
+    });
+  }
+}
+
+function finalizeCandidate(candidate: Candidate): Candidate {
+  const sortedSignals = [...candidate.signals].sort(
+    (left, right) =>
+      signalPriority(left.kind) - signalPriority(right.kind)
+      || left.rank - right.rank,
+  );
+  const rrf = sortedSignals.reduce(
+    (sum, signal) => sum + 1 / (60 + signal.rank),
+    0,
+  );
+  const exactBoost = sortedSignals.some((signal) => signal.kind === "exact")
+    ? 1
+    : sortedSignals.some((signal) => signal.kind === "near")
+      ? 0.25
+      : 0;
+  return { ...candidate, signals: sortedSignals, score: rrf + exactBoost };
+}
+
+function compareCandidates(left: Candidate, right: Candidate): number {
+  return (
+    right.score - left.score
+    || left.segment.artifact_id.localeCompare(right.segment.artifact_id)
+    || locationKey(left.segment).localeCompare(locationKey(right.segment))
+    || left.segment.segment_id.localeCompare(right.segment.segment_id)
+  );
+}
+
+function collapseOverlaps(candidates: Candidate[]): Candidate[] {
+  const accepted: Candidate[] = [];
+  for (const candidate of candidates) {
+    const range = segmentRange(candidate.segment);
+    const duplicate = accepted.some((item) => {
+      if (item.segment.artifact_id !== candidate.segment.artifact_id) return false;
+      const other = segmentRange(item.segment);
+      if (!range || !other || range.streamId !== other.streamId) return false;
+      const overlap = Math.max(
+        0,
+        Math.min(sourceRangeEndTick(range), sourceRangeEndTick(other))
+          - Math.max(range.startTick, other.startTick),
+      );
+      return overlap / Math.min(range.durationTicks, other.durationTicks) >= 0.8;
+    });
+    if (!duplicate) accepted.push(candidate);
+  }
+  return accepted;
+}
+
+function candidateToHit(candidate: Candidate): SearchHit {
+  return {
+    artifactId: candidate.segment.artifact_id,
+    artifactSlug: candidate.segment.artifact_slug,
+    artifactKind: candidate.segment.artifact_kind,
+    location: segmentLocation(candidate.segment),
+    ...(candidate.segment.representative_tick === null
+      ? {}
+      : { representativeTick: candidate.segment.representative_tick }),
+    score: candidate.score,
+    signals: candidate.signals,
+    ...(candidate.excerpt ? { excerpt: candidate.excerpt } : {}),
+    indexManifestIds: [candidate.segment.manifest_id],
+  };
+}
+
+function segmentLocation(segment: SegmentRow): SearchLocation {
+  const range = segmentRange(segment);
+  if (range) {
+    return {
+      kind: "timed",
+      artifactId: segment.artifact_id,
+      range,
+    };
+  }
+  return {
+    kind: segment.segment_kind === "document" ? "document" : "still",
+    artifactId: segment.artifact_id,
+    sourcePath: segment.source_path ?? "unknown",
+    objectHash: segment.object_hash,
+    ...(segment.segment_kind === "document"
+      ? { startUtf8Byte: 0, endUtf8Byte: 1 }
+      : {}),
+  } as SearchLocation;
+}
+
+function segmentRange(segment: SegmentRow): SourceRange | null {
+  return segment.source_range_json
+    ? parseJson<SourceRange | null>(segment.source_range_json, null)
+    : null;
+}
+
+function locationKey(segment: SegmentRow): string {
+  return canonicalJson(segmentLocation(segment));
+}
+
+function searchCoverage(
+  context: EngineContext,
+  artifactReference?: string,
+): SearchCoverage {
+  const artifactId = artifactReference
+    ? context.artifactRow(artifactReference).artifact_id
+    : undefined;
+  const active = activeGenerations(context);
+  const rows = coverageRows(
+    context,
+    artifactId
+      ? `WHERE artifact_id=? AND generation IN (${active.map(() => "?").join(",")})`
+      : active.length > 0
+        ? `WHERE generation IN (${active.map(() => "?").join(",")})`
+        : "WHERE 1=0",
+    artifactId
+      ? [artifactId, ...active.map((item) => item.generation)]
+      : active.map((item) => item.generation),
+  );
+  const allArtifacts = context.store.db
+    .prepare("SELECT COUNT(*) AS count FROM artifacts")
+    .get() as unknown as { count: number };
+  const indexedArtifactCount = new Set(rows.map((row) => row.artifactId)).size;
+  const state = aggregateCoverageState(rows);
+  const generation = hashJson(
+    active.map((item) => [item.embedding_space, item.generation]),
+  );
+  const modalities = unique(
+    active.flatMap(
+      (item) => requiredManifest(context, item.manifest_id).modalities,
+    ),
+  ).map((modality) => {
+    const relevant = rows.filter((row) => phaseForModality(modality) === row.phase);
+    return {
+      modality,
+      state: aggregateCoverageState(relevant),
+      indexedUnits: relevant.reduce((sum, row) => sum + row.indexedUnits, 0),
+      ...(relevant.some((row) => row.totalUnits !== undefined)
+        ? {
+            totalUnits: relevant.reduce(
+              (sum, row) => sum + (row.totalUnits ?? 0),
+              0,
+            ),
+          }
+        : {}),
+      languageCoverage:
+        modality === "speech" || modality === "ocr"
+          ? ("best-effort" as const)
+          : ("unsupported" as const),
+      manifestId: active.find((item) =>
+        requiredManifest(context, item.manifest_id).modalities.includes(modality)
+      )?.manifest_id,
+    };
+  });
+  return {
+    state,
+    generation,
+    modalities,
+    indexedArtifactCount,
+    totalArtifactCount: artifactId ? 1 : allArtifacts.count,
+    partialResults: state !== "ready",
+  };
+}
+
+function coverageRows(
+  context: EngineContext,
+  clause: string,
+  params: string[],
+): IndexCoverage[] {
+  const rows = context.store.db
+    .prepare(
+      `SELECT artifact_id, object_hash, manifest_id, generation, phase,
+              state, covered_ranges_json, indexed_units, total_units,
+              retryable, error_json, cursor, updated_at
+       FROM runtime_index_coverage ${clause}
+       ORDER BY artifact_id, manifest_id, generation, phase`,
+    )
+    .all(...params) as unknown as CoverageRow[];
+  return rows.map((row) => ({
+    artifactId: row.artifact_id,
+    objectHash: row.object_hash,
+    manifestId: row.manifest_id,
+    phase: row.phase,
+    state: row.state,
+    coveredRanges: parseJson<SourceRange[]>(row.covered_ranges_json, []),
+    indexedUnits: row.indexed_units,
+    ...(row.total_units === null ? {} : { totalUnits: row.total_units }),
+    ...(row.cursor === null ? {} : { nextCursor: row.cursor }),
+    retryable: row.retryable === 1,
+    ...(row.error_json
+      ? { error: parseJson<EngineError>(row.error_json, {
+          code: "INTERNAL_ERROR",
+          message: "Unknown index error",
+        }) }
+      : {}),
+    updatedAt: row.updated_at,
+  }));
+}
+
+function invalidateCoverage(
+  context: EngineContext,
+  artifactReference: string,
+  objectHash?: string,
+): number {
+  const artifact = context.artifactRow(artifactReference);
+  return context.store.runtime((now) => {
+    const result = objectHash
+      ? context.store.db
+          .prepare(
+            `UPDATE runtime_index_coverage
+             SET state='stale', updated_at=?
+             WHERE artifact_id=? AND object_hash=?`,
+          )
+          .run(now, artifact.artifact_id, objectHash)
+      : context.store.db
+          .prepare(
+            `UPDATE runtime_index_coverage
+             SET state='stale', updated_at=?
+             WHERE artifact_id=?`,
+          )
+          .run(now, artifact.artifact_id);
+    return Number(result.changes);
+  });
+}
+
+function cleanupRetired(
+  context: EngineContext,
+): { removedSegments: number } {
+  return context.store.runtime(() => {
+    const retired = (
+      context.store.db
+        .prepare(
+          `SELECT generation FROM runtime_index_generations
+           WHERE state='retired'`,
+        )
+        .all() as unknown as Array<{ generation: string }>
+    ).map((row) => row.generation);
+    if (retired.length === 0) return { removedSegments: 0 };
+    const placeholders = retired.map(() => "?").join(",");
+    const result = context.store.db
+      .prepare(
+        `DELETE FROM runtime_media_segments
+         WHERE generation IN (${placeholders})`,
+      )
+      .run(...retired);
+    context.store.db
+      .prepare(
+        `DELETE FROM runtime_index_coverage
+         WHERE generation IN (${placeholders})`,
+      )
+      .run(...retired);
+    context.store.db
+      .prepare(
+        `DELETE FROM runtime_index_batches
+         WHERE generation IN (${placeholders})`,
+      )
+      .run(...retired);
+    context.store.db
+      .prepare(
+        `DELETE FROM runtime_index_generations
+         WHERE generation IN (${placeholders})`,
+      )
+      .run(...retired);
+    return { removedSegments: Number(result.changes) };
+  });
+}
+
+function temporalStats(context: EngineContext): TemporalSearchStats {
+  const count = (table: string, clause = "") =>
+    (
+      context.store.db
+        .prepare(`SELECT COUNT(*) AS count FROM ${table} ${clause}`)
+        .get() as { count: number }
+    ).count;
+  return {
+    activeGenerations: count(
+      "runtime_index_generations",
+      "WHERE state='active'",
+    ),
+    segments: count("runtime_media_segments"),
+    textObservations: count("runtime_segment_text"),
+    embeddings: count("runtime_segment_embeddings"),
+    fingerprints: count("runtime_segment_fingerprints"),
+  };
+}
+
+function assertArtifactObject(
+  context: EngineContext,
+  artifactId: string,
+  objectHash: string,
+): void {
+  const object = context.store.db
+    .prepare(
+      `SELECT 1 AS present FROM artifact_files
+       WHERE artifact_id=? AND object_hash=? LIMIT 1`,
+    )
+    .get(artifactId, objectHash);
+  if (!object) {
+    throw new EngineFault({
+      code: "OBJECT_UNAVAILABLE",
+      message: "Artifact does not currently reference the requested object",
+      details: { artifactId, objectHash },
+    });
+  }
+}
+
+function validateQuery(query: SearchQuery): void {
+  if (!query.text && !query.reference) {
+    throw new EngineFault({
+      code: "INVALID_INPUT",
+      message: "Search requires text, reference media, or both",
+    });
+  }
+  if (query.text !== undefined) requiredText(query.text, "Search text");
+  if (query.limit !== undefined) safeIntegerAtLeast(query.limit, 1, "Search limit");
+  if (query.minScore !== undefined && !Number.isFinite(query.minScore)) {
+    throw new Error("Search minScore must be finite");
+  }
+}
+
+function aggregateCoverageState(
+  rows: Array<{ state: IndexCoverage["state"] }>,
+): IndexCoverage["state"] {
+  if (rows.length === 0) return "not-indexed";
+  if (rows.some((row) => row.state === "failed")) return "failed";
+  if (rows.some((row) => row.state === "stale")) return "stale";
+  if (rows.every((row) => row.state === "ready")) return "ready";
+  return "partial";
+}
+
+function phaseForModality(
+  modality: Exclude<SearchModality, "auto">,
+): IndexPhase {
+  if (modality === "visual") return "visual";
+  if (modality === "audio") return "audio";
+  if (modality === "ocr") return "ocr";
+  if (modality === "speech") return "transcript";
+  return "lexical";
+}
+
+function signalPriority(kind: SearchSignal["kind"]): number {
+  return ["exact", "near", "speech", "ocr", "visual", "audio", "metadata"].indexOf(
+    kind,
+  );
+}
+
+function vectorToBlob(vector: number[]): Buffer {
+  const values = Float32Array.from(vector);
+  return Buffer.from(values.buffer, values.byteOffset, values.byteLength);
+}
+
+function blobToVector(blob: Uint8Array, dimensions: number): Float32Array {
+  const bytes = Buffer.from(blob);
+  if (bytes.byteLength !== dimensions * Float32Array.BYTES_PER_ELEMENT) {
+    throw new EngineFault({
+      code: "MANIFEST_INCOMPATIBLE",
+      message: "Stored vector dimensions do not match its byte length",
+    });
+  }
+  const copy = new Uint8Array(bytes);
+  return new Float32Array(copy.buffer);
+}
+
+function cosineSimilarity(left: Float32Array, right: Float32Array): number {
+  if (left.length !== right.length || left.length === 0) {
+    throw new EngineFault({
+      code: "MANIFEST_INCOMPATIBLE",
+      message: "Cannot compare incompatible vector dimensions",
+    });
+  }
+  let dot = 0;
+  let leftNorm = 0;
+  let rightNorm = 0;
+  for (let index = 0; index < left.length; index += 1) {
+    const leftValue = left[index]!;
+    const rightValue = right[index]!;
+    dot += leftValue * rightValue;
+    leftNorm += leftValue * leftValue;
+    rightNorm += rightValue * rightValue;
+  }
+  if (leftNorm === 0 || rightNorm === 0) return 0;
+  return dot / (Math.sqrt(leftNorm) * Math.sqrt(rightNorm));
+}
+
+function averageVectors(vectors: Float32Array[]): Float32Array {
+  const first = vectors[0];
+  if (!first) return new Float32Array();
+  const result = new Float32Array(first.length);
+  for (const vector of vectors) {
+    if (vector.length !== result.length) {
+      throw new EngineFault({
+        code: "MANIFEST_INCOMPATIBLE",
+        message: "Reference vectors have incompatible dimensions",
+      });
+    }
+    vector.forEach((value, index) => {
+      result[index] = result[index]! + value;
+    });
+  }
+  for (let index = 0; index < result.length; index += 1) {
+    result[index] = result[index]! / vectors.length;
+  }
+  return result;
+}
+
+function encodeCursor(generation: string, offset: number): string {
+  return Buffer.from(canonicalJson({ generation, offset }), "utf8").toString(
+    "base64url",
+  );
+}
+
+function decodeCursor(cursor: string | undefined, generation: string): number {
+  if (!cursor) return 0;
+  const parsed = parseJson<{ generation?: string; offset?: number }>(
+    Buffer.from(cursor, "base64url").toString("utf8"),
+    {},
+  );
+  if (
+    parsed.generation !== generation
+    || !Number.isSafeInteger(parsed.offset)
+    || (parsed.offset ?? -1) < 0
+  ) {
+    throw new EngineFault({
+      code: "STALE_REVISION",
+      message: "Search cursor belongs to another index generation",
+    });
+  }
+  return parsed.offset!;
+}
+
+function hashJson(value: unknown): string {
+  return `sha256:${createHash("sha256")
+    .update(canonicalJson(value))
+    .digest("hex")}`;
+}
+
+function deterministicUuid(namespace: string, value: string): string {
+  const bytes = createHash("sha256")
+    .update(namespace)
+    .update("\0")
+    .update(value)
+    .digest()
+    .subarray(0, 16);
+  bytes[6] = (bytes[6]! & 0x0f) | 0x70;
+  bytes[8] = (bytes[8]! & 0x3f) | 0x80;
+  const hex = bytes.toString("hex");
+  return [
+    hex.slice(0, 8),
+    hex.slice(8, 12),
+    hex.slice(12, 16),
+    hex.slice(16, 20),
+    hex.slice(20),
+  ].join("-");
+}
+
+function requiredText(value: string, label: string): string {
+  const normalized = value.trim();
+  if (!normalized) throw new Error(`${label} is required`);
+  return normalized;
+}
+
+function safeIntegerAtLeast(value: number, minimum: number, label: string): void {
+  if (!Number.isSafeInteger(value) || value < minimum) {
+    throw new Error(`${label} must be a safe integer of at least ${minimum}`);
+  }
+}
+
+function rangesOverlap(
+  leftStart: number,
+  leftEnd: number,
+  rightStart: number,
+  rightEnd: number,
+): boolean {
+  return leftStart < rightEnd && rightStart < leftEnd;
+}
+
+function unique<T>(values: T[]): T[] {
+  return [...new Set(values)];
+}

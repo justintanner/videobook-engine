@@ -29,6 +29,11 @@ import { JobQueue } from "./job-queue.js";
 import { canonicalJson } from "./store.js";
 import { createSimilarityApi } from "./similarity.js";
 import { createTimelineApi } from "./timeline.js";
+import { createStreamsApi } from "./streams.js";
+import { createTranscriptsApi } from "./transcripts.js";
+import { createSequencesApi } from "./sequences.js";
+import { createEditsApi } from "./edits.js";
+import { createTemporalSearchApi } from "./temporal-search.js";
 
 export class Engine {
   readonly book;
@@ -36,6 +41,11 @@ export class Engine {
   readonly files;
   readonly workspaces;
   readonly metadata;
+  readonly streams;
+  readonly transcripts;
+  readonly sequences;
+  readonly edits;
+  readonly temporalSearch;
   readonly timeline;
   readonly entities;
   readonly notebooks;
@@ -61,6 +71,11 @@ export class Engine {
     this.files = createFilesApi(this.context);
     this.workspaces = createWorkspacesApi(this.context);
     this.metadata = createMetadataApi(this.context);
+    this.streams = createStreamsApi(this.context);
+    this.transcripts = createTranscriptsApi(this.context);
+    this.sequences = createSequencesApi(this.context);
+    this.edits = createEditsApi(this.context);
+    this.temporalSearch = createTemporalSearchApi(this.context);
     this.timeline = createTimelineApi(this.context);
     this.entities = createEntitiesApi(this.context);
     this.notebooks = createNotebooksApi(this.context);

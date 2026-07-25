@@ -4,6 +4,9 @@
 videobook per engine root. It keeps book state, artifacts, files, metadata,
 notebook graphs, revisions, and action history in a single catalog.
 
+The temporal search, sequence, and edit-engine requirements for the Videobook
+MVP are in [docs/mvp-prd.md](docs/mvp-prd.md).
+
 There is no project layer. A fresh engine root creates exactly one Book;
 reopening that root always returns the same book.
 
@@ -39,6 +42,30 @@ engine.close();
 `initialBookSlug` is required only when `videobook.db` does not exist yet. On
 later opens it is optional and never changes the stored book. Rename the book
 explicitly with `await engine.book.rename("new-name")`.
+
+## MVP v5 contracts
+
+Contract version 1 defines the schema-v5 media-time, stream, transcript,
+sequence, temporal-search, edit-intent, job, and copy-forward migration
+boundary before the schema implementation lands:
+
+```ts
+import {
+  MVP_CONTRACT_VERSION,
+  MVP_CONTRACT_FIXTURES,
+  type EditIntent,
+  type SearchPage,
+  type Sequence,
+  type SourceRange,
+} from "videobook-engine";
+```
+
+The typed fixtures cover every P0 edit operation and the main cross-repository
+projections. The equivalent checked-in JSON fixture is exported as
+`videobook-engine/fixtures/v5`. Contract objects use rational, half-open media
+ranges and immutable object-hash-qualified stream references. The existing
+schema-v4 timeline and similarity APIs remain compatibility surfaces until
+they compile into schema-v5 sequence and temporal-search semantics.
 
 ## Storage model
 

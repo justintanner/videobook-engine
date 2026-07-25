@@ -35,6 +35,8 @@ interface JobRow {
 }
 
 export class JobQueue {
+  private readonly abortHandlers = new Map<number, Set<(reason: Error) => void>>();
+
   constructor(
     private readonly store: DoltStore,
     private readonly resolveArtifactId: (reference: string) => string,
@@ -271,8 +273,26 @@ export class JobQueue {
       return changed > 0 ? rowToJob(this.requiredRow(id)) : null;
     });
     if (!job) return false;
+    const abortError = new Error(reason);
+    abortError.name = "AbortError";
+    for (const handler of this.abortHandlers.get(id) ?? []) handler(abortError);
     await this.recordTerminal(job);
     return true;
+  }
+
+  onAbort(id: number, handler: (reason: Error) => void): () => void {
+    const handlers = this.abortHandlers.get(id) ?? new Set();
+    handlers.add(handler);
+    this.abortHandlers.set(id, handlers);
+    if (this.get(id)?.state === "aborted") {
+      const error = new Error(this.get(id)?.error?.message ?? "Job aborted");
+      error.name = "AbortError";
+      handler(error);
+    }
+    return () => {
+      handlers.delete(handler);
+      if (handlers.size === 0) this.abortHandlers.delete(id);
+    };
   }
 
   markCompleting(id: number): boolean {
@@ -525,15 +545,24 @@ export class QueueRunner {
   }
 
   private async run(job: Job): Promise<void> {
+    const controller = new AbortController();
+    const removeAbortHandler = this.queue.onAbort(
+      job.id,
+      (reason) => controller.abort(reason),
+    );
     const heartbeat = setInterval(
-      () => this.queue.heartbeat(job.id, job.fence, this.leaseMs),
+      () => {
+        if (!this.queue.heartbeat(job.id, job.fence, this.leaseMs)) {
+          controller.abort(new Error(`Job ${job.id} lease was revoked`));
+        }
+      },
       Math.max(1_000, Math.floor(this.leaseMs / 3)),
     );
     heartbeat.unref?.();
     try {
       const handler: JobHandler | null = this.config.resolveHandler(job.type);
       if (!handler) throw new Error(`No handler for job type: ${job.type}`);
-      const result = await handler(job);
+      const result = await handler(job, controller.signal);
       await this.queue.complete(job.id, { result }, job.fence);
     } catch (error) {
       const jobError: JobError = {
@@ -554,6 +583,7 @@ export class QueueRunner {
       );
     } finally {
       clearInterval(heartbeat);
+      removeAbortHandler();
     }
   }
 }

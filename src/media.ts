@@ -9,6 +9,7 @@ const AUDIO_EXTENSIONS = new Set([
   "flac",
   "aac",
   "m4a",
+  "weba",
 ]);
 const VIDEO_EXTENSIONS = new Set([
   "mp4",

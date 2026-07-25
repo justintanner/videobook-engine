@@ -1,19 +1,21 @@
 {
   "name": "videobook-engine",
-  "version": "2.0.1",
+  "version": "3.0.0",
   "description": "Dolt-native local-first storage engine for Videobook",
   "type": "module",
   "exports": {
     ".": {
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"
-    }
+    },
+    "./fixtures/v5": "./fixtures/v5/contract-fixtures.json"
   },
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "files": [
     "dist",
-    "docs"
+    "docs",
+    "fixtures"
   ],
   "scripts": {
     "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
@@ -49,7 +51,15 @@
   "overrides": {
     "adm-zip": "0.6.0",
     "esbuild": "0.28.1",
-    "postcss": "^8.5.10",
+    "postcss": "^8.5.23",
     "sharp": "0.35.3"
+  },
+  "allowScripts": {
+    "@dolthub/doltlite@0.11.37": true,
+    "esbuild@0.28.1": true,
+    "fsevents@2.3.3": true,
+    "onnxruntime-node@1.24.3": true,
+    "protobufjs@7.6.5": true,
+    "usearch@2.26.0": true
   }
 }

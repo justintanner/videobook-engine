@@ -1,0 +1,1529 @@
+{
+  "compatibility": {
+    "contractVersion": 1,
+    "schemaVersion": 5,
+    "minimumReaderContractVersion": 1,
+    "legacySchemaVersions": [
+      4
+    ],
+    "legacyTimelineApi": "compile-to-sequence",
+    "legacySimilarityApi": "read-only-adapter"
+  },
+  "engineErrorCodes": [
+    "INVALID_RANGE",
+    "INVALID_TIMEBASE",
+    "MEDIA_MISSING",
+    "UNSUPPORTED_MEDIA",
+    "MANIFEST_INCOMPATIBLE",
+    "INDEX_INCOMPLETE",
+    "STALE_REVISION",
+    "ACTION_CONFLICT",
+    "TRACK_LOCKED",
+    "MODEL_UNAVAILABLE",
+    "CANCELLED",
+    "RESOURCE_EXHAUSTED",
+    "TIMEOUT",
+    "INTERNAL_ERROR"
+  ],
+  "stream": {
+    "streamId": "0197-stream-video",
+    "artifactId": "0197-artifact-video",
+    "sourcePath": "original.mp4",
+    "objectHash": "sha256:video-object",
+    "streamIndex": 0,
+    "kind": "video",
+    "timeBase": {
+      "numerator": 1,
+      "denominator": 30000
+    },
+    "durationTicks": 900000,
+    "codec": "h264",
+    "video": {
+      "width": 1920,
+      "height": 1080,
+      "rotationDegrees": 0,
+      "pixelAspect": {
+        "numerator": 1,
+        "denominator": 1
+      },
+      "nominalFrameRate": {
+        "numerator": 30,
+        "denominator": 1
+      },
+      "averageFrameRate": {
+        "numerator": 30,
+        "denominator": 1
+      }
+    }
+  },
+  "transcript": {
+    "transcriptId": "0197-transcript",
+    "artifactId": "0197-artifact-audio",
+    "streamId": "0197-stream-audio",
+    "objectHash": "sha256:audio-object",
+    "language": "en",
+    "provider": "fixture",
+    "model": "fixture-word-timing-v1",
+    "revision": "dolt-transcript-revision",
+    "segments": [
+      {
+        "segmentId": "0197-segment-1",
+        "ordinal": 0,
+        "range": {
+          "streamId": "0197-stream-audio",
+          "objectHash": "sha256:audio-object",
+          "startTick": 96000,
+          "durationTicks": 240000,
+          "timeBase": {
+            "numerator": 1,
+            "denominator": 48000
+          }
+        },
+        "speaker": "Narrator",
+        "text": "The red van arrives at dusk.",
+        "confidence": 0.98,
+        "kind": "speech",
+        "words": [
+          {
+            "wordId": "0197-word-1",
+            "ordinal": 0,
+            "startTick": 96000,
+            "durationTicks": 24000,
+            "text": "The",
+            "confidence": 0.99,
+            "corrected": false
+          },
+          {
+            "wordId": "0197-word-6",
+            "ordinal": 5,
+            "startTick": 288000,
+            "durationTicks": 48000,
+            "text": "dusk.",
+            "confidence": 0.96,
+            "corrected": false
+          }
+        ]
+      }
+    ],
+    "createdAt": 1750000000000
+  },
+  "sequence": {
+    "sequenceId": "0197-sequence-main",
+    "name": "Main",
+    "width": 1920,
+    "height": 1080,
+    "pixelAspect": {
+      "numerator": 1,
+      "denominator": 1
+    },
+    "frameRate": {
+      "numerator": 30,
+      "denominator": 1
+    },
+    "audioSampleRateHz": 48000,
+    "audioChannelLayout": "stereo",
+    "backgroundRgba": [
+      0,
+      0,
+      0,
+      1
+    ],
+    "revision": "dolt-sequence-revision",
+    "tracks": [
+      {
+        "trackId": "0197-track-video-1",
+        "sequenceId": "0197-sequence-main",
+        "kind": "video",
+        "ordinal": 0,
+        "name": "Video 1",
+        "enabled": true,
+        "locked": false,
+        "blendMode": "normal"
+      },
+      {
+        "trackId": "0197-track-video-2",
+        "sequenceId": "0197-sequence-main",
+        "kind": "video",
+        "ordinal": 1,
+        "name": "Video 2",
+        "enabled": true,
+        "locked": false,
+        "blendMode": "normal"
+      },
+      {
+        "trackId": "0197-track-audio-1",
+        "sequenceId": "0197-sequence-main",
+        "kind": "audio",
+        "ordinal": 0,
+        "name": "Narration",
+        "enabled": true,
+        "locked": false,
+        "muted": false,
+        "solo": false
+      },
+      {
+        "trackId": "0197-track-caption",
+        "sequenceId": "0197-sequence-main",
+        "kind": "caption",
+        "ordinal": 0,
+        "name": "Captions",
+        "enabled": true,
+        "locked": false
+      }
+    ],
+    "clips": [
+      {
+        "clipId": "0197-clip-video",
+        "trackId": "0197-track-video-1",
+        "timelineStartFrame": 0,
+        "durationFrames": 150,
+        "enabled": true,
+        "source": {
+          "kind": "timed",
+          "artifactId": "0197-artifact-video",
+          "range": {
+            "streamId": "0197-stream-video",
+            "objectHash": "sha256:video-object",
+            "startTick": 60000,
+            "durationTicks": 150000,
+            "timeBase": {
+              "numerator": 1,
+              "denominator": 30000
+            }
+          }
+        },
+        "speed": {
+          "numerator": 1,
+          "denominator": 1
+        },
+        "reverse": false,
+        "audioPolicy": "preserve-pitch",
+        "transform": {
+          "fit": "fill",
+          "positionX": 0,
+          "positionY": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "anchorX": 0.5,
+          "anchorY": 0.5,
+          "rotationDegrees": 0,
+          "cropTop": 0,
+          "cropRight": 0,
+          "cropBottom": 0,
+          "cropLeft": 0,
+          "opacity": 1,
+          "blendMode": "normal"
+        }
+      }
+    ],
+    "transitions": [],
+    "captions": [
+      {
+        "cueId": "0197-caption-1",
+        "trackId": "0197-track-caption",
+        "timelineStartFrame": 0,
+        "durationFrames": 90,
+        "text": "The red van arrives at dusk.",
+        "speaker": "Narrator",
+        "styleId": "clean",
+        "transcriptSelection": {
+          "transcriptId": "0197-transcript",
+          "transcriptRevision": "dolt-transcript-revision",
+          "startWordId": "0197-word-1",
+          "endWordId": "0197-word-6",
+          "range": {
+            "streamId": "0197-stream-audio",
+            "objectHash": "sha256:audio-object",
+            "startTick": 96000,
+            "durationTicks": 240000,
+            "timeBase": {
+              "numerator": 1,
+              "denominator": 48000
+            }
+          }
+        }
+      }
+    ],
+    "createdAt": 1750000000000
+  },
+  "editOperations": [
+    {
+      "kind": "insert-clip",
+      "clipId": "0197-clip-video",
+      "placement": {
+        "trackId": "0197-track-video-1",
+        "timelineStartFrame": 0,
+        "durationFrames": 150,
+        "source": {
+          "kind": "timed",
+          "artifactId": "0197-artifact-video",
+          "range": {
+            "streamId": "0197-stream-video",
+            "objectHash": "sha256:video-object",
+            "startTick": 60000,
+            "durationTicks": 150000,
+            "timeBase": {
+              "numerator": 1,
+              "denominator": 30000
+            }
+          }
+        },
+        "speed": {
+          "numerator": 1,
+          "denominator": 1
+        },
+        "reverse": false,
+        "audioPolicy": "preserve-pitch",
+        "transform": {
+          "fit": "fill",
+          "positionX": 0,
+          "positionY": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "anchorX": 0.5,
+          "anchorY": 0.5,
+          "rotationDegrees": 0,
+          "cropTop": 0,
+          "cropRight": 0,
+          "cropBottom": 0,
+          "cropLeft": 0,
+          "opacity": 1,
+          "blendMode": "normal"
+        }
+      },
+      "mode": "insert"
+    },
+    {
+      "kind": "remove-range",
+      "trackIds": [
+        "0197-track-video-1"
+      ],
+      "range": {
+        "sequenceId": "0197-sequence-main",
+        "startFrame": 60,
+        "durationFrames": 30
+      },
+      "ripple": true
+    },
+    {
+      "kind": "move-clip",
+      "clipId": "0197-clip-video",
+      "trackId": "0197-track-video-2",
+      "timelineStartFrame": 180
+    },
+    {
+      "kind": "trim-clip",
+      "clipId": "0197-clip-video",
+      "timelineStartFrame": 0,
+      "durationFrames": 120,
+      "sourceRange": {
+        "streamId": "0197-stream-video",
+        "objectHash": "sha256:video-object",
+        "startTick": 60000,
+        "durationTicks": 120000,
+        "timeBase": {
+          "numerator": 1,
+          "denominator": 30000
+        }
+      }
+    },
+    {
+      "kind": "split-clip",
+      "clipId": "0197-clip-video",
+      "splitFrame": 75,
+      "leftClipId": "0197-clip-left",
+      "rightClipId": "0197-clip-right"
+    },
+    {
+      "kind": "restore-clip",
+      "sourceActionId": "0197-action-remove",
+      "sourceClipId": "0197-clip-removed",
+      "placement": {
+        "trackId": "0197-track-video-1",
+        "timelineStartFrame": 210,
+        "durationFrames": 90,
+        "source": {
+          "kind": "still",
+          "artifactId": "0197-artifact-still",
+          "sourcePath": "original.jpg",
+          "objectHash": "sha256:still-object"
+        },
+        "transform": {
+          "fit": "fill",
+          "positionX": 0,
+          "positionY": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "anchorX": 0.5,
+          "anchorY": 0.5,
+          "rotationDegrees": 0,
+          "cropTop": 0,
+          "cropRight": 0,
+          "cropBottom": 0,
+          "cropLeft": 0,
+          "opacity": 1,
+          "blendMode": "normal"
+        }
+      }
+    },
+    {
+      "kind": "set-clip-transform",
+      "clipId": "0197-clip-video",
+      "transform": {
+        "fit": "fill",
+        "positionX": 0,
+        "positionY": 0,
+        "scaleX": 1,
+        "scaleY": 1,
+        "anchorX": 0.5,
+        "anchorY": 0.5,
+        "rotationDegrees": 0,
+        "cropTop": 0,
+        "cropRight": 0,
+        "cropBottom": 0,
+        "cropLeft": 0,
+        "opacity": 1,
+        "blendMode": "normal"
+      }
+    },
+    {
+      "kind": "set-clip-audio",
+      "clipId": "0197-clip-video",
+      "audio": {
+        "gainDb": -3,
+        "muted": false,
+        "fadeInFrames": 6,
+        "fadeOutFrames": 6
+      }
+    },
+    {
+      "kind": "set-clip-speed",
+      "clipId": "0197-clip-video",
+      "speed": {
+        "numerator": 2,
+        "denominator": 1
+      },
+      "reverse": false,
+      "audioPolicy": "preserve-pitch"
+    },
+    {
+      "kind": "set-transition",
+      "outgoingClipId": "0197-clip-left",
+      "incomingClipId": "0197-clip-right",
+      "transition": {
+        "transitionId": "0197-transition",
+        "trackId": "0197-track-video-1",
+        "outgoingClipId": "0197-clip-left",
+        "incomingClipId": "0197-clip-right",
+        "kind": "dissolve",
+        "durationFrames": 12,
+        "alignment": "center"
+      }
+    },
+    {
+      "kind": "upsert-caption-cue",
+      "cue": {
+        "cueId": "0197-caption-1",
+        "trackId": "0197-track-caption",
+        "timelineStartFrame": 0,
+        "durationFrames": 90,
+        "text": "The red van arrives at dusk.",
+        "speaker": "Narrator",
+        "styleId": "clean",
+        "transcriptSelection": {
+          "transcriptId": "0197-transcript",
+          "transcriptRevision": "dolt-transcript-revision",
+          "startWordId": "0197-word-1",
+          "endWordId": "0197-word-6",
+          "range": {
+            "streamId": "0197-stream-audio",
+            "objectHash": "sha256:audio-object",
+            "startTick": 96000,
+            "durationTicks": 240000,
+            "timeBase": {
+              "numerator": 1,
+              "denominator": 48000
+            }
+          }
+        }
+      }
+    },
+    {
+      "kind": "batch-replace-range",
+      "range": {
+        "sequenceId": "0197-sequence-main",
+        "startFrame": 0,
+        "durationFrames": 150
+      },
+      "trackIds": [
+        "0197-track-video-1"
+      ],
+      "placements": [
+        {
+          "trackId": "0197-track-video-1",
+          "timelineStartFrame": 0,
+          "durationFrames": 90,
+          "source": {
+            "kind": "still",
+            "artifactId": "0197-artifact-still",
+            "sourcePath": "original.jpg",
+            "objectHash": "sha256:still-object"
+          },
+          "transform": {
+            "fit": "fill",
+            "positionX": 0,
+            "positionY": 0,
+            "scaleX": 1,
+            "scaleY": 1,
+            "anchorX": 0.5,
+            "anchorY": 0.5,
+            "rotationDegrees": 0,
+            "cropTop": 0,
+            "cropRight": 0,
+            "cropBottom": 0,
+            "cropLeft": 0,
+            "opacity": 1,
+            "blendMode": "normal"
+          }
+        },
+        {
+          "trackId": "0197-track-video-1",
+          "timelineStartFrame": 90,
+          "durationFrames": 60,
+          "source": {
+            "kind": "timed",
+            "artifactId": "0197-artifact-video",
+            "range": {
+              "streamId": "0197-stream-video",
+              "objectHash": "sha256:video-object",
+              "startTick": 60000,
+              "durationTicks": 150000,
+              "timeBase": {
+                "numerator": 1,
+                "denominator": 30000
+              }
+            }
+          },
+          "speed": {
+            "numerator": 1,
+            "denominator": 1
+          },
+          "reverse": false,
+          "audioPolicy": "preserve-pitch",
+          "transform": {
+            "fit": "fill",
+            "positionX": 0,
+            "positionY": 0,
+            "scaleX": 1,
+            "scaleY": 1,
+            "anchorX": 0.5,
+            "anchorY": 0.5,
+            "rotationDegrees": 0,
+            "cropTop": 0,
+            "cropRight": 0,
+            "cropBottom": 0,
+            "cropLeft": 0,
+            "opacity": 1,
+            "blendMode": "normal"
+          }
+        }
+      ],
+      "ripple": false
+    }
+  ],
+  "editIntent": {
+    "intentVersion": 1,
+    "commandId": "command-fixture-1",
+    "sequenceId": "0197-sequence-main",
+    "baseRevision": "dolt-base-revision",
+    "actor": "fixture-user",
+    "sourceSurface": "slash",
+    "confirmationPolicy": "risk-based",
+    "operations": [
+      {
+        "kind": "insert-clip",
+        "clipId": "0197-clip-video",
+        "placement": {
+          "trackId": "0197-track-video-1",
+          "timelineStartFrame": 0,
+          "durationFrames": 150,
+          "source": {
+            "kind": "timed",
+            "artifactId": "0197-artifact-video",
+            "range": {
+              "streamId": "0197-stream-video",
+              "objectHash": "sha256:video-object",
+              "startTick": 60000,
+              "durationTicks": 150000,
+              "timeBase": {
+                "numerator": 1,
+                "denominator": 30000
+              }
+            }
+          },
+          "speed": {
+            "numerator": 1,
+            "denominator": 1
+          },
+          "reverse": false,
+          "audioPolicy": "preserve-pitch",
+          "transform": {
+            "fit": "fill",
+            "positionX": 0,
+            "positionY": 0,
+            "scaleX": 1,
+            "scaleY": 1,
+            "anchorX": 0.5,
+            "anchorY": 0.5,
+            "rotationDegrees": 0,
+            "cropTop": 0,
+            "cropRight": 0,
+            "cropBottom": 0,
+            "cropLeft": 0,
+            "opacity": 1,
+            "blendMode": "normal"
+          }
+        },
+        "mode": "insert"
+      },
+      {
+        "kind": "remove-range",
+        "trackIds": [
+          "0197-track-video-1"
+        ],
+        "range": {
+          "sequenceId": "0197-sequence-main",
+          "startFrame": 60,
+          "durationFrames": 30
+        },
+        "ripple": true
+      },
+      {
+        "kind": "move-clip",
+        "clipId": "0197-clip-video",
+        "trackId": "0197-track-video-2",
+        "timelineStartFrame": 180
+      },
+      {
+        "kind": "trim-clip",
+        "clipId": "0197-clip-video",
+        "timelineStartFrame": 0,
+        "durationFrames": 120,
+        "sourceRange": {
+          "streamId": "0197-stream-video",
+          "objectHash": "sha256:video-object",
+          "startTick": 60000,
+          "durationTicks": 120000,
+          "timeBase": {
+            "numerator": 1,
+            "denominator": 30000
+          }
+        }
+      },
+      {
+        "kind": "split-clip",
+        "clipId": "0197-clip-video",
+        "splitFrame": 75,
+        "leftClipId": "0197-clip-left",
+        "rightClipId": "0197-clip-right"
+      },
+      {
+        "kind": "restore-clip",
+        "sourceActionId": "0197-action-remove",
+        "sourceClipId": "0197-clip-removed",
+        "placement": {
+          "trackId": "0197-track-video-1",
+          "timelineStartFrame": 210,
+          "durationFrames": 90,
+          "source": {
+            "kind": "still",
+            "artifactId": "0197-artifact-still",
+            "sourcePath": "original.jpg",
+            "objectHash": "sha256:still-object"
+          },
+          "transform": {
+            "fit": "fill",
+            "positionX": 0,
+            "positionY": 0,
+            "scaleX": 1,
+            "scaleY": 1,
+            "anchorX": 0.5,
+            "anchorY": 0.5,
+            "rotationDegrees": 0,
+            "cropTop": 0,
+            "cropRight": 0,
+            "cropBottom": 0,
+            "cropLeft": 0,
+            "opacity": 1,
+            "blendMode": "normal"
+          }
+        }
+      },
+      {
+        "kind": "set-clip-transform",
+        "clipId": "0197-clip-video",
+        "transform": {
+          "fit": "fill",
+          "positionX": 0,
+          "positionY": 0,
+          "scaleX": 1,
+          "scaleY": 1,
+          "anchorX": 0.5,
+          "anchorY": 0.5,
+          "rotationDegrees": 0,
+          "cropTop": 0,
+          "cropRight": 0,
+          "cropBottom": 0,
+          "cropLeft": 0,
+          "opacity": 1,
+          "blendMode": "normal"
+        }
+      },
+      {
+        "kind": "set-clip-audio",
+        "clipId": "0197-clip-video",
+        "audio": {
+          "gainDb": -3,
+          "muted": false,
+          "fadeInFrames": 6,
+          "fadeOutFrames": 6
+        }
+      },
+      {
+        "kind": "set-clip-speed",
+        "clipId": "0197-clip-video",
+        "speed": {
+          "numerator": 2,
+          "denominator": 1
+        },
+        "reverse": false,
+        "audioPolicy": "preserve-pitch"
+      },
+      {
+        "kind": "set-transition",
+        "outgoingClipId": "0197-clip-left",
+        "incomingClipId": "0197-clip-right",
+        "transition": {
+          "transitionId": "0197-transition",
+          "trackId": "0197-track-video-1",
+          "outgoingClipId": "0197-clip-left",
+          "incomingClipId": "0197-clip-right",
+          "kind": "dissolve",
+          "durationFrames": 12,
+          "alignment": "center"
+        }
+      },
+      {
+        "kind": "upsert-caption-cue",
+        "cue": {
+          "cueId": "0197-caption-1",
+          "trackId": "0197-track-caption",
+          "timelineStartFrame": 0,
+          "durationFrames": 90,
+          "text": "The red van arrives at dusk.",
+          "speaker": "Narrator",
+          "styleId": "clean",
+          "transcriptSelection": {
+            "transcriptId": "0197-transcript",
+            "transcriptRevision": "dolt-transcript-revision",
+            "startWordId": "0197-word-1",
+            "endWordId": "0197-word-6",
+            "range": {
+              "streamId": "0197-stream-audio",
+              "objectHash": "sha256:audio-object",
+              "startTick": 96000,
+              "durationTicks": 240000,
+              "timeBase": {
+                "numerator": 1,
+                "denominator": 48000
+              }
+            }
+          }
+        }
+      },
+      {
+        "kind": "batch-replace-range",
+        "range": {
+          "sequenceId": "0197-sequence-main",
+          "startFrame": 0,
+          "durationFrames": 150
+        },
+        "trackIds": [
+          "0197-track-video-1"
+        ],
+        "placements": [
+          {
+            "trackId": "0197-track-video-1",
+            "timelineStartFrame": 0,
+            "durationFrames": 90,
+            "source": {
+              "kind": "still",
+              "artifactId": "0197-artifact-still",
+              "sourcePath": "original.jpg",
+              "objectHash": "sha256:still-object"
+            },
+            "transform": {
+              "fit": "fill",
+              "positionX": 0,
+              "positionY": 0,
+              "scaleX": 1,
+              "scaleY": 1,
+              "anchorX": 0.5,
+              "anchorY": 0.5,
+              "rotationDegrees": 0,
+              "cropTop": 0,
+              "cropRight": 0,
+              "cropBottom": 0,
+              "cropLeft": 0,
+              "opacity": 1,
+              "blendMode": "normal"
+            }
+          },
+          {
+            "trackId": "0197-track-video-1",
+            "timelineStartFrame": 90,
+            "durationFrames": 60,
+            "source": {
+              "kind": "timed",
+              "artifactId": "0197-artifact-video",
+              "range": {
+                "streamId": "0197-stream-video",
+                "objectHash": "sha256:video-object",
+                "startTick": 60000,
+                "durationTicks": 150000,
+                "timeBase": {
+                  "numerator": 1,
+                  "denominator": 30000
+                }
+              }
+            },
+            "speed": {
+              "numerator": 1,
+              "denominator": 1
+            },
+            "reverse": false,
+            "audioPolicy": "preserve-pitch",
+            "transform": {
+              "fit": "fill",
+              "positionX": 0,
+              "positionY": 0,
+              "scaleX": 1,
+              "scaleY": 1,
+              "anchorX": 0.5,
+              "anchorY": 0.5,
+              "rotationDegrees": 0,
+              "cropTop": 0,
+              "cropRight": 0,
+              "cropBottom": 0,
+              "cropLeft": 0,
+              "opacity": 1,
+              "blendMode": "normal"
+            }
+          }
+        ],
+        "ripple": false
+      }
+    ]
+  },
+  "editPreview": {
+    "commandId": "command-fixture-1",
+    "sequenceId": "0197-sequence-main",
+    "baseRevision": "dolt-base-revision",
+    "valid": true,
+    "operations": [
+      {
+        "operationId": "operation-01",
+        "ordinal": 0,
+        "operation": {
+          "kind": "insert-clip",
+          "clipId": "0197-clip-video",
+          "placement": {
+            "trackId": "0197-track-video-1",
+            "timelineStartFrame": 0,
+            "durationFrames": 150,
+            "source": {
+              "kind": "timed",
+              "artifactId": "0197-artifact-video",
+              "range": {
+                "streamId": "0197-stream-video",
+                "objectHash": "sha256:video-object",
+                "startTick": 60000,
+                "durationTicks": 150000,
+                "timeBase": {
+                  "numerator": 1,
+                  "denominator": 30000
+                }
+              }
+            },
+            "speed": {
+              "numerator": 1,
+              "denominator": 1
+            },
+            "reverse": false,
+            "audioPolicy": "preserve-pitch",
+            "transform": {
+              "fit": "fill",
+              "positionX": 0,
+              "positionY": 0,
+              "scaleX": 1,
+              "scaleY": 1,
+              "anchorX": 0.5,
+              "anchorY": 0.5,
+              "rotationDegrees": 0,
+              "cropTop": 0,
+              "cropRight": 0,
+              "cropBottom": 0,
+              "cropLeft": 0,
+              "opacity": 1,
+              "blendMode": "normal"
+            }
+          },
+          "mode": "insert"
+        }
+      },
+      {
+        "operationId": "operation-02",
+        "ordinal": 1,
+        "operation": {
+          "kind": "remove-range",
+          "trackIds": [
+            "0197-track-video-1"
+          ],
+          "range": {
+            "sequenceId": "0197-sequence-main",
+            "startFrame": 60,
+            "durationFrames": 30
+          },
+          "ripple": true
+        }
+      },
+      {
+        "operationId": "operation-03",
+        "ordinal": 2,
+        "operation": {
+          "kind": "move-clip",
+          "clipId": "0197-clip-video",
+          "trackId": "0197-track-video-2",
+          "timelineStartFrame": 180
+        }
+      },
+      {
+        "operationId": "operation-04",
+        "ordinal": 3,
+        "operation": {
+          "kind": "trim-clip",
+          "clipId": "0197-clip-video",
+          "timelineStartFrame": 0,
+          "durationFrames": 120,
+          "sourceRange": {
+            "streamId": "0197-stream-video",
+            "objectHash": "sha256:video-object",
+            "startTick": 60000,
+            "durationTicks": 120000,
+            "timeBase": {
+              "numerator": 1,
+              "denominator": 30000
+            }
+          }
+        }
+      },
+      {
+        "operationId": "operation-05",
+        "ordinal": 4,
+        "operation": {
+          "kind": "split-clip",
+          "clipId": "0197-clip-video",
+          "splitFrame": 75,
+          "leftClipId": "0197-clip-left",
+          "rightClipId": "0197-clip-right"
+        }
+      },
+      {
+        "operationId": "operation-06",
+        "ordinal": 5,
+        "operation": {
+          "kind": "restore-clip",
+          "sourceActionId": "0197-action-remove",
+          "sourceClipId": "0197-clip-removed",
+          "placement": {
+            "trackId": "0197-track-video-1",
+            "timelineStartFrame": 210,
+            "durationFrames": 90,
+            "source": {
+              "kind": "still",
+              "artifactId": "0197-artifact-still",
+              "sourcePath": "original.jpg",
+              "objectHash": "sha256:still-object"
+            },
+            "transform": {
+              "fit": "fill",
+              "positionX": 0,
+              "positionY": 0,
+              "scaleX": 1,
+              "scaleY": 1,
+              "anchorX": 0.5,
+              "anchorY": 0.5,
+              "rotationDegrees": 0,
+              "cropTop": 0,
+              "cropRight": 0,
+              "cropBottom": 0,
+              "cropLeft": 0,
+              "opacity": 1,
+              "blendMode": "normal"
+            }
+          }
+        }
+      },
+      {
+        "operationId": "operation-07",
+        "ordinal": 6,
+        "operation": {
+          "kind": "set-clip-transform",
+          "clipId": "0197-clip-video",
+          "transform": {
+            "fit": "fill",
+            "positionX": 0,
+            "positionY": 0,
+            "scaleX": 1,
+            "scaleY": 1,
+            "anchorX": 0.5,
+            "anchorY": 0.5,
+            "rotationDegrees": 0,
+            "cropTop": 0,
+            "cropRight": 0,
+            "cropBottom": 0,
+            "cropLeft": 0,
+            "opacity": 1,
+            "blendMode": "normal"
+          }
+        }
+      },
+      {
+        "operationId": "operation-08",
+        "ordinal": 7,
+        "operation": {
+          "kind": "set-clip-audio",
+          "clipId": "0197-clip-video",
+          "audio": {
+            "gainDb": -3,
+            "muted": false,
+            "fadeInFrames": 6,
+            "fadeOutFrames": 6
+          }
+        }
+      },
+      {
+        "operationId": "operation-09",
+        "ordinal": 8,
+        "operation": {
+          "kind": "set-clip-speed",
+          "clipId": "0197-clip-video",
+          "speed": {
+            "numerator": 2,
+            "denominator": 1
+          },
+          "reverse": false,
+          "audioPolicy": "preserve-pitch"
+        }
+      },
+      {
+        "operationId": "operation-10",
+        "ordinal": 9,
+        "operation": {
+          "kind": "set-transition",
+          "outgoingClipId": "0197-clip-left",
+          "incomingClipId": "0197-clip-right",
+          "transition": {
+            "transitionId": "0197-transition",
+            "trackId": "0197-track-video-1",
+            "outgoingClipId": "0197-clip-left",
+            "incomingClipId": "0197-clip-right",
+            "kind": "dissolve",
+            "durationFrames": 12,
+            "alignment": "center"
+          }
+        }
+      },
+      {
+        "operationId": "operation-11",
+        "ordinal": 10,
+        "operation": {
+          "kind": "upsert-caption-cue",
+          "cue": {
+            "cueId": "0197-caption-1",
+            "trackId": "0197-track-caption",
+            "timelineStartFrame": 0,
+            "durationFrames": 90,
+            "text": "The red van arrives at dusk.",
+            "speaker": "Narrator",
+            "styleId": "clean",
+            "transcriptSelection": {
+              "transcriptId": "0197-transcript",
+              "transcriptRevision": "dolt-transcript-revision",
+              "startWordId": "0197-word-1",
+              "endWordId": "0197-word-6",
+              "range": {
+                "streamId": "0197-stream-audio",
+                "objectHash": "sha256:audio-object",
+                "startTick": 96000,
+                "durationTicks": 240000,
+                "timeBase": {
+                  "numerator": 1,
+                  "denominator": 48000
+                }
+              }
+            }
+          }
+        }
+      },
+      {
+        "operationId": "operation-12",
+        "ordinal": 11,
+        "operation": {
+          "kind": "batch-replace-range",
+          "range": {
+            "sequenceId": "0197-sequence-main",
+            "startFrame": 0,
+            "durationFrames": 150
+          },
+          "trackIds": [
+            "0197-track-video-1"
+          ],
+          "placements": [
+            {
+              "trackId": "0197-track-video-1",
+              "timelineStartFrame": 0,
+              "durationFrames": 90,
+              "source": {
+                "kind": "still",
+                "artifactId": "0197-artifact-still",
+                "sourcePath": "original.jpg",
+                "objectHash": "sha256:still-object"
+              },
+              "transform": {
+                "fit": "fill",
+                "positionX": 0,
+                "positionY": 0,
+                "scaleX": 1,
+                "scaleY": 1,
+                "anchorX": 0.5,
+                "anchorY": 0.5,
+                "rotationDegrees": 0,
+                "cropTop": 0,
+                "cropRight": 0,
+                "cropBottom": 0,
+                "cropLeft": 0,
+                "opacity": 1,
+                "blendMode": "normal"
+              }
+            },
+            {
+              "trackId": "0197-track-video-1",
+              "timelineStartFrame": 90,
+              "durationFrames": 60,
+              "source": {
+                "kind": "timed",
+                "artifactId": "0197-artifact-video",
+                "range": {
+                  "streamId": "0197-stream-video",
+                  "objectHash": "sha256:video-object",
+                  "startTick": 60000,
+                  "durationTicks": 150000,
+                  "timeBase": {
+                    "numerator": 1,
+                    "denominator": 30000
+                  }
+                }
+              },
+              "speed": {
+                "numerator": 1,
+                "denominator": 1
+              },
+              "reverse": false,
+              "audioPolicy": "preserve-pitch",
+              "transform": {
+                "fit": "fill",
+                "positionX": 0,
+                "positionY": 0,
+                "scaleX": 1,
+                "scaleY": 1,
+                "anchorX": 0.5,
+                "anchorY": 0.5,
+                "rotationDegrees": 0,
+                "cropTop": 0,
+                "cropRight": 0,
+                "cropBottom": 0,
+                "cropLeft": 0,
+                "opacity": 1,
+                "blendMode": "normal"
+              }
+            }
+          ],
+          "ripple": false
+        }
+      }
+    ],
+    "affectedRanges": [
+      {
+        "sequenceId": "0197-sequence-main",
+        "startFrame": 0,
+        "durationFrames": 300
+      }
+    ],
+    "writeSet": [
+      "sequence:0197-sequence-main",
+      "track:0197-track-video-1",
+      "track:0197-track-video-2",
+      "track:0197-track-caption"
+    ],
+    "warnings": [
+      {
+        "code": "AUDIO_PITCH_CHANGE",
+        "message": "Two-times speed may alter pitch when preserve-pitch is unavailable.",
+        "operationId": "operation-09"
+      }
+    ],
+    "conflicts": [],
+    "diff": {
+      "insertedClipIds": [
+        "0197-clip-left",
+        "0197-clip-right"
+      ],
+      "removedClipIds": [],
+      "changedClipIds": [
+        "0197-clip-video"
+      ],
+      "changedTrackIds": [
+        "0197-track-video-1",
+        "0197-track-video-2"
+      ],
+      "changedCaptionCueIds": [
+        "0197-caption-1"
+      ],
+      "beforeDurationFrames": 150,
+      "afterDurationFrames": 300
+    },
+    "beforeHash": "sha256:before",
+    "afterHash": "sha256:after",
+    "previewHash": "sha256:preview"
+  },
+  "editCommit": {
+    "commandId": "command-fixture-1",
+    "actionId": "0197-action-edit",
+    "revision": "dolt-committed-revision",
+    "sequence": {
+      "sequenceId": "0197-sequence-main",
+      "name": "Main",
+      "width": 1920,
+      "height": 1080,
+      "pixelAspect": {
+        "numerator": 1,
+        "denominator": 1
+      },
+      "frameRate": {
+        "numerator": 30,
+        "denominator": 1
+      },
+      "audioSampleRateHz": 48000,
+      "audioChannelLayout": "stereo",
+      "backgroundRgba": [
+        0,
+        0,
+        0,
+        1
+      ],
+      "revision": "dolt-committed-revision",
+      "tracks": [
+        {
+          "trackId": "0197-track-video-1",
+          "sequenceId": "0197-sequence-main",
+          "kind": "video",
+          "ordinal": 0,
+          "name": "Video 1",
+          "enabled": true,
+          "locked": false,
+          "blendMode": "normal"
+        },
+        {
+          "trackId": "0197-track-video-2",
+          "sequenceId": "0197-sequence-main",
+          "kind": "video",
+          "ordinal": 1,
+          "name": "Video 2",
+          "enabled": true,
+          "locked": false,
+          "blendMode": "normal"
+        },
+        {
+          "trackId": "0197-track-audio-1",
+          "sequenceId": "0197-sequence-main",
+          "kind": "audio",
+          "ordinal": 0,
+          "name": "Narration",
+          "enabled": true,
+          "locked": false,
+          "muted": false,
+          "solo": false
+        },
+        {
+          "trackId": "0197-track-caption",
+          "sequenceId": "0197-sequence-main",
+          "kind": "caption",
+          "ordinal": 0,
+          "name": "Captions",
+          "enabled": true,
+          "locked": false
+        }
+      ],
+      "clips": [
+        {
+          "clipId": "0197-clip-video",
+          "trackId": "0197-track-video-1",
+          "timelineStartFrame": 0,
+          "durationFrames": 150,
+          "enabled": true,
+          "source": {
+            "kind": "timed",
+            "artifactId": "0197-artifact-video",
+            "range": {
+              "streamId": "0197-stream-video",
+              "objectHash": "sha256:video-object",
+              "startTick": 60000,
+              "durationTicks": 150000,
+              "timeBase": {
+                "numerator": 1,
+                "denominator": 30000
+              }
+            }
+          },
+          "speed": {
+            "numerator": 1,
+            "denominator": 1
+          },
+          "reverse": false,
+          "audioPolicy": "preserve-pitch",
+          "transform": {
+            "fit": "fill",
+            "positionX": 0,
+            "positionY": 0,
+            "scaleX": 1,
+            "scaleY": 1,
+            "anchorX": 0.5,
+            "anchorY": 0.5,
+            "rotationDegrees": 0,
+            "cropTop": 0,
+            "cropRight": 0,
+            "cropBottom": 0,
+            "cropLeft": 0,
+            "opacity": 1,
+            "blendMode": "normal"
+          }
+        }
+      ],
+      "transitions": [],
+      "captions": [
+        {
+          "cueId": "0197-caption-1",
+          "trackId": "0197-track-caption",
+          "timelineStartFrame": 0,
+          "durationFrames": 90,
+          "text": "The red van arrives at dusk.",
+          "speaker": "Narrator",
+          "styleId": "clean",
+          "transcriptSelection": {
+            "transcriptId": "0197-transcript",
+            "transcriptRevision": "dolt-transcript-revision",
+            "startWordId": "0197-word-1",
+            "endWordId": "0197-word-6",
+            "range": {
+              "streamId": "0197-stream-audio",
+              "objectHash": "sha256:audio-object",
+              "startTick": 96000,
+              "durationTicks": 240000,
+              "timeBase": {
+                "numerator": 1,
+                "denominator": 48000
+              }
+            }
+          }
+        }
+      ],
+      "createdAt": 1750000000000
+    },
+    "previewHash": "sha256:preview"
+  },
+  "indexManifest": {
+    "manifestId": "manifest-visual-v1",
+    "provider": "local",
+    "modelId": "fixture-multimodal",
+    "modelRevision": "sha256:model",
+    "license": "fixture-only",
+    "embeddingSpace": "fixture-visual-v1",
+    "dimensions": 4,
+    "modalities": [
+      "visual",
+      "metadata"
+    ],
+    "supportedLanguages": [
+      "en"
+    ],
+    "preprocessingVersion": "frames-v1",
+    "extractorVersion": "extractor-v1",
+    "createdAt": 1750000000000
+  },
+  "searchPage": {
+    "hits": [
+      {
+        "artifactId": "0197-artifact-video",
+        "artifactSlug": "vid-red-van",
+        "artifactKind": "video",
+        "location": {
+          "kind": "timed",
+          "artifactId": "0197-artifact-video",
+          "range": {
+            "streamId": "0197-stream-video",
+            "objectHash": "sha256:video-object",
+            "startTick": 60000,
+            "durationTicks": 150000,
+            "timeBase": {
+              "numerator": 1,
+              "denominator": 30000
+            }
+          }
+        },
+        "representativeTick": 120000,
+        "score": 0.91,
+        "signals": [
+          {
+            "kind": "visual",
+            "rank": 1,
+            "score": 0.92,
+            "explanation": "red van arriving at dusk"
+          },
+          {
+            "kind": "metadata",
+            "rank": 2,
+            "score": 0.7,
+            "explanation": "user label: exterior"
+          }
+        ],
+        "excerpt": "Red van enters frame from the left.",
+        "indexManifestIds": [
+          "manifest-visual-v1"
+        ]
+      }
+    ],
+    "nextCursor": "generation-1:page-2",
+    "coverage": {
+      "state": "partial",
+      "generation": "generation-1",
+      "modalities": [
+        {
+          "modality": "visual",
+          "state": "partial",
+          "indexedUnits": 12,
+          "totalUnits": 20,
+          "languageCoverage": "measured",
+          "manifestId": "manifest-visual-v1"
+        },
+        {
+          "modality": "speech",
+          "state": "ready",
+          "indexedUnits": 1,
+          "totalUnits": 1,
+          "languageCoverage": "measured",
+          "manifestId": "manifest-text-v1"
+        }
+      ],
+      "indexedArtifactCount": 1,
+      "totalArtifactCount": 2,
+      "partialResults": true
+    }
+  },
+  "indexBatch": {
+    "artifactId": "0197-artifact-video",
+    "manifestId": "manifest-visual-v1",
+    "phase": "visual",
+    "committedUnits": 12,
+    "coveredRanges": [
+      {
+        "streamId": "0197-stream-video",
+        "objectHash": "sha256:video-object",
+        "startTick": 60000,
+        "durationTicks": 150000,
+        "timeBase": {
+          "numerator": 1,
+          "denominator": 30000
+        }
+      }
+    ],
+    "nextCursor": "segment-12",
+    "complete": false,
+    "generation": "generation-1"
+  },
+  "jobProgress": {
+    "phase": "embed-visual",
+    "completedUnits": 12,
+    "totalUnits": 20,
+    "percent": 60,
+    "elapsedMs": 12000,
+    "estimatedRemainingMs": 8000
+  },
+  "jobFailure": {
+    "code": "MODEL_UNAVAILABLE",
+    "message": "The pinned visual model is not installed.",
+    "retryable": true,
+    "engineCode": "MODEL_UNAVAILABLE"
+  },
+  "migrationDryRun": {
+    "contractVersion": 1,
+    "sourceSchemaVersion": 4,
+    "destinationSchemaVersion": 5,
+    "sourceBookId": "0197-book-v4",
+    "sourceHeadRevision": "dolt-v4-head",
+    "artifactCount": 8,
+    "notebookCount": 1,
+    "timelineSlotCount": 4,
+    "timelineAudioCount": 1,
+    "objectCount": 12,
+    "estimatedReindexArtifacts": 6,
+    "issues": [
+      {
+        "code": "REINDEX_REQUIRED",
+        "severity": "warning",
+        "resource": "book:0197-book-v4",
+        "message": "Schema-v4 similarity rows are rebuilt under v5 manifests."
+      }
+    ],
+    "migrationKey": "sha256:migration-key"
+  },
+  "migrationResult": {
+    "contractVersion": 1,
+    "sourceSchemaVersion": 4,
+    "destinationSchemaVersion": 5,
+    "sourceBookId": "0197-book-v4",
+    "sourceHeadRevision": "dolt-v4-head",
+    "artifactCount": 8,
+    "notebookCount": 1,
+    "timelineSlotCount": 4,
+    "timelineAudioCount": 1,
+    "objectCount": 12,
+    "estimatedReindexArtifacts": 6,
+    "issues": [
+      {
+        "code": "REINDEX_REQUIRED",
+        "severity": "warning",
+        "resource": "book:0197-book-v4",
+        "message": "Schema-v4 similarity rows are rebuilt under v5 manifests."
+      }
+    ],
+    "migrationKey": "sha256:migration-key",
+    "destinationBookId": "0197-book-v4",
+    "destinationRevision": "dolt-v5-import",
+    "importActionId": "0197-action-import",
+    "reportArtifactId": "0197-artifact-migration-report",
+    "copiedObjectCount": 10,
+    "reusedObjectCount": 2,
+    "completedAt": 1750000100000
+  }
+}

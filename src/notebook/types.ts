@@ -1,10 +1,52 @@
+import type {
+  SearchQuery,
+  SearchSignal,
+} from "../mvp-contracts.js";
+import type { SearchLocation } from "../mvp-time.js";
+
 export type NotebookCellType =
+  | "source"
+  | "audio"
+  | "transcript"
+  | "note"
+  | "search"
+  | "selects"
   | "prompt"
   | "character"
   | "scene"
   | "asset"
   | "image"
-  | "video";
+  | "video"
+  | "sequence";
+
+export type NotebookReferenceKind =
+  | "artifact"
+  | "stream"
+  | "source-range"
+  | "transcript"
+  | "sequence"
+  | "cell-output";
+
+export interface NotebookCellReference {
+  id: string;
+  kind: NotebookReferenceKind;
+  targetId: string;
+  snapshot: Record<string, unknown>;
+  ordinal: number;
+}
+
+export interface PinnedSearchResult {
+  id: string;
+  artifactId: string;
+  objectHash: string;
+  location: SearchLocation;
+  representativeTick?: number;
+  query: SearchQuery;
+  signals: SearchSignal[];
+  selectedRevision: string;
+  ordinal: number;
+  createdAt: number;
+}
 
 export interface NotebookPosition {
   x: number;
@@ -21,6 +63,8 @@ export interface NotebookCell {
   model?: string;
   inputs?: Record<string, unknown>;
   outputArtifactId?: string;
+  references?: NotebookCellReference[];
+  pinnedResults?: PinnedSearchResult[];
 }
 
 export interface NotebookEdge {

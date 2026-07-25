@@ -8,23 +8,39 @@ export type ArtifactKind =
   | "scene"
   | "final";
 
-export type EngineErrorCode =
-  | "NOT_FOUND"
-  | "ALREADY_EXISTS"
-  | "SLUG_CONFLICT"
-  | "IN_USE"
-  | "INVALID_INPUT"
-  | "IO_ERROR"
-  | "STORAGE_ERROR"
-  | "OBJECT_UNAVAILABLE"
-  | "SCHEMA_INCOMPATIBLE"
-  | "STALE_REVISION"
-  | "ACTION_CONFLICT"
-  | "LOCKED"
-  | "DIVERGED"
-  | "OFFLINE"
-  | "NOT_READY"
-  | "FEATURE_UNAVAILABLE";
+export const ENGINE_ERROR_CODES = [
+  "NOT_FOUND",
+  "ALREADY_EXISTS",
+  "SLUG_CONFLICT",
+  "IN_USE",
+  "INVALID_INPUT",
+  "INVALID_RANGE",
+  "INVALID_TIMEBASE",
+  "IO_ERROR",
+  "STORAGE_ERROR",
+  "OBJECT_UNAVAILABLE",
+  "MEDIA_MISSING",
+  "UNSUPPORTED_MEDIA",
+  "SCHEMA_INCOMPATIBLE",
+  "MANIFEST_INCOMPATIBLE",
+  "INDEX_INCOMPLETE",
+  "STALE_REVISION",
+  "ACTION_CONFLICT",
+  "SOURCE_REPLACED",
+  "TRACK_LOCKED",
+  "LOCKED",
+  "DIVERGED",
+  "OFFLINE",
+  "NOT_READY",
+  "MODEL_UNAVAILABLE",
+  "FEATURE_UNAVAILABLE",
+  "CANCELLED",
+  "RESOURCE_EXHAUSTED",
+  "TIMEOUT",
+  "INTERNAL_ERROR",
+] as const;
+
+export type EngineErrorCode = (typeof ENGINE_ERROR_CODES)[number];
 
 export interface EngineError {
   code: EngineErrorCode;
@@ -63,6 +79,11 @@ export interface CatalogBackupConfig {
   url: string;
 }
 
+export type SemanticCommitBoundary =
+  | "before-sql-commit"
+  | "after-sql-commit"
+  | "after-dolt-commit";
+
 interface EngineConfigBase {
   /** Required only when initializing an empty engine root. */
   initialBookSlug?: string;
@@ -71,6 +92,10 @@ interface EngineConfigBase {
   catalogBackup?: CatalogBackupConfig;
   runtimeRetentionMs?: number;
   similarity?: SimilarityConfig;
+  semanticCommitBoundary?: (
+    boundary: SemanticCommitBoundary,
+    operationId: string,
+  ) => void;
 }
 
 export type EngineConfig = EngineConfigBase &
@@ -460,7 +485,7 @@ export interface ListJobsOptions {
   limit?: number;
 }
 
-export type JobHandler = (job: Job) => Promise<unknown>;
+export type JobHandler = (job: Job, signal?: AbortSignal) => Promise<unknown>;
 
 export interface RunnerConfig {
   concurrency: number;
