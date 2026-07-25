@@ -5,7 +5,6 @@ import type {
   NotebookCellReference,
   NotebookDocument,
   NotebookEdge,
-  NotebookGrid,
   NotebookReferenceKind,
   NotebookRun,
   PinnedSearchResult,
@@ -40,7 +39,6 @@ interface EntityRow {
 interface NotebookRow {
   notebook_id: string;
   name: string;
-  grid_json: string;
   properties_json: string;
   created_at: number;
 }
@@ -62,6 +60,7 @@ interface NotebookCellRow {
 }
 
 const NOTEBOOK_CELL_TYPE_SET = new Set<NotebookCell["type"]>([
+  "label",
   "source",
   "audio",
   "transcript",
@@ -113,17 +112,6 @@ interface PinnedSearchResultRow {
 
 type NewNotebookCell = Omit<NotebookCell, "id"> & { id?: string };
 type NewNotebookEdge = Omit<NotebookEdge, "id"> & { id?: string };
-
-const DEFAULT_NOTEBOOK_COLUMN_COUNT = 4;
-
-function defaultNotebookGrid(): NotebookGrid {
-  return {
-    columns: Array.from(
-      { length: DEFAULT_NOTEBOOK_COLUMN_COUNT },
-      (_, index) => ({ id: `column-${index + 1}` }),
-    ),
-  };
-}
 
 export function createEntitiesApi(context: EngineContext) {
   return {
@@ -326,13 +314,12 @@ async function createNotebook(
         context.store.db
           .prepare(
             `INSERT INTO notebooks(
-              notebook_id, name, grid_json, properties_json, created_at
-            ) VALUES (?, ?, ?, '{}', ?)`,
+              notebook_id, name, properties_json, created_at
+            ) VALUES (?, ?, '{}', ?)`,
           )
           .run(
             notebookId,
             normalizedName,
-            canonicalJson(defaultNotebookGrid()),
             now,
           );
       },
@@ -376,12 +363,11 @@ async function writeNotebook(
       () => {
         context.store.db
           .prepare(
-            `UPDATE notebooks SET name=?, grid_json=?, properties_json=?
+            `UPDATE notebooks SET name=?, properties_json=?
              WHERE notebook_id=?`,
           )
           .run(
             requiredText(notebook.name, "Notebook name"),
-            canonicalJson(notebook.grid),
             canonicalJson(notebook.properties ?? {}),
             notebook.id,
           );
@@ -535,7 +521,6 @@ function notebookFromRows(
   return {
     id: row.notebook_id,
     name: row.name,
-    grid: parseJson<NotebookGrid>(row.grid_json, defaultNotebookGrid()),
     properties: parseJson<Record<string, unknown>>(row.properties_json, {}),
     cells: cells.map((cell) =>
       rowToCell(
@@ -553,7 +538,6 @@ function validateNotebook(
   context: EngineContext,
   notebook: NotebookDocument,
 ): void {
-  validateNotebookGrid(notebook.grid);
   const cellIds = new Set<string>();
   const occupiedSlots = new Set<string>();
   for (const cell of notebook.cells) {
@@ -568,9 +552,8 @@ function validateNotebook(
       || cell.slot.row < 0
       || !Number.isInteger(cell.slot.column)
       || cell.slot.column < 0
-      || cell.slot.column >= notebook.grid.columns.length
     ) {
-      throw new Error(`Cell slot is outside the notebook grid: ${cell.id}`);
+      throw new Error(`Cell slot must use nonnegative integers: ${cell.id}`);
     }
     const slot = `${cell.slot.row}:${cell.slot.column}`;
     if (occupiedSlots.has(slot)) throw new Error(`Duplicate cell slot: ${slot}`);
@@ -595,21 +578,6 @@ function validateNotebook(
       throw new Error(`Edge ${edge.id} must reference cells in the notebook`);
     }
     requiredText(edge.targetInput, "Edge targetInput");
-  }
-}
-
-function validateNotebookGrid(grid: NotebookGrid): void {
-  if (!grid || !Array.isArray(grid.columns) || grid.columns.length === 0) {
-    throw new Error("Notebook grid must contain at least one column");
-  }
-  const columnIds = new Set<string>();
-  for (const column of grid.columns) {
-    const id = requiredText(column.id, "Notebook grid column ID");
-    if (columnIds.has(id)) throw new Error(`Duplicate notebook grid column: ${id}`);
-    columnIds.add(id);
-    if (column.label !== undefined) {
-      requiredText(column.label, "Notebook grid column label");
-    }
   }
 }
 
@@ -1042,6 +1010,6 @@ const ENTITY_SELECT = `
 `;
 
 const NOTEBOOK_SELECT = `
-  SELECT notebook_id, name, grid_json, properties_json, created_at
+  SELECT notebook_id, name, properties_json, created_at
   FROM notebooks
 `;

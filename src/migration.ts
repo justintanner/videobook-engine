@@ -460,21 +460,15 @@ function copyLegacyNotebooks(
       properties_json: string;
       created_at: number;
     }>;
-  const grid = JSON.stringify({
-    columns: Array.from({ length: 4 }, (_, index) => ({
-      id: `column-${index + 1}`,
-    })),
-  });
   const insert = destination.prepare(
     `INSERT INTO notebooks(
-      notebook_id, name, grid_json, properties_json, created_at
-    ) VALUES (?, ?, ?, ?, ?)`,
+      notebook_id, name, properties_json, created_at
+    ) VALUES (?, ?, ?, ?)`,
   );
   for (const row of rows) {
     insert.run(
       row.notebook_id,
       row.name,
-      grid,
       row.properties_json,
       row.created_at,
     );

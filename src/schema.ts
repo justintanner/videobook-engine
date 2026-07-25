@@ -1,6 +1,7 @@
-export const SCHEMA_VERSION = 7;
+export const SCHEMA_VERSION = 8;
 
 export const NOTEBOOK_CELL_TYPES = [
+  "label",
   "source",
   "audio",
   "transcript",
@@ -190,7 +191,6 @@ export const SEMANTIC_SCHEMA_SQL = `
   CREATE TABLE IF NOT EXISTS notebooks (
     notebook_id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
-    grid_json TEXT NOT NULL,
     properties_json TEXT NOT NULL DEFAULT '{}',
     created_at INTEGER NOT NULL
   );
@@ -200,7 +200,7 @@ export const SEMANTIC_SCHEMA_SQL = `
     cell_id TEXT NOT NULL,
     type TEXT NOT NULL CHECK (
       type IN (
-        'source','audio','transcript','note','search','selects',
+        'label','source','audio','transcript','note','search','selects',
         'prompt','character','scene','asset','image','video','sequence',
         'analysis','split','frame','export'
       )

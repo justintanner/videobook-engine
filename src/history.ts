@@ -100,7 +100,6 @@ interface EntitySnapshotRow {
 interface NotebookSnapshotRow {
   notebook_id: string;
   name: string;
-  grid_json: string;
   properties_json: string;
   created_at: number;
 }
@@ -603,7 +602,7 @@ async function restoreBook(
       .all(revision.hash) as unknown as EntitySnapshotRow[];
     const notebooks = context.store.db
       .prepare(
-        `SELECT notebook_id, name, grid_json, properties_json, created_at
+        `SELECT notebook_id, name, properties_json, created_at
          FROM dolt_at_notebooks(?)`,
       )
       .all(revision.hash) as unknown as NotebookSnapshotRow[];
@@ -769,14 +768,13 @@ async function restoreBook(
 
         const insertNotebook = context.store.db.prepare(
           `INSERT INTO notebooks(
-            notebook_id, name, grid_json, properties_json, created_at
-          ) VALUES (?, ?, ?, ?, ?)`,
+            notebook_id, name, properties_json, created_at
+          ) VALUES (?, ?, ?, ?)`,
         );
         for (const row of notebooks) {
           insertNotebook.run(
             row.notebook_id,
             row.name,
-            row.grid_json,
             row.properties_json,
             row.created_at,
           );

@@ -63,7 +63,6 @@ const MERGE_SCHEMA_SQL = `
   CREATE TABLE notebooks (
     notebook_id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
-    grid_json TEXT NOT NULL,
     properties_json TEXT NOT NULL,
     created_at INTEGER NOT NULL
   );
@@ -240,9 +239,9 @@ describe("single-book Dolt engine", () => {
     suppliedAgain.close();
   });
 
-  it("creates the exact normalized v7 semantic and runtime schema", async () => {
+  it("creates the exact normalized v8 semantic and runtime schema", async () => {
     const { engine, dataDir } = await setup();
-    expect(SCHEMA_VERSION).toBe(7);
+    expect(SCHEMA_VERSION).toBe(8);
     engine.close();
 
     const db = new DatabaseSync(path.join(dataDir, "videobook.db"));
@@ -284,7 +283,6 @@ describe("single-book Dolt engine", () => {
     expect(columns("notebooks")).toEqual([
       "notebook_id",
       "name",
-      "grid_json",
       "properties_json",
       "created_at",
     ]);
@@ -318,7 +316,7 @@ describe("single-book Dolt engine", () => {
       (db
         .prepare("SELECT version FROM engine_schema WHERE singleton=1")
         .get() as { version: number }).version,
-    ).toBe(7);
+    ).toBe(8);
     expect(
       db
         .prepare(
@@ -631,10 +629,9 @@ describe("single-book Dolt engine", () => {
     ).run(leftEntity, rightEntity);
     db.prepare(
       `INSERT INTO notebooks(
-        notebook_id, name, grid_json, properties_json, created_at
+        notebook_id, name, properties_json, created_at
       ) VALUES (
         ?, 'Merge graph',
-        '{"columns":[{"id":"column-1"},{"id":"column-2"}]}',
         '{}', 0
       )`,
     ).run(notebookId);

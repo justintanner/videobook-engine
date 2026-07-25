@@ -5,6 +5,7 @@ import type {
 import type { SearchLocation } from "../mvp-time.js";
 
 export type NotebookCellType =
+  | "label"
   | "source"
   | "audio"
   | "transcript"
@@ -52,15 +53,6 @@ export interface PinnedSearchResult {
   createdAt: number;
 }
 
-export interface NotebookGridColumn {
-  id: string;
-  label?: string;
-}
-
-export interface NotebookGrid {
-  columns: NotebookGridColumn[];
-}
-
 export interface NotebookGridSlot {
   row: number;
   column: number;
@@ -93,7 +85,6 @@ export interface NotebookEdge {
 export interface NotebookDocument {
   id: string;
   name: string;
-  grid: NotebookGrid;
   properties?: Record<string, unknown>;
   cells: NotebookCell[];
   edges: NotebookEdge[];
