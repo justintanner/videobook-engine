@@ -528,7 +528,7 @@ const jobFailure: MvpJobFailure = {
 const migrationDryRun: V4MigrationDryRun = {
   contractVersion: MVP_CONTRACT_VERSION,
   sourceSchemaVersion: 4,
-  destinationSchemaVersion: 8,
+  destinationSchemaVersion: 9,
   sourceBookId: "0197-book-v4",
   sourceHeadRevision: "dolt-v4-head",
   artifactCount: 8,

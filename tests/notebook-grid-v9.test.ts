@@ -32,17 +32,17 @@ function value<T>(
 }
 
 async function setup() {
-  const root = await mkdtemp(path.join(tmpdir(), "videobook-grid-v8-"));
+  const root = await mkdtemp(path.join(tmpdir(), "videobook-grid-v9-"));
   roots.push(root);
   const engine = createEngine({
     rootDir: root,
-    initialBookSlug: "grid-v8",
+    initialBookSlug: "grid-v9",
   });
   await engine.ready;
   return { root, engine };
 }
 
-describe("unbounded notebook grid schema v8", () => {
+describe("centered notebook grid schema v9", () => {
   it("exports cell slots and the label cell type", () => {
     expect(NOTEBOOK_CELL_TYPES).toHaveLength(18);
     expect(NOTEBOOK_CELL_TYPES).toContain("label");
@@ -62,10 +62,10 @@ describe("unbounded notebook grid schema v8", () => {
       "inputs_json",
       "output_artifact_id",
     ]);
-    expect(SCHEMA_VERSION).toBe(8);
+    expect(SCHEMA_VERSION).toBe(9);
   });
 
-  it("round-trips every cell type at arbitrary nonnegative slots", async () => {
+  it("round-trips every cell type at arbitrary signed columns", async () => {
     const { root, engine } = await setup();
     const notebook = value(await engine.notebooks.create("Workflow"));
     const cells = NOTEBOOK_CELL_TYPES.map((type, index) =>
@@ -74,7 +74,7 @@ describe("unbounded notebook grid schema v8", () => {
         title: `${type} cell`,
         slot: {
           row: index === 0 ? 0 : index * 7,
-          column: index === 0 ? 0 : index * 11,
+          column: index === 0 ? 0 : index % 2 === 0 ? index * 11 : index * -11,
         },
         prompt: type === "analysis" ? "Analyze scenes" : undefined,
         provider: type === "analysis" ? "kie" : undefined,
@@ -97,6 +97,10 @@ describe("unbounded notebook grid schema v8", () => {
     expect(reloaded.cells.find((cell) => cell.type === "label")).toMatchObject({
       title: "label cell",
       slot: { row: 0, column: 0 },
+    });
+    expect(reloaded.cells.find((cell) => cell.type === "source")?.slot).toEqual({
+      row: 7,
+      column: -11,
     });
     expect(reloaded.cells.find((cell) => cell.type === "analysis")).toMatchObject({
       provider: "kie",
@@ -124,7 +128,7 @@ describe("unbounded notebook grid schema v8", () => {
     database.close();
   });
 
-  it("rejects duplicate, negative, and fractional slots without a right edge", async () => {
+  it("rejects duplicate, negative-row, and fractional slots without horizontal edges", async () => {
     const { engine } = await setup();
     const notebook = value(await engine.notebooks.create("Validation"));
     const first = engine.notebooks.createCell({
@@ -154,12 +158,30 @@ describe("unbounded notebook grid schema v8", () => {
     });
     expect(fractional.ok).toBe(false);
 
-    const negative = await engine.notebooks.write({
+    const negativeRow = await engine.notebooks.write({
       ...notebook,
-      cells: [{ ...first, slot: { row: 0, column: -1 } }],
+      cells: [{ ...first, slot: { row: -1, column: 0 } }],
       edges: [],
     });
-    expect(negative.ok).toBe(false);
+    expect(negativeRow.ok).toBe(false);
+
+    const fractionalColumn = await engine.notebooks.write({
+      ...notebook,
+      cells: [{ ...first, slot: { row: 0, column: -1.5 } }],
+      edges: [],
+    });
+    expect(fractionalColumn.ok).toBe(false);
+
+    const left = await engine.notebooks.write({
+      ...notebook,
+      cells: [{ ...first, slot: { row: 12_345, column: -67_890 } }],
+      edges: [],
+    });
+    expect(left.ok).toBe(true);
+    expect(value(engine.notebooks.read(notebook.id)).cells[0]?.slot).toEqual({
+      row: 12_345,
+      column: -67_890,
+    });
 
     const wide = await engine.notebooks.write({
       ...notebook,
@@ -214,17 +236,17 @@ describe("unbounded notebook grid schema v8", () => {
     engine.close();
   });
 
-  it("rejects pre-v8 engine roots", async () => {
+  it("rejects pre-v9 engine roots", async () => {
     const { root, engine } = await setup();
     engine.close();
     const database = new DatabaseSync(path.join(root, "data", "videobook.db"));
     database
-      .prepare("UPDATE engine_schema SET version=7 WHERE singleton=1")
+      .prepare("UPDATE engine_schema SET version=8 WHERE singleton=1")
       .run();
     database.close();
 
     expect(() => createEngine({ rootDir: root })).toThrow(
-      "Database schema 7 is not supported by engine schema 8",
+      "Database schema 8 is not supported by engine schema 9",
     );
   });
 });

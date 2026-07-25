@@ -1,4 +1,4 @@
-export const SCHEMA_VERSION = 8;
+export const SCHEMA_VERSION = 9;
 
 export const NOTEBOOK_CELL_TYPES = [
   "label",
@@ -207,7 +207,7 @@ export const SEMANTIC_SCHEMA_SQL = `
     ),
     title TEXT NOT NULL,
     grid_row INTEGER NOT NULL CHECK (grid_row >= 0),
-    grid_column INTEGER NOT NULL CHECK (grid_column >= 0),
+    grid_column INTEGER NOT NULL,
     entity_id TEXT
       REFERENCES entities(entity_id) ON DELETE RESTRICT,
     prompt TEXT,

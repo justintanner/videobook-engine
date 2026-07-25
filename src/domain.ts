@@ -551,9 +551,10 @@ function validateNotebook(
       !Number.isInteger(cell.slot.row)
       || cell.slot.row < 0
       || !Number.isInteger(cell.slot.column)
-      || cell.slot.column < 0
     ) {
-      throw new Error(`Cell slot must use nonnegative integers: ${cell.id}`);
+      throw new Error(
+        `Cell slot row must be nonnegative and column must be an integer: ${cell.id}`,
+      );
     }
     const slot = `${cell.slot.row}:${cell.slot.column}`;
     if (occupiedSlots.has(slot)) throw new Error(`Duplicate cell slot: ${slot}`);
