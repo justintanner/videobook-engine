@@ -32,6 +32,7 @@ export {
   MVP_JOB_FAILURE_CODES,
   MVP_JOB_TYPES,
   MVP_LEGACY_SCHEMA_VERSION,
+  MVP_PREVIOUS_SCHEMA_VERSION,
   MVP_SCHEMA_VERSION,
 } from "./mvp-contracts.js";
 
@@ -122,6 +123,8 @@ export { isUuidV7 } from "./ids.js";
 export { JobQueue, QueueRunner } from "./job-queue.js";
 export type { StoredObject } from "./cas.js";
 export {
+  CELLS_TABLE_COLUMNS,
+  NOTEBOOK_CELL_TYPES,
   RUNTIME_TABLES,
   SCHEMA_VERSION,
   SEMANTIC_TABLES,

@@ -13,14 +13,18 @@ import type {
 } from "./mvp-time.js";
 
 export const MVP_CONTRACT_VERSION = 1 as const;
-export const MVP_SCHEMA_VERSION = 5 as const;
+export const MVP_SCHEMA_VERSION = 6 as const;
 export const MVP_LEGACY_SCHEMA_VERSION = 4 as const;
+export const MVP_PREVIOUS_SCHEMA_VERSION = 5 as const;
 
 export const MVP_CONTRACT_COMPATIBILITY = {
   contractVersion: MVP_CONTRACT_VERSION,
   schemaVersion: MVP_SCHEMA_VERSION,
   minimumReaderContractVersion: 1,
-  legacySchemaVersions: [MVP_LEGACY_SCHEMA_VERSION],
+  legacySchemaVersions: [
+    MVP_LEGACY_SCHEMA_VERSION,
+    MVP_PREVIOUS_SCHEMA_VERSION,
+  ],
   legacyTimelineApi: "compile-to-sequence",
   legacySimilarityApi: "read-only-adapter",
 } as const;

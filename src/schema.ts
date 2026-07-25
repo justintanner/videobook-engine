@@ -1,4 +1,41 @@
-export const SCHEMA_VERSION = 5;
+export const SCHEMA_VERSION = 6;
+
+export const NOTEBOOK_CELL_TYPES = [
+  "source",
+  "audio",
+  "transcript",
+  "note",
+  "search",
+  "selects",
+  "prompt",
+  "character",
+  "scene",
+  "asset",
+  "image",
+  "video",
+  "sequence",
+  "analysis",
+  "split",
+  "frame",
+  "export",
+] as const;
+
+export const CELLS_TABLE_COLUMNS = [
+  "notebook_id",
+  "cell_id",
+  "type",
+  "title",
+  "position_x",
+  "position_y",
+  "entity_id",
+  "prompt",
+  "provider",
+  "model",
+  "operation",
+  "tool",
+  "inputs_json",
+  "output_artifact_id",
+] as const;
 
 export const SEMANTIC_TABLES = [
   "engine_schema",
@@ -163,7 +200,8 @@ export const SEMANTIC_SCHEMA_SQL = `
     type TEXT NOT NULL CHECK (
       type IN (
         'source','audio','transcript','note','search','selects',
-        'prompt','character','scene','asset','image','video','sequence'
+        'prompt','character','scene','asset','image','video','sequence',
+        'analysis','split','frame','export'
       )
     ),
     title TEXT NOT NULL,
@@ -172,7 +210,10 @@ export const SEMANTIC_SCHEMA_SQL = `
     entity_id TEXT
       REFERENCES entities(entity_id) ON DELETE RESTRICT,
     prompt TEXT,
+    provider TEXT,
     model TEXT,
+    operation TEXT,
+    tool TEXT,
     inputs_json TEXT NOT NULL DEFAULT '{}',
     output_artifact_id TEXT
       REFERENCES artifacts(artifact_id) ON DELETE RESTRICT,

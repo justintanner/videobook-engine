@@ -51,10 +51,33 @@ interface NotebookCellRow {
   position_y: number;
   entity_id: string | null;
   prompt: string | null;
+  provider: string | null;
   model: string | null;
+  operation: string | null;
+  tool: string | null;
   inputs_json: string;
   output_artifact_id: string | null;
 }
+
+const NOTEBOOK_CELL_TYPE_SET = new Set<NotebookCell["type"]>([
+  "source",
+  "audio",
+  "transcript",
+  "note",
+  "search",
+  "selects",
+  "prompt",
+  "character",
+  "scene",
+  "asset",
+  "image",
+  "video",
+  "sequence",
+  "analysis",
+  "split",
+  "frame",
+  "export",
+]);
 
 interface NotebookEdgeRow {
   edge_id: string;
@@ -460,7 +483,8 @@ function notebookFromRows(
   const cells = context.store.db
     .prepare(
       `SELECT cell_id, type, title, position_x, position_y, entity_id,
-              prompt, model, inputs_json, output_artifact_id
+              prompt, provider, model, operation, tool,
+              inputs_json, output_artifact_id
        FROM cells WHERE notebook_id=? ORDER BY cell_id`,
     )
     .all(row.notebook_id) as unknown as NotebookCellRow[];
@@ -513,23 +537,7 @@ function validateNotebook(
     assertUuidV7(cell.id, "Cell ID");
     if (cellIds.has(cell.id)) throw new Error(`Duplicate cell ID: ${cell.id}`);
     cellIds.add(cell.id);
-    if (
-      ![
-        "source",
-        "audio",
-        "transcript",
-        "note",
-        "search",
-        "selects",
-        "prompt",
-        "character",
-        "scene",
-        "asset",
-        "image",
-        "video",
-        "sequence",
-      ].includes(cell.type)
-    ) {
+    if (!NOTEBOOK_CELL_TYPE_SET.has(cell.type)) {
       throw new Error(`Invalid cell type: ${cell.type}`);
     }
     if (!Number.isFinite(cell.position.x) || !Number.isFinite(cell.position.y)) {
@@ -580,8 +588,9 @@ function synchronizeNotebookChildren(
   const upsertCell = context.store.db.prepare(
     `INSERT INTO cells(
       notebook_id, cell_id, type, title, position_x, position_y,
-      entity_id, prompt, model, inputs_json, output_artifact_id
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      entity_id, prompt, provider, model, operation, tool,
+      inputs_json, output_artifact_id
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(notebook_id, cell_id) DO UPDATE SET
       type=excluded.type,
       title=excluded.title,
@@ -589,23 +598,30 @@ function synchronizeNotebookChildren(
       position_y=excluded.position_y,
       entity_id=excluded.entity_id,
       prompt=excluded.prompt,
+      provider=excluded.provider,
       model=excluded.model,
+      operation=excluded.operation,
+      tool=excluded.tool,
       inputs_json=excluded.inputs_json,
       output_artifact_id=excluded.output_artifact_id`,
   );
   for (const cell of notebook.cells) {
+    const normalized = normalizeCellForWrite(cell);
     upsertCell.run(
       notebook.id,
-      cell.id,
-      cell.type,
-      requiredText(cell.title, "Cell title"),
-      cell.position.x,
-      cell.position.y,
-      cell.entityId ?? null,
-      cell.prompt ?? null,
-      cell.model ?? null,
-      canonicalJson(cell.inputs ?? {}),
-      cell.outputArtifactId ?? null,
+      normalized.id,
+      normalized.type,
+      requiredText(normalized.title, "Cell title"),
+      normalized.position.x,
+      normalized.position.y,
+      normalized.entityId ?? null,
+      normalized.prompt ?? null,
+      normalized.provider ?? null,
+      normalized.model ?? null,
+      normalized.operation ?? null,
+      normalized.tool ?? null,
+      canonicalJson(normalized.inputs ?? {}),
+      normalized.outputArtifactId ?? null,
     );
   }
   synchronizeCellReferences(context, notebook);
@@ -854,6 +870,14 @@ function rowToCell(
   references: NotebookReferenceRow[],
   pinnedResults: PinnedSearchResultRow[],
 ): NotebookCell {
+  const inputs = parseJson<Record<string, unknown>>(row.inputs_json, {});
+  const legacyProvider = optionalString(inputs.provider);
+  const legacyOperation = optionalString(inputs.operation);
+  const provider = optionalString(row.provider) ?? legacyProvider;
+  const operation = optionalString(row.operation) ?? legacyOperation;
+  const model = optionalString(row.model);
+  const tool = optionalString(row.tool)
+    ?? (looksLikeGenerationTool(model) ? model : undefined);
   return {
     id: row.cell_id,
     type: row.type,
@@ -861,14 +885,46 @@ function rowToCell(
     position: { x: row.position_x, y: row.position_y },
     ...(row.entity_id ? { entityId: row.entity_id } : {}),
     ...(row.prompt ? { prompt: row.prompt } : {}),
-    ...(row.model ? { model: row.model } : {}),
-    inputs: parseJson<Record<string, unknown>>(row.inputs_json, {}),
+    ...(provider ? { provider } : {}),
+    ...(model ? { model } : {}),
+    ...(operation ? { operation } : {}),
+    ...(tool ? { tool } : {}),
+    inputs,
     ...(row.output_artifact_id
       ? { outputArtifactId: row.output_artifact_id }
       : {}),
     references: references.map(rowToCellReference),
     pinnedResults: pinnedResults.map(rowToPinnedSearchResult),
   };
+}
+
+function normalizeCellForWrite(cell: NotebookCell): NotebookCell {
+  const inputs = { ...(cell.inputs ?? {}) };
+  const provider = optionalString(cell.provider)
+    ?? optionalString(inputs.provider);
+  const operation = optionalString(cell.operation)
+    ?? optionalString(inputs.operation);
+  const model = optionalString(cell.model);
+  const tool = optionalString(cell.tool)
+    ?? (looksLikeGenerationTool(model) ? model : undefined);
+  return {
+    ...cell,
+    ...(provider ? { provider } : { provider: undefined }),
+    ...(operation ? { operation } : { operation: undefined }),
+    ...(tool ? { tool } : { tool: undefined }),
+    inputs,
+  };
+}
+
+function optionalString(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+function looksLikeGenerationTool(value: string | undefined): boolean {
+  if (!value) return false;
+  return value.startsWith("generate_") || value.includes("/");
 }
 
 function rowToEdge(row: NotebookEdgeRow): NotebookEdge {

@@ -239,9 +239,9 @@ describe("single-book Dolt engine", () => {
     suppliedAgain.close();
   });
 
-  it("creates the exact normalized v5 semantic and runtime schema", async () => {
+  it("creates the exact normalized v6 semantic and runtime schema", async () => {
     const { engine, dataDir } = await setup();
-    expect(SCHEMA_VERSION).toBe(5);
+    expect(SCHEMA_VERSION).toBe(6);
     engine.close();
 
     const db = new DatabaseSync(path.join(dataDir, "videobook.db"));
@@ -286,6 +286,22 @@ describe("single-book Dolt engine", () => {
       "properties_json",
       "created_at",
     ]);
+    expect(columns("cells")).toEqual([
+      "notebook_id",
+      "cell_id",
+      "type",
+      "title",
+      "position_x",
+      "position_y",
+      "entity_id",
+      "prompt",
+      "provider",
+      "model",
+      "operation",
+      "tool",
+      "inputs_json",
+      "output_artifact_id",
+    ]);
     expect(columns("artifact_streams")).toContain("time_base_numerator");
     expect(columns("transcripts")).toContain("object_hash");
     expect(columns("sequences")).toContain("frame_rate_numerator");
@@ -300,7 +316,7 @@ describe("single-book Dolt engine", () => {
       (db
         .prepare("SELECT version FROM engine_schema WHERE singleton=1")
         .get() as { version: number }).version,
-    ).toBe(5);
+    ).toBe(6);
     expect(
       db
         .prepare(

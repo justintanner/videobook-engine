@@ -17,7 +17,11 @@ export type NotebookCellType =
   | "asset"
   | "image"
   | "video"
-  | "sequence";
+  | "sequence"
+  | "analysis"
+  | "split"
+  | "frame"
+  | "export";
 
 export type NotebookReferenceKind =
   | "artifact"
@@ -60,7 +64,10 @@ export interface NotebookCell {
   position: NotebookPosition;
   entityId?: string;
   prompt?: string;
+  provider?: string;
   model?: string;
+  operation?: string;
+  tool?: string;
   inputs?: Record<string, unknown>;
   outputArtifactId?: string;
   references?: NotebookCellReference[];
