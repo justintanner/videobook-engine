@@ -10,6 +10,34 @@ export const NOTEBOOK_CELL_TYPES = [
 
 export type NotebookCellType = (typeof NOTEBOOK_CELL_TYPES)[number];
 
+export function primitiveNotebookCellType(type: string): NotebookCellType {
+  if (type === "source") return "source";
+  if (type === "search" || type === "selects") return "selects";
+  if (type === "scene" || type === "sequence") return "scene";
+  if (
+    type === "label"
+    || type === "transcript"
+    || type === "note"
+    || type === "prompt"
+    || type === "character"
+    || type === "analysis"
+  ) {
+    return "note";
+  }
+  if (
+    type === "audio"
+    || type === "asset"
+    || type === "image"
+    || type === "video"
+    || type === "split"
+    || type === "frame"
+    || type === "export"
+  ) {
+    return "asset";
+  }
+  throw new Error(`Unsupported legacy notebook cell type: ${type}`);
+}
+
 export const CELLS_TABLE_COLUMNS = [
   "notebook_id",
   "cell_id",

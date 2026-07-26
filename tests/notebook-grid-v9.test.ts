@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 
 import { DatabaseSync } from "@dolthub/doltlite";
+import { v7 as uuidv7 } from "uuid";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
@@ -10,6 +11,7 @@ import {
   NOTEBOOK_CELL_TYPES,
   SCHEMA_VERSION,
   createEngine,
+  primitiveNotebookCellType,
   type NotebookCell,
 } from "../src/index.js";
 
@@ -69,6 +71,33 @@ describe("centered notebook grid schema v9", () => {
       "output_artifact_id",
     ]);
     expect(SCHEMA_VERSION).toBe(9);
+    expect([
+      "source",
+      "label",
+      "search",
+      "sequence",
+      "audio",
+      "analysis",
+      "split",
+      "frame",
+      "prompt",
+      "image",
+      "video",
+      "export",
+    ].map(primitiveNotebookCellType)).toEqual([
+      "source",
+      "note",
+      "selects",
+      "scene",
+      "asset",
+      "note",
+      "asset",
+      "asset",
+      "note",
+      "asset",
+      "asset",
+      "asset",
+    ]);
   });
 
   it("round-trips every cell type at arbitrary signed columns", async () => {
@@ -149,6 +178,42 @@ describe("centered notebook grid schema v9", () => {
       ).run(notebook.id)
     ).toThrow();
     database.close();
+  });
+
+  it("normalizes legacy schema-v9 cell values when reading", async () => {
+    const { root, engine } = await setup();
+    const notebook = value(await engine.notebooks.create("Legacy"));
+    engine.close();
+    const database = new DatabaseSync(
+      path.join(root, "data", "videobook.db"),
+    );
+    database.exec("PRAGMA ignore_check_constraints=ON");
+    database.prepare(
+      `INSERT INTO cells(
+        notebook_id, cell_id, type, title, grid_row, grid_column, inputs_json
+      ) VALUES (?, ?, 'video', 'Legacy video', 0, 0, '{}')`,
+    ).run(notebook.id, uuidv7());
+    database.close();
+
+    const reopened = createEngine({ rootDir: root });
+    await reopened.ready;
+    const migrated = value(reopened.notebooks.read(notebook.id));
+    expect(migrated.cells[0]?.type).toBe("asset");
+    value(await reopened.notebooks.write(migrated));
+    reopened.close();
+
+    const persisted = new DatabaseSync(
+      path.join(root, "data", "videobook.db"),
+      { readOnly: true },
+    );
+    expect(
+      (
+        persisted.prepare(
+          "SELECT type FROM cells WHERE notebook_id=?",
+        ).get(notebook.id) as { type: string }
+      ).type,
+    ).toBe("asset");
+    persisted.close();
   });
 
   it("rejects duplicate, negative-row, and fractional slots without horizontal edges", async () => {

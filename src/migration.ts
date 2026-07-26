@@ -27,7 +27,10 @@ import {
   MVP_LEGACY_SCHEMA_VERSION,
   MVP_SCHEMA_VERSION,
 } from "./mvp-contracts.js";
-import { SEMANTIC_TABLES } from "./schema.js";
+import {
+  primitiveNotebookCellType,
+  SEMANTIC_TABLES,
+} from "./schema.js";
 
 interface SchemaRow {
   version: number;
@@ -510,34 +513,6 @@ function copyLegacyCells(
       ordinal % 4,
     );
   }
-}
-
-function primitiveNotebookCellType(type: string): string {
-  if (type === "source") return "source";
-  if (type === "search" || type === "selects") return "selects";
-  if (type === "scene" || type === "sequence") return "scene";
-  if (
-    type === "label"
-    || type === "transcript"
-    || type === "note"
-    || type === "prompt"
-    || type === "character"
-    || type === "analysis"
-  ) {
-    return "note";
-  }
-  if (
-    type === "audio"
-    || type === "asset"
-    || type === "image"
-    || type === "video"
-    || type === "split"
-    || type === "frame"
-    || type === "export"
-  ) {
-    return "asset";
-  }
-  throw new Error(`Unsupported legacy notebook cell type: ${type}`);
 }
 
 function columns(database: DatabaseSync, table: string): string[] {

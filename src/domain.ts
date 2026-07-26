@@ -23,7 +23,10 @@ import {
   syncResultOf,
 } from "./context.js";
 import { assertUuidV7, newUuidV7 } from "./ids.js";
-import { NOTEBOOK_CELL_TYPES } from "./schema.js";
+import {
+  NOTEBOOK_CELL_TYPES,
+  primitiveNotebookCellType,
+} from "./schema.js";
 import { canonicalJson, parseJson } from "./store.js";
 import { EngineFault } from "./store.js";
 
@@ -889,7 +892,7 @@ function rowToCell(
     ?? (looksLikeGenerationTool(model) ? model : undefined);
   return {
     id: row.cell_id,
-    type: row.type,
+    type: primitiveNotebookCellType(row.type),
     title: row.title,
     slot: { row: row.grid_row, column: row.grid_column },
     ...(row.entity_id ? { entityId: row.entity_id } : {}),
