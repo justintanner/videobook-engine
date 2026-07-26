@@ -1,10 +1,11 @@
-export const SCHEMA_VERSION = 10;
+export const SCHEMA_VERSION = 11;
 
 export const NOTEBOOK_CELL_TYPES = [
   "audio",
   "image",
   "video",
-  "split",
+  "extract_audio",
+  "split_video",
   "prompt",
   "character",
   "analyze",
@@ -196,7 +197,8 @@ export const SEMANTIC_SCHEMA_SQL = `
     cell_id TEXT NOT NULL,
     type TEXT NOT NULL CHECK (
       type IN (
-        'audio','image','video','split','prompt','character',
+        'audio','image','video','extract_audio','split_video',
+        'prompt','character',
         'analyze','generate_video','generate_image','generate_audio',
         'concat','splice'
       )

@@ -33,23 +33,24 @@ function value<T>(
 }
 
 async function setup() {
-  const root = await mkdtemp(path.join(tmpdir(), "videobook-grid-v10-"));
+  const root = await mkdtemp(path.join(tmpdir(), "videobook-grid-v11-"));
   roots.push(root);
   const engine = createEngine({
     rootDir: root,
-    initialBookSlug: "grid-v10",
+    initialBookSlug: "grid-v11",
   });
   await engine.ready;
   return { root, engine };
 }
 
-describe("centered notebook grid schema v10", () => {
-  it("exports signed cell slots and the twelve explicit cell types", () => {
+describe("centered notebook grid schema v11", () => {
+  it("exports signed cell slots and the thirteen explicit cell types", () => {
     expect(NOTEBOOK_CELL_TYPES).toEqual([
       "audio",
       "image",
       "video",
-      "split",
+      "extract_audio",
+      "split_video",
       "prompt",
       "character",
       "analyze",
@@ -75,7 +76,7 @@ describe("centered notebook grid schema v10", () => {
       "inputs_json",
       "output_artifact_id",
     ]);
-    expect(SCHEMA_VERSION).toBe(10);
+    expect(SCHEMA_VERSION).toBe(11);
   });
 
   it("round-trips every cell type at arbitrary signed columns", async () => {
@@ -112,8 +113,8 @@ describe("centered notebook grid schema v10", () => {
       slot: { row: 0, column: 0 },
     });
     expect(reloaded.cells.find((cell) => cell.type === "analyze")?.slot).toEqual({
-      row: 42,
-      column: 66,
+      row: 49,
+      column: -77,
     });
     expect(reloaded.cells.find((cell) => cell.type === "analyze")).toMatchObject({
       provider: "kie",
@@ -136,7 +137,7 @@ describe("centered notebook grid schema v10", () => {
       .get(notebook.id) as Record<string, unknown>;
     expect(Object.keys(raw)).toHaveLength(14);
     expect(raw.grid_row).toBeGreaterThan(0);
-    expect(raw.grid_column).toBeGreaterThan(0);
+    expect(raw.grid_column).toBe(-77);
     expect(raw.provider).toBe("kie");
     database.close();
   });
@@ -152,13 +153,13 @@ describe("centered notebook grid schema v10", () => {
       database.prepare(
         `INSERT INTO cells(
           notebook_id, cell_id, type, title, grid_row, grid_column, inputs_json
-        ) VALUES (?, 'legacy-asset', 'asset', 'Legacy', 0, 0, '{}')`,
+        ) VALUES (?, 'removed-split', 'split', 'Removed', 0, 0, '{}')`,
       ).run(notebook.id)
     ).toThrow();
     database.close();
   });
 
-  it("resets schema-v9 notebook graphs while preserving shells and media", async () => {
+  it("resets schema-v10 notebook graphs while preserving shells and media", async () => {
     const { root, engine } = await setup();
     const notebook = value(await engine.notebooks.create("Legacy workflow"));
     const artifact = value(await engine.artifacts.create({
@@ -206,7 +207,7 @@ describe("centered notebook grid schema v10", () => {
       ) VALUES (?, 'run_notebook', 'queued', ?, 1)`,
     ).run(uuidv7(), JSON.stringify({ notebookId: notebook.id }));
     database
-      .prepare("UPDATE engine_schema SET version=9 WHERE singleton=1")
+      .prepare("UPDATE engine_schema SET version=10 WHERE singleton=1")
       .run();
     database.close();
 
@@ -234,7 +235,7 @@ describe("centered notebook grid schema v10", () => {
       (persisted.prepare(
         "SELECT version FROM engine_schema WHERE singleton=1",
       ).get() as { version: number }).version,
-    ).toBe(10);
+    ).toBe(11);
     for (const table of [
       "cells",
       "edges",
@@ -323,7 +324,7 @@ describe("centered notebook grid schema v10", () => {
 
     const removedType = {
       ...first,
-      type: "asset",
+      type: "split",
       slot: { row: 0, column: 1 },
     } as unknown as NotebookCell;
     const removed = await engine.notebooks.write({
@@ -333,7 +334,7 @@ describe("centered notebook grid schema v10", () => {
     });
     expect(removed).toMatchObject({
       ok: false,
-      error: { message: "Invalid cell type: asset" },
+      error: { message: "Invalid cell type: split" },
     });
     engine.close();
   });
@@ -378,17 +379,17 @@ describe("centered notebook grid schema v10", () => {
     engine.close();
   });
 
-  it("rejects pre-v9 engine roots", async () => {
+  it("rejects pre-v10 engine roots", async () => {
     const { root, engine } = await setup();
     engine.close();
     const database = new DatabaseSync(path.join(root, "data", "videobook.db"));
     database
-      .prepare("UPDATE engine_schema SET version=8 WHERE singleton=1")
+      .prepare("UPDATE engine_schema SET version=9 WHERE singleton=1")
       .run();
     database.close();
 
     expect(() => createEngine({ rootDir: root })).toThrow(
-      "Database schema 8 is not supported by engine schema 10",
+      "Database schema 9 is not supported by engine schema 11",
     );
   });
 });
