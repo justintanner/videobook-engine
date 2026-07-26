@@ -111,8 +111,8 @@ The current contracts do not meet the MVP because:
 - the application does not configure or consume similarity;
 - the timeline lacks source in/out, timeline start, duration, tracks,
   timebase, transforms, transitions, captions, and normalized edit decisions;
-- notebook cell types cannot represent audio, transcript, search, selects, or
-  sequence outputs;
+- notebook cells use source, note, selects, scene, and asset primitives with
+  operation and tool metadata defining behavior;
 - action history records workflows but there is no public deterministic edit
   plan/diff/commit contract.
 

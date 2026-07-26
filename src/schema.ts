@@ -1,25 +1,14 @@
 export const SCHEMA_VERSION = 9;
 
 export const NOTEBOOK_CELL_TYPES = [
-  "label",
   "source",
-  "audio",
-  "transcript",
   "note",
-  "search",
   "selects",
-  "prompt",
-  "character",
   "scene",
   "asset",
-  "image",
-  "video",
-  "sequence",
-  "analysis",
-  "split",
-  "frame",
-  "export",
 ] as const;
+
+export type NotebookCellType = (typeof NOTEBOOK_CELL_TYPES)[number];
 
 export const CELLS_TABLE_COLUMNS = [
   "notebook_id",
@@ -200,9 +189,7 @@ export const SEMANTIC_SCHEMA_SQL = `
     cell_id TEXT NOT NULL,
     type TEXT NOT NULL CHECK (
       type IN (
-        'label','source','audio','transcript','note','search','selects',
-        'prompt','character','scene','asset','image','video','sequence',
-        'analysis','split','frame','export'
+        'source','note','selects','scene','asset'
       )
     ),
     title TEXT NOT NULL,

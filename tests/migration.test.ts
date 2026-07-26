@@ -134,8 +134,10 @@ describe("schema-v4 copy-forward migration", () => {
     await engine.ready;
     expect(engine.book.get().bookId).toBe(source.bookId);
     expect(engine.notebooks.list()[0]?.id).toBe(source.notebookId);
-    expect(value(engine.notebooks.read(source.notebookId)).cells[0]?.id)
-      .toBe(source.cellId);
+    expect(value(engine.notebooks.read(source.notebookId)).cells[0]).toMatchObject({
+      id: source.cellId,
+      type: "note",
+    });
     const sequence = engine.sequences.getPrimary();
     expect(sequence).toMatchObject({ width: 1080, height: 1080 });
     expect(sequence.clips).toEqual([

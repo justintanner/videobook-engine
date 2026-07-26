@@ -10,6 +10,7 @@ import {
   NOTEBOOK_CELL_TYPES,
   SCHEMA_VERSION,
   createEngine,
+  type NotebookCell,
 } from "../src/index.js";
 
 const roots: string[] = [];
@@ -43,9 +44,14 @@ async function setup() {
 }
 
 describe("centered notebook grid schema v9", () => {
-  it("exports cell slots and the label cell type", () => {
-    expect(NOTEBOOK_CELL_TYPES).toHaveLength(18);
-    expect(NOTEBOOK_CELL_TYPES).toContain("label");
+  it("exports signed cell slots and the five primitive cell types", () => {
+    expect(NOTEBOOK_CELL_TYPES).toEqual([
+      "source",
+      "note",
+      "selects",
+      "scene",
+      "asset",
+    ]);
     expect(CELLS_TABLE_COLUMNS).toEqual([
       "notebook_id",
       "cell_id",
@@ -76,11 +82,11 @@ describe("centered notebook grid schema v9", () => {
           row: index === 0 ? 0 : index * 7,
           column: index === 0 ? 0 : index % 2 === 0 ? index * 11 : index * -11,
         },
-        prompt: type === "analysis" ? "Analyze scenes" : undefined,
-        provider: type === "analysis" ? "kie" : undefined,
-        model: type === "analysis" ? "gemini-3.5-flash" : undefined,
-        operation: type === "analysis" ? "analyze_source" : undefined,
-        tool: type === "analysis" ? "kie_gemini_analysis" : undefined,
+        prompt: type === "note" ? "Analyze scenes" : undefined,
+        provider: type === "note" ? "kie" : undefined,
+        model: type === "note" ? "gemini-3.5-flash" : undefined,
+        operation: type === "note" ? "analyze_source" : undefined,
+        tool: type === "note" ? "kie_gemini_analysis" : undefined,
         inputs: { ordinal: index },
       })
     );
@@ -94,15 +100,15 @@ describe("centered notebook grid schema v9", () => {
     expect(reloaded.cells.map((cell) => cell.type).sort()).toEqual(
       [...NOTEBOOK_CELL_TYPES].sort(),
     );
-    expect(reloaded.cells.find((cell) => cell.type === "label")).toMatchObject({
-      title: "label cell",
+    expect(reloaded.cells.find((cell) => cell.type === "source")).toMatchObject({
+      title: "source cell",
       slot: { row: 0, column: 0 },
     });
-    expect(reloaded.cells.find((cell) => cell.type === "source")?.slot).toEqual({
+    expect(reloaded.cells.find((cell) => cell.type === "note")?.slot).toEqual({
       row: 7,
       column: -11,
     });
-    expect(reloaded.cells.find((cell) => cell.type === "analysis")).toMatchObject({
+    expect(reloaded.cells.find((cell) => cell.type === "note")).toMatchObject({
       provider: "kie",
       model: "gemini-3.5-flash",
       operation: "analyze_source",
@@ -118,13 +124,30 @@ describe("centered notebook grid schema v9", () => {
     const raw = database
       .prepare(
         `SELECT ${CELLS_TABLE_COLUMNS.join(", ")}
-         FROM cells WHERE notebook_id=? AND type='analysis'`,
+         FROM cells WHERE notebook_id=? AND type='note'`,
       )
       .get(notebook.id) as Record<string, unknown>;
     expect(Object.keys(raw)).toHaveLength(14);
     expect(raw.grid_row).toBeGreaterThan(0);
-    expect(raw.grid_column).toBeGreaterThan(0);
+    expect(raw.grid_column).toBeLessThan(0);
     expect(raw.provider).toBe("kie");
+    database.close();
+  });
+
+  it("enforces primitive cell types in the semantic table", async () => {
+    const { root, engine } = await setup();
+    const notebook = value(await engine.notebooks.create("Constraint"));
+    engine.close();
+    const database = new DatabaseSync(
+      path.join(root, "data", "videobook.db"),
+    );
+    expect(() =>
+      database.prepare(
+        `INSERT INTO cells(
+          notebook_id, cell_id, type, title, grid_row, grid_column, inputs_json
+        ) VALUES (?, 'legacy-video', 'video', 'Legacy', 0, 0, '{}')`,
+      ).run(notebook.id)
+    ).toThrow();
     database.close();
   });
 
@@ -132,12 +155,12 @@ describe("centered notebook grid schema v9", () => {
     const { engine } = await setup();
     const notebook = value(await engine.notebooks.create("Validation"));
     const first = engine.notebooks.createCell({
-      type: "label",
+      type: "note",
       title: "First",
       slot: { row: 0, column: 0 },
     });
     const duplicate = engine.notebooks.createCell({
-      type: "video",
+      type: "asset",
       title: "Duplicate",
       slot: { row: 0, column: 0 },
     });
@@ -193,6 +216,21 @@ describe("centered notebook grid schema v9", () => {
       row: 12_345,
       column: 67_890,
     });
+
+    const removedType = {
+      ...first,
+      type: "video",
+      slot: { row: 0, column: 1 },
+    } as unknown as NotebookCell;
+    const removed = await engine.notebooks.write({
+      ...notebook,
+      cells: [removedType],
+      edges: [],
+    });
+    expect(removed).toMatchObject({
+      ok: false,
+      error: { message: "Invalid cell type: video" },
+    });
     engine.close();
   });
 
@@ -200,12 +238,12 @@ describe("centered notebook grid schema v9", () => {
     const { engine } = await setup();
     const notebook = value(await engine.notebooks.create("Swap"));
     const first = engine.notebooks.createCell({
-      type: "prompt",
+      type: "note",
       title: "First",
       slot: { row: 0, column: 0 },
     });
     const second = engine.notebooks.createCell({
-      type: "video",
+      type: "asset",
       title: "Second",
       slot: { row: 0, column: 1 },
     });

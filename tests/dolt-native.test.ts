@@ -501,7 +501,7 @@ describe("single-book Dolt engine", () => {
     );
     const notebook = value(await engine.notebooks.create("Graph"));
     const cell = engine.notebooks.createCell({
-      type: "image",
+      type: "asset",
       title: "Image",
       slot: { row: 0, column: 0 },
       entityId: entity.id,
@@ -572,7 +572,7 @@ describe("single-book Dolt engine", () => {
     const { engine } = await setup();
     const notebook = value(await engine.notebooks.create("IDs"));
     const generatedCell = engine.notebooks.createCell({
-      type: "prompt",
+      type: "note",
       title: "Prompt",
       slot: { row: 1, column: 2 },
     });

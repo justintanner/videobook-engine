@@ -23,6 +23,7 @@ import {
   syncResultOf,
 } from "./context.js";
 import { assertUuidV7, newUuidV7 } from "./ids.js";
+import { NOTEBOOK_CELL_TYPES } from "./schema.js";
 import { canonicalJson, parseJson } from "./store.js";
 import { EngineFault } from "./store.js";
 
@@ -59,26 +60,9 @@ interface NotebookCellRow {
   output_artifact_id: string | null;
 }
 
-const NOTEBOOK_CELL_TYPE_SET = new Set<NotebookCell["type"]>([
-  "label",
-  "source",
-  "audio",
-  "transcript",
-  "note",
-  "search",
-  "selects",
-  "prompt",
-  "character",
-  "scene",
-  "asset",
-  "image",
-  "video",
-  "sequence",
-  "analysis",
-  "split",
-  "frame",
-  "export",
-]);
+const NOTEBOOK_CELL_TYPE_SET = new Set<NotebookCell["type"]>(
+  NOTEBOOK_CELL_TYPES,
+);
 
 interface NotebookEdgeRow {
   edge_id: string;

@@ -279,7 +279,7 @@ describe("v5 semantic media model", () => {
     );
     const notebook = value(await engine.notebooks.create("Audio notebook"));
     const cell = engine.notebooks.createCell({
-      type: "search",
+      type: "selects",
       title: "Find the intro",
       slot: { row: 2, column: 3 },
       references: [

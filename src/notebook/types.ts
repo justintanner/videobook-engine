@@ -3,26 +3,9 @@ import type {
   SearchSignal,
 } from "../mvp-contracts.js";
 import type { SearchLocation } from "../mvp-time.js";
+import type { NotebookCellType } from "../schema.js";
 
-export type NotebookCellType =
-  | "label"
-  | "source"
-  | "audio"
-  | "transcript"
-  | "note"
-  | "search"
-  | "selects"
-  | "prompt"
-  | "character"
-  | "scene"
-  | "asset"
-  | "image"
-  | "video"
-  | "sequence"
-  | "analysis"
-  | "split"
-  | "frame"
-  | "export";
+export type { NotebookCellType } from "../schema.js";
 
 export type NotebookReferenceKind =
   | "artifact"
