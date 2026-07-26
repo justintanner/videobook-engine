@@ -239,9 +239,9 @@ describe("single-book Dolt engine", () => {
     suppliedAgain.close();
   });
 
-  it("creates the exact normalized v9 semantic and runtime schema", async () => {
+  it("creates the exact normalized v10 semantic and runtime schema", async () => {
     const { engine, dataDir } = await setup();
-    expect(SCHEMA_VERSION).toBe(9);
+    expect(SCHEMA_VERSION).toBe(10);
     engine.close();
 
     const db = new DatabaseSync(path.join(dataDir, "videobook.db"));
@@ -316,7 +316,7 @@ describe("single-book Dolt engine", () => {
       (db
         .prepare("SELECT version FROM engine_schema WHERE singleton=1")
         .get() as { version: number }).version,
-    ).toBe(9);
+    ).toBe(10);
     expect(
       db
         .prepare(
@@ -501,7 +501,7 @@ describe("single-book Dolt engine", () => {
     );
     const notebook = value(await engine.notebooks.create("Graph"));
     const cell = engine.notebooks.createCell({
-      type: "asset",
+      type: "image",
       title: "Image",
       slot: { row: 0, column: 0 },
       entityId: entity.id,
@@ -572,7 +572,7 @@ describe("single-book Dolt engine", () => {
     const { engine } = await setup();
     const notebook = value(await engine.notebooks.create("IDs"));
     const generatedCell = engine.notebooks.createCell({
-      type: "note",
+      type: "prompt",
       title: "Prompt",
       slot: { row: 1, column: 2 },
     });

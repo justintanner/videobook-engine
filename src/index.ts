@@ -125,7 +125,6 @@ export type { StoredObject } from "./cas.js";
 export {
   CELLS_TABLE_COLUMNS,
   NOTEBOOK_CELL_TYPES,
-  primitiveNotebookCellType,
   RUNTIME_TABLES,
   SCHEMA_VERSION,
   SEMANTIC_TABLES,

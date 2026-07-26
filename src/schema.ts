@@ -1,42 +1,21 @@
-export const SCHEMA_VERSION = 9;
+export const SCHEMA_VERSION = 10;
 
 export const NOTEBOOK_CELL_TYPES = [
-  "source",
-  "note",
-  "selects",
-  "scene",
-  "asset",
+  "audio",
+  "image",
+  "video",
+  "split",
+  "prompt",
+  "character",
+  "analyze",
+  "generate_video",
+  "generate_image",
+  "generate_audio",
+  "concat",
+  "splice",
 ] as const;
 
 export type NotebookCellType = (typeof NOTEBOOK_CELL_TYPES)[number];
-
-export function primitiveNotebookCellType(type: string): NotebookCellType {
-  if (type === "source") return "source";
-  if (type === "search" || type === "selects") return "selects";
-  if (type === "scene" || type === "sequence") return "scene";
-  if (
-    type === "label"
-    || type === "transcript"
-    || type === "note"
-    || type === "prompt"
-    || type === "character"
-    || type === "analysis"
-  ) {
-    return "note";
-  }
-  if (
-    type === "audio"
-    || type === "asset"
-    || type === "image"
-    || type === "video"
-    || type === "split"
-    || type === "frame"
-    || type === "export"
-  ) {
-    return "asset";
-  }
-  throw new Error(`Unsupported legacy notebook cell type: ${type}`);
-}
 
 export const CELLS_TABLE_COLUMNS = [
   "notebook_id",
@@ -217,7 +196,9 @@ export const SEMANTIC_SCHEMA_SQL = `
     cell_id TEXT NOT NULL,
     type TEXT NOT NULL CHECK (
       type IN (
-        'source','note','selects','scene','asset'
+        'audio','image','video','split','prompt','character',
+        'analyze','generate_video','generate_image','generate_audio',
+        'concat','splice'
       )
     ),
     title TEXT NOT NULL,

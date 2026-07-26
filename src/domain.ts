@@ -25,7 +25,6 @@ import {
 import { assertUuidV7, newUuidV7 } from "./ids.js";
 import {
   NOTEBOOK_CELL_TYPES,
-  primitiveNotebookCellType,
 } from "./schema.js";
 import { canonicalJson, parseJson } from "./store.js";
 import { EngineFault } from "./store.js";
@@ -49,7 +48,7 @@ interface NotebookRow {
 
 interface NotebookCellRow {
   cell_id: string;
-  type: NotebookCell["type"];
+  type: string;
   title: string;
   grid_row: number;
   grid_column: number;
@@ -892,7 +891,7 @@ function rowToCell(
     ?? (looksLikeGenerationTool(model) ? model : undefined);
   return {
     id: row.cell_id,
-    type: primitiveNotebookCellType(row.type),
+    type: notebookCellType(row.type),
     title: row.title,
     slot: { row: row.grid_row, column: row.grid_column },
     ...(row.entity_id ? { entityId: row.entity_id } : {}),
@@ -908,6 +907,13 @@ function rowToCell(
     references: references.map(rowToCellReference),
     pinnedResults: pinnedResults.map(rowToPinnedSearchResult),
   };
+}
+
+function notebookCellType(type: string): NotebookCell["type"] {
+  if (!NOTEBOOK_CELL_TYPE_SET.has(type as NotebookCell["type"])) {
+    throw new Error(`Invalid cell type: ${type}`);
+  }
+  return type as NotebookCell["type"];
 }
 
 function normalizeCellForWrite(cell: NotebookCell): NotebookCell {

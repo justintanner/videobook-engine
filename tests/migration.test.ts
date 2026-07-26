@@ -105,7 +105,7 @@ describe("schema-v4 copy-forward migration", () => {
     const dryRun = value(dryRunV4Migration(source.root));
     expect(dryRun).toMatchObject({
       sourceSchemaVersion: 4,
-      destinationSchemaVersion: 9,
+      destinationSchemaVersion: 10,
       sourceBookId: source.bookId,
       artifactCount: 1,
       notebookCount: 1,
@@ -134,9 +134,11 @@ describe("schema-v4 copy-forward migration", () => {
     await engine.ready;
     expect(engine.book.get().bookId).toBe(source.bookId);
     expect(engine.notebooks.list()[0]?.id).toBe(source.notebookId);
-    expect(value(engine.notebooks.read(source.notebookId)).cells[0]).toMatchObject({
-      id: source.cellId,
-      type: "note",
+    expect(value(engine.notebooks.read(source.notebookId))).toMatchObject({
+      id: source.notebookId,
+      cells: [],
+      edges: [],
+      properties: {},
     });
     const sequence = engine.sequences.getPrimary();
     expect(sequence).toMatchObject({ width: 1080, height: 1080 });

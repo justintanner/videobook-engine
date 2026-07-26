@@ -27,10 +27,7 @@ import {
   MVP_LEGACY_SCHEMA_VERSION,
   MVP_SCHEMA_VERSION,
 } from "./mvp-contracts.js";
-import {
-  primitiveNotebookCellType,
-  SEMANTIC_TABLES,
-} from "./schema.js";
+import { SEMANTIC_TABLES } from "./schema.js";
 
 interface SchemaRow {
   version: number;
@@ -66,9 +63,6 @@ const COPY_TABLES = [
   "artifact_metadata",
   "entities",
   "notebooks",
-  "cells",
-  "edges",
-  "runs",
   "timeline",
   "timeline_slots",
   "timeline_audio",
@@ -234,8 +228,6 @@ export async function migrateV4(
     for (const table of COPY_TABLES) {
       if (table === "notebooks") {
         copyLegacyNotebooks(sourceDatabase, destinationDatabase);
-      } else if (table === "cells") {
-        copyLegacyCells(sourceDatabase, destinationDatabase);
       } else {
         copyTable(sourceDatabase, destinationDatabase, table);
       }
@@ -472,45 +464,8 @@ function copyLegacyNotebooks(
     insert.run(
       row.notebook_id,
       row.name,
-      row.properties_json,
+      "{}",
       row.created_at,
-    );
-  }
-}
-
-function copyLegacyCells(
-  source: DatabaseSync,
-  destination: DatabaseSync,
-): void {
-  const sourceColumns = columns(source, "cells");
-  const destinationColumns = new Set(columns(destination, "cells"));
-  const shared = sourceColumns.filter((column) =>
-    destinationColumns.has(column)
-  );
-  const rows = source
-    .prepare(
-      `SELECT ${shared.join(", ")} FROM cells
-       ORDER BY notebook_id, cell_id`,
-    )
-    .all() as unknown as SqlRow[];
-  const insert = destination.prepare(
-    `INSERT INTO cells(
-      ${shared.join(", ")}, grid_row, grid_column
-    ) VALUES (${[...shared, "grid_row", "grid_column"].map(() => "?").join(", ")})`,
-  );
-  const ordinals = new Map<string, number>();
-  for (const row of rows) {
-    const notebookId = String(row.notebook_id);
-    const ordinal = ordinals.get(notebookId) ?? 0;
-    ordinals.set(notebookId, ordinal + 1);
-    insert.run(
-      ...shared.map((column) =>
-        column === "type"
-          ? primitiveNotebookCellType(String(row[column]))
-          : row[column] ?? null
-      ),
-      Math.floor(ordinal / 4),
-      ordinal % 4,
     );
   }
 }
