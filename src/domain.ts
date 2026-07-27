@@ -608,9 +608,14 @@ function synchronizeNotebookChildren(
        FROM cells WHERE notebook_id=?`,
     )
     .get(notebook.id) as unknown as { max_row: number };
+  const finalMaxRow = notebook.cells.reduce(
+    (maxRow, cell) => Math.max(maxRow, cell.slot.row),
+    -1,
+  );
+  const evacuationOffset = Math.max(existingMaxRow.max_row, finalMaxRow) + 1;
   context.store.db
     .prepare("UPDATE cells SET grid_row=grid_row+? WHERE notebook_id=?")
-    .run(existingMaxRow.max_row + 1, notebook.id);
+    .run(evacuationOffset, notebook.id);
 
   const upsertCell = context.store.db.prepare(
     `INSERT INTO cells(

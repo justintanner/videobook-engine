@@ -501,6 +501,59 @@ describe("centered notebook grid schema v12", () => {
     engine.close();
   });
 
+  it("persists downward moves beyond the temporary evacuation band atomically", async () => {
+    const { engine } = await setup();
+    const notebook = value(await engine.notebooks.create("Downward move"));
+    const first = engine.notebooks.createCell({
+      type: "prompt",
+      slug: "prompt-first",
+      slot: { row: 0, column: 0 },
+    });
+    const second = engine.notebooks.createCell({
+      type: "image",
+      slug: "img-second",
+      slot: { row: 1, column: 0 },
+    });
+    value(await engine.notebooks.write({
+      ...notebook,
+      cells: [first, second],
+      edges: [],
+    }));
+
+    const moved = value(engine.notebooks.read(notebook.id));
+    value(await engine.notebooks.write({
+      ...moved,
+      cells: moved.cells.map((cell) => ({
+        ...cell,
+        slot: {
+          row: cell.id === first.id ? 3 : 4,
+          column: 0,
+        },
+      })),
+    }));
+    expect(value(engine.notebooks.read(notebook.id)).cells).toMatchObject([
+      { id: first.id, slot: { row: 3, column: 0 } },
+      { id: second.id, slot: { row: 4, column: 0 } },
+    ]);
+
+    const duplicate = await engine.notebooks.write({
+      ...value(engine.notebooks.read(notebook.id)),
+      cells: [
+        { ...first, slot: { row: 5, column: 0 } },
+        { ...second, slot: { row: 5, column: 0 } },
+      ],
+    });
+    expect(duplicate).toMatchObject({
+      ok: false,
+      error: { message: "Duplicate cell slot: 5:0" },
+    });
+    expect(value(engine.notebooks.read(notebook.id)).cells).toMatchObject([
+      { id: first.id, slot: { row: 3, column: 0 } },
+      { id: second.id, slot: { row: 4, column: 0 } },
+    ]);
+    engine.close();
+  });
+
   it("rejects engine roots older than schema v11", async () => {
     const { root, engine } = await setup();
     engine.close();
