@@ -284,8 +284,8 @@ export class DoltStore {
             + `${SCHEMA_VERSION}`,
         });
       }
-      if (row.version === 10 && SCHEMA_VERSION === 11) {
-        this.upgradeNotebookSchema10To11();
+      if (row.version === 11 && SCHEMA_VERSION === 12) {
+        this.upgradeNotebookSchema11To12();
       } else if (row.version !== SCHEMA_VERSION) {
         this.db.close();
         throw new EngineFault({
@@ -326,7 +326,7 @@ export class DoltStore {
     this.recoverOutbox();
   }
 
-  private upgradeNotebookSchema10To11(): void {
+  private upgradeNotebookSchema11To12(): void {
     const now = Date.now();
     this.assertRuntimeUnstaged();
     this.db.exec("PRAGMA foreign_keys = OFF");
@@ -357,7 +357,7 @@ export class DoltStore {
           ) {
             abort.run(
               canonicalJson({
-                message: "Notebook graph reset during schema 11 upgrade",
+                message: "Notebook graph reset during schema 12 upgrade",
               }),
               now,
               job.id,
@@ -396,7 +396,7 @@ export class DoltStore {
       "pinned_search_results",
     ]);
     this.assertOnlyVersionedStaged();
-    this.sqlCommit("Upgrade notebook schema to version 11");
+    this.sqlCommit("Upgrade notebook schema to version 12");
   }
 
   private configureRemote(remote: CatalogBackupConfig): void {

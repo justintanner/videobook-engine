@@ -24,6 +24,7 @@ import {
 } from "./context.js";
 import { assertUuidV7, newUuidV7 } from "./ids.js";
 import {
+  isValidNotebookCellSlug,
   NOTEBOOK_CELL_TYPES,
 } from "./schema.js";
 import { canonicalJson, parseJson } from "./store.js";
@@ -49,10 +50,10 @@ interface NotebookRow {
 interface NotebookCellRow {
   cell_id: string;
   type: string;
-  title: string;
+  slug: string;
   grid_row: number;
   grid_column: number;
-  entity_id: string | null;
+  output_entity_id: string | null;
   prompt: string | null;
   provider: string | null;
   model: string | null;
@@ -247,7 +248,7 @@ async function deleteEntity(
     const cells = context.store.db
       .prepare(
         `SELECT notebook_id, cell_id FROM cells
-         WHERE entity_id=? ORDER BY notebook_id, cell_id`,
+         WHERE output_entity_id=? ORDER BY notebook_id, cell_id`,
       )
       .all(entityId) as unknown as Array<{
       notebook_id: string;
@@ -259,7 +260,7 @@ async function deleteEntity(
         message: `Entity is still referenced: ${entityId}`,
         details: {
           references: cells.map((cell) => ({
-            kind: "cell.entity",
+            kind: "cell.output_entity",
             id: `${cell.notebook_id}/${cell.cell_id}`,
           })),
         },
@@ -473,7 +474,7 @@ function notebookFromRows(
 ): NotebookDocument {
   const cells = context.store.db
     .prepare(
-      `SELECT cell_id, type, title, grid_row, grid_column, entity_id,
+      `SELECT cell_id, type, slug, grid_row, grid_column, output_entity_id,
               prompt, provider, model, operation, tool,
               inputs_json, output_artifact_id
        FROM cells WHERE notebook_id=?
@@ -525,6 +526,7 @@ function validateNotebook(
   notebook: NotebookDocument,
 ): void {
   const cellIds = new Set<string>();
+  const cellSlugs = new Set<string>();
   const occupiedSlots = new Set<string>();
   for (const cell of notebook.cells) {
     assertUuidV7(cell.id, "Cell ID");
@@ -533,6 +535,12 @@ function validateNotebook(
     if (!NOTEBOOK_CELL_TYPE_SET.has(cell.type)) {
       throw new Error(`Invalid cell type: ${cell.type}`);
     }
+    const slug = requiredText(cell.slug, "Cell slug");
+    if (slug !== cell.slug || !isValidNotebookCellSlug(cell.type, slug)) {
+      throw new Error(`Invalid ${cell.type} cell slug: ${cell.slug}`);
+    }
+    if (cellSlugs.has(slug)) throw new Error(`Duplicate cell slug: ${slug}`);
+    cellSlugs.add(slug);
     if (
       !Number.isInteger(cell.slot.row)
       || cell.slot.row < 0
@@ -545,9 +553,9 @@ function validateNotebook(
     const slot = `${cell.slot.row}:${cell.slot.column}`;
     if (occupiedSlots.has(slot)) throw new Error(`Duplicate cell slot: ${slot}`);
     occupiedSlots.add(slot);
-    if (cell.entityId) {
-      assertUuidV7(cell.entityId, "Cell entity ID");
-      requiredEntity(context, cell.entityId);
+    if (cell.outputEntityId) {
+      assertUuidV7(cell.outputEntityId, "Cell output entity ID");
+      requiredEntity(context, cell.outputEntityId);
     }
     if (cell.outputArtifactId) {
       assertUuidV7(cell.outputArtifactId, "Cell output artifact ID");
@@ -557,6 +565,7 @@ function validateNotebook(
     validatePinnedResults(context, cell);
   }
   const edgeIds = new Set<string>();
+  const occupiedInputs = new Set<string>();
   for (const edge of notebook.edges) {
     assertUuidV7(edge.id, "Edge ID");
     if (edgeIds.has(edge.id)) throw new Error(`Duplicate edge ID: ${edge.id}`);
@@ -564,7 +573,14 @@ function validateNotebook(
     if (!cellIds.has(edge.source) || !cellIds.has(edge.target)) {
       throw new Error(`Edge ${edge.id} must reference cells in the notebook`);
     }
-    requiredText(edge.targetInput, "Edge targetInput");
+    const targetInput = requiredText(edge.targetInput, "Edge targetInput");
+    const inputKey = `${edge.target}:${targetInput}`;
+    if (occupiedInputs.has(inputKey)) {
+      throw new Error(
+        `Duplicate target input: ${edge.target} ${targetInput}`,
+      );
+    }
+    occupiedInputs.add(inputKey);
   }
 }
 
@@ -598,16 +614,16 @@ function synchronizeNotebookChildren(
 
   const upsertCell = context.store.db.prepare(
     `INSERT INTO cells(
-      notebook_id, cell_id, type, title, grid_row, grid_column,
-      entity_id, prompt, provider, model, operation, tool,
+      notebook_id, cell_id, type, slug, grid_row, grid_column,
+      output_entity_id, prompt, provider, model, operation, tool,
       inputs_json, output_artifact_id
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     ON CONFLICT(notebook_id, cell_id) DO UPDATE SET
       type=excluded.type,
-      title=excluded.title,
+      slug=excluded.slug,
       grid_row=excluded.grid_row,
       grid_column=excluded.grid_column,
-      entity_id=excluded.entity_id,
+      output_entity_id=excluded.output_entity_id,
       prompt=excluded.prompt,
       provider=excluded.provider,
       model=excluded.model,
@@ -622,10 +638,10 @@ function synchronizeNotebookChildren(
       notebook.id,
       normalized.id,
       normalized.type,
-      requiredText(normalized.title, "Cell title"),
+      requiredText(normalized.slug, "Cell slug"),
       normalized.slot.row,
       normalized.slot.column,
-      normalized.entityId ?? null,
+      normalized.outputEntityId ?? null,
       normalized.prompt ?? null,
       normalized.provider ?? null,
       normalized.model ?? null,
@@ -892,9 +908,11 @@ function rowToCell(
   return {
     id: row.cell_id,
     type: notebookCellType(row.type),
-    title: row.title,
+    slug: row.slug,
     slot: { row: row.grid_row, column: row.grid_column },
-    ...(row.entity_id ? { entityId: row.entity_id } : {}),
+    ...(row.output_entity_id
+      ? { outputEntityId: row.output_entity_id }
+      : {}),
     ...(row.prompt ? { prompt: row.prompt } : {}),
     ...(provider ? { provider } : {}),
     ...(model ? { model } : {}),

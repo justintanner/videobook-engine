@@ -44,9 +44,9 @@ export interface NotebookGridSlot {
 export interface NotebookCell {
   id: string;
   type: NotebookCellType;
-  title: string;
+  slug: string;
   slot: NotebookGridSlot;
-  entityId?: string;
+  outputEntityId?: string;
   prompt?: string;
   provider?: string;
   model?: string;

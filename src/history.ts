@@ -108,12 +108,15 @@ interface NotebookCellSnapshotRow {
   notebook_id: string;
   cell_id: string;
   type: string;
-  title: string;
+  slug: string;
   grid_row: number;
   grid_column: number;
-  entity_id: string | null;
+  output_entity_id: string | null;
   prompt: string | null;
+  provider: string | null;
   model: string | null;
+  operation: string | null;
+  tool: string | null;
   inputs_json: string;
   output_artifact_id: string | null;
 }
@@ -610,8 +613,9 @@ async function restoreBook(
     const notebookCells = rowsForNotebookIds<NotebookCellSnapshotRow>(
       context,
       "cells",
-      `notebook_id, cell_id, type, title, grid_row, grid_column,
-       entity_id, prompt, model, inputs_json, output_artifact_id`,
+      `notebook_id, cell_id, type, slug, grid_row, grid_column,
+       output_entity_id, prompt, provider, model, operation, tool,
+       inputs_json, output_artifact_id`,
       revision.hash,
       notebookIds,
     );
@@ -1406,21 +1410,25 @@ function insertNotebookChildren(
 ): void {
   const insertCell = context.store.db.prepare(
     `INSERT INTO cells(
-      notebook_id, cell_id, type, title, grid_row, grid_column,
-      entity_id, prompt, model, inputs_json, output_artifact_id
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      notebook_id, cell_id, type, slug, grid_row, grid_column,
+      output_entity_id, prompt, provider, model, operation, tool,
+      inputs_json, output_artifact_id
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   for (const row of cells) {
     insertCell.run(
       row.notebook_id,
       row.cell_id,
       row.type,
-      row.title,
+      row.slug,
       row.grid_row,
       row.grid_column,
-      row.entity_id,
+      row.output_entity_id,
       row.prompt,
+      row.provider,
       row.model,
+      row.operation,
+      row.tool,
       row.inputs_json,
       row.output_artifact_id,
     );

@@ -124,6 +124,8 @@ export { JobQueue, QueueRunner } from "./job-queue.js";
 export type { StoredObject } from "./cas.js";
 export {
   CELLS_TABLE_COLUMNS,
+  isValidNotebookCellSlug,
+  NOTEBOOK_CELL_SLUG_PREFIXES,
   NOTEBOOK_CELL_TYPES,
   RUNTIME_TABLES,
   SCHEMA_VERSION,

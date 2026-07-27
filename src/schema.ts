@@ -1,4 +1,4 @@
-export const SCHEMA_VERSION = 11;
+export const SCHEMA_VERSION = 12;
 
 export const NOTEBOOK_CELL_TYPES = [
   "audio",
@@ -18,14 +18,40 @@ export const NOTEBOOK_CELL_TYPES = [
 
 export type NotebookCellType = (typeof NOTEBOOK_CELL_TYPES)[number];
 
+export const NOTEBOOK_CELL_SLUG_PREFIXES = {
+  audio: "aud",
+  image: "img",
+  video: "vid",
+  extract_audio: "extract-audio",
+  split_video: "split-video",
+  prompt: "prompt",
+  character: "char",
+  analyze: "analyze",
+  generate_video: "generate-video",
+  generate_image: "generate-image",
+  generate_audio: "generate-audio",
+  concat: "concat",
+  splice: "splice",
+} as const satisfies Record<NotebookCellType, string>;
+
+const NOTEBOOK_CELL_SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)+$/;
+
+export function isValidNotebookCellSlug(
+  type: NotebookCellType,
+  slug: string,
+): boolean {
+  return NOTEBOOK_CELL_SLUG_PATTERN.test(slug)
+    && slug.startsWith(`${NOTEBOOK_CELL_SLUG_PREFIXES[type]}-`);
+}
+
 export const CELLS_TABLE_COLUMNS = [
   "notebook_id",
   "cell_id",
   "type",
-  "title",
+  "slug",
   "grid_row",
   "grid_column",
-  "entity_id",
+  "output_entity_id",
   "prompt",
   "provider",
   "model",
@@ -203,10 +229,17 @@ export const SEMANTIC_SCHEMA_SQL = `
         'concat','splice'
       )
     ),
-    title TEXT NOT NULL,
+    slug TEXT NOT NULL CHECK (
+      slug GLOB '[a-z0-9]*'
+      AND slug NOT GLOB '*[^a-z0-9-]*'
+      AND slug NOT GLOB '*--*'
+      AND slug NOT LIKE '-%'
+      AND slug NOT LIKE '%-'
+      AND instr(slug, '-') > 0
+    ),
     grid_row INTEGER NOT NULL CHECK (grid_row >= 0),
     grid_column INTEGER NOT NULL,
-    entity_id TEXT
+    output_entity_id TEXT
       REFERENCES entities(entity_id) ON DELETE RESTRICT,
     prompt TEXT,
     provider TEXT,
@@ -217,7 +250,23 @@ export const SEMANTIC_SCHEMA_SQL = `
     output_artifact_id TEXT
       REFERENCES artifacts(artifact_id) ON DELETE RESTRICT,
     PRIMARY KEY(notebook_id, cell_id),
-    UNIQUE(notebook_id, grid_row, grid_column)
+    UNIQUE(notebook_id, slug),
+    UNIQUE(notebook_id, grid_row, grid_column),
+    CHECK (
+      (type = 'audio' AND slug LIKE 'aud-%')
+      OR (type = 'image' AND slug LIKE 'img-%')
+      OR (type = 'video' AND slug LIKE 'vid-%')
+      OR (type = 'extract_audio' AND slug LIKE 'extract-audio-%')
+      OR (type = 'split_video' AND slug LIKE 'split-video-%')
+      OR (type = 'prompt' AND slug LIKE 'prompt-%')
+      OR (type = 'character' AND slug LIKE 'char-%')
+      OR (type = 'analyze' AND slug LIKE 'analyze-%')
+      OR (type = 'generate_video' AND slug LIKE 'generate-video-%')
+      OR (type = 'generate_image' AND slug LIKE 'generate-image-%')
+      OR (type = 'generate_audio' AND slug LIKE 'generate-audio-%')
+      OR (type = 'concat' AND slug LIKE 'concat-%')
+      OR (type = 'splice' AND slug LIKE 'splice-%')
+    )
   );
   CREATE TABLE IF NOT EXISTS edges (
     notebook_id TEXT NOT NULL
@@ -230,7 +279,8 @@ export const SEMANTIC_SCHEMA_SQL = `
     FOREIGN KEY(notebook_id, source_cell_id)
       REFERENCES cells(notebook_id, cell_id) ON DELETE CASCADE,
     FOREIGN KEY(notebook_id, target_cell_id)
-      REFERENCES cells(notebook_id, cell_id) ON DELETE CASCADE
+      REFERENCES cells(notebook_id, cell_id) ON DELETE CASCADE,
+    UNIQUE(notebook_id, target_cell_id, target_input)
   );
   CREATE TABLE IF NOT EXISTS runs (
     run_id TEXT PRIMARY KEY,
@@ -680,8 +730,8 @@ export const SEMANTIC_SCHEMA_SQL = `
     ON entities(type, created_at, entity_id);
   CREATE INDEX IF NOT EXISTS notebooks_created
     ON notebooks(created_at, notebook_id);
-  CREATE INDEX IF NOT EXISTS cells_entity
-    ON cells(entity_id);
+  CREATE INDEX IF NOT EXISTS cells_output_entity
+    ON cells(output_entity_id);
   CREATE INDEX IF NOT EXISTS cells_output_artifact
     ON cells(output_artifact_id);
   CREATE INDEX IF NOT EXISTS edges_source

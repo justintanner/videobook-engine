@@ -8,10 +8,12 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   CELLS_TABLE_COLUMNS,
+  NOTEBOOK_CELL_SLUG_PREFIXES,
   NOTEBOOK_CELL_TYPES,
   SCHEMA_VERSION,
   createEngine,
 } from "../src/index.js";
+import type { NotebookCell } from "../src/index.js";
 
 const roots: string[] = [];
 
@@ -33,17 +35,17 @@ function value<T>(
 }
 
 async function setup() {
-  const root = await mkdtemp(path.join(tmpdir(), "videobook-grid-v11-"));
+  const root = await mkdtemp(path.join(tmpdir(), "videobook-grid-v12-"));
   roots.push(root);
   const engine = createEngine({
     rootDir: root,
-    initialBookSlug: "grid-v11",
+    initialBookSlug: "grid-v12",
   });
   await engine.ready;
   return { root, engine };
 }
 
-describe("centered notebook grid schema v11", () => {
+describe("centered notebook grid schema v12", () => {
   it("exports signed cell slots and the thirteen explicit cell types", () => {
     expect(NOTEBOOK_CELL_TYPES).toEqual([
       "audio",
@@ -64,10 +66,10 @@ describe("centered notebook grid schema v11", () => {
       "notebook_id",
       "cell_id",
       "type",
-      "title",
+      "slug",
       "grid_row",
       "grid_column",
-      "entity_id",
+      "output_entity_id",
       "prompt",
       "provider",
       "model",
@@ -76,7 +78,7 @@ describe("centered notebook grid schema v11", () => {
       "inputs_json",
       "output_artifact_id",
     ]);
-    expect(SCHEMA_VERSION).toBe(11);
+    expect(SCHEMA_VERSION).toBe(12);
   });
 
   it("round-trips every cell type at arbitrary signed columns", async () => {
@@ -85,7 +87,7 @@ describe("centered notebook grid schema v11", () => {
     const cells = NOTEBOOK_CELL_TYPES.map((type, index) =>
       engine.notebooks.createCell({
         type,
-        title: `${type} cell`,
+        slug: `${NOTEBOOK_CELL_SLUG_PREFIXES[type]}-cell`,
         slot: {
           row: index === 0 ? 0 : index * 7,
           column: index === 0 ? 0 : index % 2 === 0 ? index * 11 : index * -11,
@@ -109,7 +111,7 @@ describe("centered notebook grid schema v11", () => {
       [...NOTEBOOK_CELL_TYPES].sort(),
     );
     expect(reloaded.cells.find((cell) => cell.type === "audio")).toMatchObject({
-      title: "audio cell",
+      slug: "aud-cell",
       slot: { row: 0, column: 0 },
     });
     expect(reloaded.cells.find((cell) => cell.type === "analyze")?.slot).toEqual({
@@ -152,29 +154,141 @@ describe("centered notebook grid schema v11", () => {
     expect(() =>
       database.prepare(
         `INSERT INTO cells(
-          notebook_id, cell_id, type, title, grid_row, grid_column, inputs_json
-        ) VALUES (?, 'removed-split', 'split', 'Removed', 0, 0, '{}')`,
+          notebook_id, cell_id, type, slug, grid_row, grid_column, inputs_json
+        ) VALUES (?, 'removed-split', 'split', 'split-removed', 0, 0, '{}')`,
       ).run(notebook.id)
     ).toThrow();
     database.close();
   });
 
-  it("resets schema-v10 notebook graphs while preserving shells and media", async () => {
+  it("enforces typed notebook-unique slugs and output entity references", async () => {
+    const { root, engine } = await setup();
+    const notebook = value(await engine.notebooks.create("Slugs"));
+    const entity = value(await engine.entities.create("character", "Boat"));
+    const image = engine.notebooks.createCell({
+      type: "image",
+      slug: "img-boat",
+      slot: { row: 0, column: 0 },
+      outputEntityId: entity.id,
+    });
+    value(await engine.notebooks.write({
+      ...notebook,
+      cells: [image],
+      edges: [],
+    }));
+    expect(value(engine.notebooks.read(notebook.id)).cells[0]).toMatchObject({
+      slug: "img-boat",
+      outputEntityId: entity.id,
+    });
+
+    const duplicate = await engine.notebooks.write({
+      ...notebook,
+      cells: [
+        image,
+        {
+          ...image,
+          id: uuidv7(),
+          slot: { row: 0, column: 1 },
+        },
+      ],
+      edges: [],
+    });
+    expect(duplicate).toMatchObject({
+      ok: false,
+      error: { message: "Duplicate cell slug: img-boat" },
+    });
+
+    const invalid = await engine.notebooks.write({
+      ...notebook,
+      cells: [{ ...image, slug: "video-boat" }],
+      edges: [],
+    });
+    expect(invalid).toMatchObject({
+      ok: false,
+      error: { message: "Invalid image cell slug: video-boat" },
+    });
+
+    engine.close();
+    const database = new DatabaseSync(
+      path.join(root, "data", "videobook.db"),
+      { readOnly: true },
+    );
+    expect(
+      database.prepare(
+        "SELECT slug, output_entity_id FROM cells WHERE cell_id=?",
+      ).get(image.id),
+    ).toMatchObject({
+      slug: "img-boat",
+      output_entity_id: entity.id,
+    });
+    database.close();
+  });
+
+  it("allows only one edge per named target input", async () => {
+    const { engine } = await setup();
+    const notebook = value(await engine.notebooks.create("Inputs"));
+    const first = engine.notebooks.createCell({
+      type: "video",
+      slug: "vid-first",
+      slot: { row: 0, column: 0 },
+    });
+    const second = engine.notebooks.createCell({
+      type: "video",
+      slug: "vid-second",
+      slot: { row: 0, column: 1 },
+    });
+    const target = engine.notebooks.createCell({
+      type: "analyze",
+      slug: "analyze-target",
+      slot: { row: 1, column: 0 },
+    });
+    const duplicateInput = await engine.notebooks.write({
+      ...notebook,
+      cells: [first, second, target],
+      edges: [
+        engine.notebooks.createEdge({
+          source: first.id,
+          target: target.id,
+          targetInput: "source",
+        }),
+        engine.notebooks.createEdge({
+          source: second.id,
+          target: target.id,
+          targetInput: "source",
+        }),
+      ],
+    });
+    expect(duplicateInput).toMatchObject({
+      ok: false,
+      error: {
+        message: `Duplicate target input: ${target.id} source`,
+      },
+    });
+    engine.close();
+  });
+
+  it("resets schema-v11 notebook graphs while preserving shells and media", async () => {
     const { root, engine } = await setup();
     const notebook = value(await engine.notebooks.create("Legacy workflow"));
     const artifact = value(await engine.artifacts.create({
       kind: "video",
       slug: "vid-original",
     }));
+    const entity = value(await engine.entities.create("character", "Original boat"));
+    value(await engine.files.write(
+      artifact.artifactId,
+      "original.mp4",
+      Buffer.from("preserved-media"),
+    ));
     const video = engine.notebooks.createCell({
       type: "video",
-      title: "Original",
+      slug: "vid-original",
       slot: { row: 0, column: 0 },
       outputArtifactId: artifact.artifactId,
     });
     const analyze = engine.notebooks.createCell({
       type: "analyze",
-      title: "Analysis",
+      slug: "analyze-original",
       slot: { row: 1, column: 0 },
     });
     value(await engine.notebooks.write({
@@ -207,7 +321,7 @@ describe("centered notebook grid schema v11", () => {
       ) VALUES (?, 'run_notebook', 'queued', ?, 1)`,
     ).run(uuidv7(), JSON.stringify({ notebookId: notebook.id }));
     database
-      .prepare("UPDATE engine_schema SET version=10 WHERE singleton=1")
+      .prepare("UPDATE engine_schema SET version=11 WHERE singleton=1")
       .run();
     database.close();
 
@@ -225,6 +339,14 @@ describe("centered notebook grid schema v11", () => {
       artifactId: artifact.artifactId,
       slug: "vid-original",
     });
+    expect(value(reopened.entities.read(entity.id))).toMatchObject({
+      id: entity.id,
+      name: "Original boat",
+    });
+    expect(
+      value(await reopened.files.read(artifact.artifactId, "original.mp4"))
+        .toString(),
+    ).toBe("preserved-media");
     reopened.close();
 
     const persisted = new DatabaseSync(
@@ -235,7 +357,7 @@ describe("centered notebook grid schema v11", () => {
       (persisted.prepare(
         "SELECT version FROM engine_schema WHERE singleton=1",
       ).get() as { version: number }).version,
-    ).toBe(11);
+    ).toBe(12);
     for (const table of [
       "cells",
       "edges",
@@ -261,12 +383,12 @@ describe("centered notebook grid schema v11", () => {
     const notebook = value(await engine.notebooks.create("Validation"));
     const first = engine.notebooks.createCell({
       type: "prompt",
-      title: "First",
+      slug: "prompt-first",
       slot: { row: 0, column: 0 },
     });
     const duplicate = engine.notebooks.createCell({
       type: "image",
-      title: "Duplicate",
+      slug: "img-duplicate",
       slot: { row: 0, column: 0 },
     });
     const duplicated = await engine.notebooks.write({
@@ -344,12 +466,12 @@ describe("centered notebook grid schema v11", () => {
     const notebook = value(await engine.notebooks.create("Swap"));
     const first = engine.notebooks.createCell({
       type: "prompt",
-      title: "First",
+      slug: "prompt-first",
       slot: { row: 0, column: 0 },
     });
     const second = engine.notebooks.createCell({
       type: "image",
-      title: "Second",
+      slug: "img-second",
       slot: { row: 0, column: 1 },
     });
     value(await engine.notebooks.write({
@@ -379,17 +501,17 @@ describe("centered notebook grid schema v11", () => {
     engine.close();
   });
 
-  it("rejects pre-v10 engine roots", async () => {
+  it("rejects engine roots older than schema v11", async () => {
     const { root, engine } = await setup();
     engine.close();
     const database = new DatabaseSync(path.join(root, "data", "videobook.db"));
     database
-      .prepare("UPDATE engine_schema SET version=9 WHERE singleton=1")
+      .prepare("UPDATE engine_schema SET version=10 WHERE singleton=1")
       .run();
     database.close();
 
     expect(() => createEngine({ rootDir: root })).toThrow(
-      "Database schema 9 is not supported by engine schema 11",
+      "Database schema 10 is not supported by engine schema 12",
     );
   });
 });

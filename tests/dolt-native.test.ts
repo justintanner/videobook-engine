@@ -70,10 +70,10 @@ const MERGE_SCHEMA_SQL = `
     notebook_id TEXT NOT NULL,
     cell_id TEXT NOT NULL,
     type TEXT NOT NULL,
-    title TEXT NOT NULL,
+    slug TEXT NOT NULL,
     grid_row INTEGER NOT NULL,
     grid_column INTEGER NOT NULL,
-    entity_id TEXT,
+    output_entity_id TEXT,
     prompt TEXT,
     model TEXT,
     inputs_json TEXT NOT NULL,
@@ -239,9 +239,9 @@ describe("single-book Dolt engine", () => {
     suppliedAgain.close();
   });
 
-  it("creates the exact normalized v11 semantic and runtime schema", async () => {
+  it("creates the exact normalized v12 semantic and runtime schema", async () => {
     const { engine, dataDir } = await setup();
-    expect(SCHEMA_VERSION).toBe(11);
+    expect(SCHEMA_VERSION).toBe(12);
     engine.close();
 
     const db = new DatabaseSync(path.join(dataDir, "videobook.db"));
@@ -290,10 +290,10 @@ describe("single-book Dolt engine", () => {
       "notebook_id",
       "cell_id",
       "type",
-      "title",
+      "slug",
       "grid_row",
       "grid_column",
-      "entity_id",
+      "output_entity_id",
       "prompt",
       "provider",
       "model",
@@ -316,7 +316,7 @@ describe("single-book Dolt engine", () => {
       (db
         .prepare("SELECT version FROM engine_schema WHERE singleton=1")
         .get() as { version: number }).version,
-    ).toBe(11);
+    ).toBe(12);
     expect(
       db
         .prepare(
@@ -502,9 +502,9 @@ describe("single-book Dolt engine", () => {
     const notebook = value(await engine.notebooks.create("Graph"));
     const cell = engine.notebooks.createCell({
       type: "image",
-      title: "Image",
+      slug: "img-image",
       slot: { row: 0, column: 0 },
-      entityId: entity.id,
+      outputEntityId: entity.id,
       outputArtifactId: artifact.artifactId,
     });
     value(
@@ -573,7 +573,7 @@ describe("single-book Dolt engine", () => {
     const notebook = value(await engine.notebooks.create("IDs"));
     const generatedCell = engine.notebooks.createCell({
       type: "prompt",
-      title: "Prompt",
+      slug: "prompt-generated",
       slot: { row: 1, column: 2 },
     });
     expect(generatedCell.id[14]).toBe("7");
@@ -655,9 +655,9 @@ describe("single-book Dolt engine", () => {
       .run(leftEntity);
     db.prepare(
       `INSERT INTO cells(
-        notebook_id, cell_id, type, title, grid_row, grid_column,
-        entity_id, inputs_json
-      ) VALUES (?, ?, 'scene', 'Left cell', 0, 0, ?, '{}')`,
+        notebook_id, cell_id, type, slug, grid_row, grid_column,
+        output_entity_id, inputs_json
+      ) VALUES (?, ?, 'scene', 'scene-left', 0, 0, ?, '{}')`,
     ).run(notebookId, leftCell, leftEntity);
     db.prepare(
       `INSERT INTO prompt_entries(
@@ -688,9 +688,9 @@ describe("single-book Dolt engine", () => {
       .run(rightEntity);
     db.prepare(
       `INSERT INTO cells(
-        notebook_id, cell_id, type, title, grid_row, grid_column,
-        entity_id, inputs_json
-      ) VALUES (?, ?, 'scene', 'Right cell', 1, 1, ?, '{}')`,
+        notebook_id, cell_id, type, slug, grid_row, grid_column,
+        output_entity_id, inputs_json
+      ) VALUES (?, ?, 'scene', 'scene-right', 1, 1, ?, '{}')`,
     ).run(notebookId, rightCell, rightEntity);
     db.prepare(
       `INSERT INTO prompt_entries(
@@ -743,7 +743,7 @@ describe("single-book Dolt engine", () => {
 
     db.doltBranch("same-cell-left");
     db.doltCheckout("same-cell-left");
-    db.prepare("UPDATE cells SET title='Left edit' WHERE cell_id=?")
+    db.prepare("UPDATE cells SET slug='scene-left-edit' WHERE cell_id=?")
       .run(leftCell);
     commitTables(db, ["cells"], "left edit");
     db.doltCheckout("main");
@@ -751,7 +751,7 @@ describe("single-book Dolt engine", () => {
     db.doltBranch("same-cell-right");
     db.doltCheckout("same-cell-right");
     db.doltReset("--hard");
-    db.prepare("UPDATE cells SET title='Right edit' WHERE cell_id=?")
+    db.prepare("UPDATE cells SET slug='scene-right-edit' WHERE cell_id=?")
       .run(leftCell);
     commitTables(db, ["cells"], "right edit");
     db.doltCheckout("main");
