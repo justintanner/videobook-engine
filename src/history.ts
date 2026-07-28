@@ -71,6 +71,19 @@ interface ActionEventRow {
   created_at: number;
 }
 
+interface ActionEventRevision {
+  hash: string;
+  files: string[];
+  fileChanges: RevisionFileChange[];
+}
+
+interface OperationCommitRow {
+  to_operation_id: string;
+  to_artifact_id: string | null;
+  to_commit: string;
+  from_commit: string;
+}
+
 interface HistoricalArtifactRow extends ArtifactRow {}
 
 interface MetadataSnapshotRow {
@@ -1125,9 +1138,7 @@ function actionFromRow(
        ORDER BY created_at, event_id`,
     )
     .all(row.action_id) as unknown as ActionEventRow[];
-  const revisionsByOperation = new Map(
-    allRevisions(context).map((revision) => [revision.operationId, revision]),
-  );
+  const revisionsByOperation = actionEventRevisions(context, events);
   return {
     id: row.action_id,
     operation: row.operation,
@@ -1168,6 +1179,35 @@ function actionFromRow(
       } satisfies HistoryActionEvent;
     }),
   };
+}
+
+function actionEventRevisions(
+  context: EngineContext,
+  events: ActionEventRow[],
+): Map<string, ActionEventRevision> {
+  const result = new Map<string, ActionEventRevision>();
+  const findCommit = context.store.db.prepare(
+    `SELECT to_operation_id, to_artifact_id, to_commit, from_commit
+     FROM dolt_diff_operations
+     WHERE to_operation_id=? AND diff_type='added'
+     LIMIT 1`,
+  );
+  for (const operationId of new Set(events.map((event) => event.operation_id))) {
+    const row = findCommit.get(operationId) as unknown as
+      | OperationCommitRow
+      | undefined;
+    if (!row) continue;
+    const fileChanges = revisionFileChanges(
+      context.store.diff(row.from_commit, row.to_commit, "artifact_files"),
+      row.to_artifact_id,
+    );
+    result.set(operationId, {
+      hash: row.to_commit,
+      files: fileChanges.map((change) => change.file),
+      fileChanges,
+    });
+  }
+  return result;
 }
 
 function replaceActionLinks(

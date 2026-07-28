@@ -13,8 +13,10 @@ import { DatabaseSync } from "@dolthub/doltlite";
 import { v7 as uuidv7 } from "uuid";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { EngineContext } from "../src/context.js";
 import { createEngine, type Engine } from "../src/engine.js";
 import type { ContentStore } from "../src/engine-types.js";
+import { createHistoryApi } from "../src/history.js";
 import {
   RUNTIME_TABLES,
   SCHEMA_VERSION,
@@ -986,6 +988,38 @@ describe("single-book Dolt engine", () => {
     });
     expect(conflict).toMatchObject({ ok: false, error: { code: "ACTION_CONFLICT" } });
     engine.close();
+  });
+
+  it("resolves action event revisions without scanning unrelated commits", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "videobook-action-history-"));
+    roots.push(root);
+    const context = new EngineContext({
+      dataDir: path.join(root, "data"),
+      workspaceDir: path.join(root, "workspace"),
+      initialBookSlug: "action-history",
+    });
+    const history = createHistoryApi(context);
+    value(await history.recordOperation("seed-one"));
+    value(await history.recordOperation("seed-two"));
+    const originalDiff = context.store.diff.bind(context.store);
+    let diffCalls = 0;
+    context.store.diff = (from, to, table) => {
+      diffCalls += 1;
+      return originalDiff(from, to, table);
+    };
+
+    const recorded = value(
+      await history.recordAction({
+        operation: "bounded_action_history",
+        details: { source: "test" },
+      }),
+    );
+    expect(recorded.action.events).toHaveLength(1);
+    expect(recorded.action.events[0]?.revision).toBe(recorded.revision.hash);
+    expect(value(history.action(recorded.action.id)).events).toHaveLength(1);
+    expect(value(history.actions()).actions).toHaveLength(1);
+    expect(diffCalls).toBe(3);
+    context.store.close();
   });
 
   it("copies terminal jobs into versioned audit rows", async () => {
