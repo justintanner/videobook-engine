@@ -1,4 +1,4 @@
-export const SCHEMA_VERSION = 12;
+export const SCHEMA_VERSION = 13;
 
 export const NOTEBOOK_CELL_TYPES = [
   "audio",
@@ -9,6 +9,7 @@ export const NOTEBOOK_CELL_TYPES = [
   "prompt",
   "character",
   "analyze",
+  "analysis",
   "generate_video",
   "generate_image",
   "generate_audio",
@@ -27,6 +28,7 @@ export const NOTEBOOK_CELL_SLUG_PREFIXES = {
   prompt: "prompt",
   character: "char",
   analyze: "analyze",
+  analysis: "analysis",
   generate_video: "generate-video",
   generate_image: "generate-image",
   generate_audio: "generate-audio",
@@ -225,7 +227,7 @@ export const SEMANTIC_SCHEMA_SQL = `
       type IN (
         'audio','image','video','extract_audio','split_video',
         'prompt','character',
-        'analyze','generate_video','generate_image','generate_audio',
+        'analyze','analysis','generate_video','generate_image','generate_audio',
         'concat','splice'
       )
     ),
@@ -261,6 +263,7 @@ export const SEMANTIC_SCHEMA_SQL = `
       OR (type = 'prompt' AND slug LIKE 'prompt-%')
       OR (type = 'character' AND slug LIKE 'char-%')
       OR (type = 'analyze' AND slug LIKE 'analyze-%')
+      OR (type = 'analysis' AND slug LIKE 'analysis-%')
       OR (type = 'generate_video' AND slug LIKE 'generate-video-%')
       OR (type = 'generate_image' AND slug LIKE 'generate-image-%')
       OR (type = 'generate_audio' AND slug LIKE 'generate-audio-%')

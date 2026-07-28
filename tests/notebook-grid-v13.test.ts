@@ -35,18 +35,18 @@ function value<T>(
 }
 
 async function setup() {
-  const root = await mkdtemp(path.join(tmpdir(), "videobook-grid-v12-"));
+  const root = await mkdtemp(path.join(tmpdir(), "videobook-grid-v13-"));
   roots.push(root);
   const engine = createEngine({
     rootDir: root,
-    initialBookSlug: "grid-v12",
+    initialBookSlug: "grid-v13",
   });
   await engine.ready;
   return { root, engine };
 }
 
-describe("centered notebook grid schema v12", () => {
-  it("exports signed cell slots and the thirteen explicit cell types", () => {
+describe("centered notebook grid schema v13", () => {
+  it("exports signed cell slots and the fourteen explicit cell types", () => {
     expect(NOTEBOOK_CELL_TYPES).toEqual([
       "audio",
       "image",
@@ -56,6 +56,7 @@ describe("centered notebook grid schema v12", () => {
       "prompt",
       "character",
       "analyze",
+      "analysis",
       "generate_video",
       "generate_image",
       "generate_audio",
@@ -78,7 +79,7 @@ describe("centered notebook grid schema v12", () => {
       "inputs_json",
       "output_artifact_id",
     ]);
-    expect(SCHEMA_VERSION).toBe(12);
+    expect(SCHEMA_VERSION).toBe(13);
   });
 
   it("round-trips every cell type at arbitrary signed columns", async () => {
@@ -267,115 +268,19 @@ describe("centered notebook grid schema v12", () => {
     engine.close();
   });
 
-  it("resets schema-v11 notebook graphs while preserving shells and media", async () => {
+  it.each([11, 12])("rejects schema-v%s catalogs without migration", async (version) => {
     const { root, engine } = await setup();
-    const notebook = value(await engine.notebooks.create("Legacy workflow"));
-    const artifact = value(await engine.artifacts.create({
-      kind: "video",
-      slug: "vid-original",
-    }));
-    const entity = value(await engine.entities.create("character", "Original boat"));
-    value(await engine.files.write(
-      artifact.artifactId,
-      "original.mp4",
-      Buffer.from("preserved-media"),
-    ));
-    const video = engine.notebooks.createCell({
-      type: "video",
-      slug: "vid-original",
-      slot: { row: 0, column: 0 },
-      outputArtifactId: artifact.artifactId,
-    });
-    const analyze = engine.notebooks.createCell({
-      type: "analyze",
-      slug: "analyze-original",
-      slot: { row: 1, column: 0 },
-    });
-    value(await engine.notebooks.write({
-      ...notebook,
-      properties: {
-        generationPlan: { cells: [analyze.id] },
-        execution: { [analyze.id]: { status: "running" } },
-      },
-      cells: [video, analyze],
-      edges: [{
-        id: uuidv7(),
-        source: video.id,
-        target: analyze.id,
-        targetInput: "source",
-      }],
-    }));
     engine.close();
     const database = new DatabaseSync(
       path.join(root, "data", "videobook.db"),
     );
-    database.prepare(
-      `INSERT INTO runs(
-        run_id, notebook_id, status, started_at, completed_at,
-        cell_order_json, outputs_json
-      ) VALUES (?, ?, 'completed', 1, 2, '[]', '{}')`,
-    ).run(uuidv7(), notebook.id);
-    database.prepare(
-      `INSERT INTO runtime_jobs(
-        operation_id, type, state, payload_json, enqueued_at
-      ) VALUES (?, 'run_notebook', 'queued', ?, 1)`,
-    ).run(uuidv7(), JSON.stringify({ notebookId: notebook.id }));
     database
-      .prepare("UPDATE engine_schema SET version=11 WHERE singleton=1")
-      .run();
+      .prepare("UPDATE engine_schema SET version=? WHERE singleton=1")
+      .run(version);
     database.close();
 
-    const reopened = createEngine({ rootDir: root });
-    await reopened.ready;
-    const migrated = value(reopened.notebooks.read(notebook.id));
-    expect(migrated).toMatchObject({
-      id: notebook.id,
-      name: "Legacy workflow",
-      properties: {},
-      cells: [],
-      edges: [],
-    });
-    expect(value(reopened.artifacts.get(artifact.artifactId))).toMatchObject({
-      artifactId: artifact.artifactId,
-      slug: "vid-original",
-    });
-    expect(value(reopened.entities.read(entity.id))).toMatchObject({
-      id: entity.id,
-      name: "Original boat",
-    });
-    expect(
-      value(await reopened.files.read(artifact.artifactId, "original.mp4"))
-        .toString(),
-    ).toBe("preserved-media");
-    reopened.close();
-
-    const persisted = new DatabaseSync(
-      path.join(root, "data", "videobook.db"),
-      { readOnly: true },
-    );
-    expect(
-      (persisted.prepare(
-        "SELECT version FROM engine_schema WHERE singleton=1",
-      ).get() as { version: number }).version,
-    ).toBe(12);
-    for (const table of [
-      "cells",
-      "edges",
-      "runs",
-      "cell_references",
-      "pinned_search_results",
-    ]) {
-      expect(
-        (persisted.prepare(`SELECT COUNT(*) AS count FROM ${table}`)
-          .get() as { count: number }).count,
-      ).toBe(0);
-    }
-    expect(
-      (persisted.prepare(
-        "SELECT state FROM runtime_jobs WHERE type='run_notebook'",
-      ).get() as { state: string }).state,
-    ).toBe("aborted");
-    persisted.close();
+    expect(() => createEngine({ rootDir: root }))
+      .toThrow(`Database schema ${version} is not supported by engine schema 13`);
   });
 
   it("rejects duplicate, negative-row, and fractional slots without horizontal edges", async () => {
@@ -554,7 +459,7 @@ describe("centered notebook grid schema v12", () => {
     engine.close();
   });
 
-  it("rejects engine roots older than schema v11", async () => {
+  it("rejects unsupported engine schemas", async () => {
     const { root, engine } = await setup();
     engine.close();
     const database = new DatabaseSync(path.join(root, "data", "videobook.db"));
@@ -564,7 +469,7 @@ describe("centered notebook grid schema v12", () => {
     database.close();
 
     expect(() => createEngine({ rootDir: root })).toThrow(
-      "Database schema 10 is not supported by engine schema 12",
+      "Database schema 10 is not supported by engine schema 13",
     );
   });
 });

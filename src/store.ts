@@ -42,12 +42,6 @@ interface RemoteRow {
   url: string;
 }
 
-interface RuntimeJobMigrationRow {
-  id: number;
-  type: string;
-  payload_json: string;
-}
-
 export class EngineFault extends Error {
   readonly error: EngineError;
 
@@ -284,9 +278,7 @@ export class DoltStore {
             + `${SCHEMA_VERSION}`,
         });
       }
-      if (row.version === 11 && SCHEMA_VERSION === 12) {
-        this.upgradeNotebookSchema11To12();
-      } else if (row.version !== SCHEMA_VERSION) {
+      if (row.version !== SCHEMA_VERSION) {
         this.db.close();
         throw new EngineFault({
           code: "SCHEMA_INCOMPATIBLE",
@@ -324,79 +316,6 @@ export class DoltStore {
       .run(String(SCHEMA_VERSION), Date.now());
     this.assertRuntimeUnstaged();
     this.recoverOutbox();
-  }
-
-  private upgradeNotebookSchema11To12(): void {
-    const now = Date.now();
-    this.assertRuntimeUnstaged();
-    this.db.exec("PRAGMA foreign_keys = OFF");
-    this.begin();
-    try {
-      if (this.tableExists("runtime_jobs")) {
-        const jobs = this.db
-          .prepare(
-            `SELECT id, type, payload_json
-             FROM runtime_jobs
-             WHERE state IN ('queued','running','completing')`,
-          )
-          .all() as unknown as RuntimeJobMigrationRow[];
-        const abort = this.db.prepare(
-          `UPDATE runtime_jobs
-           SET state='aborted', error_json=?, finished_at=?,
-               lease_expires_at=NULL, pid=NULL, fence=fence+1
-           WHERE id=?`,
-        );
-        for (const job of jobs) {
-          const payload = parseJson<Record<string, unknown>>(
-            job.payload_json,
-            {},
-          );
-          if (
-            job.type === "run_notebook"
-            || typeof payload.notebookId === "string"
-          ) {
-            abort.run(
-              canonicalJson({
-                message: "Notebook graph reset during schema 12 upgrade",
-              }),
-              now,
-              job.id,
-            );
-          }
-        }
-      }
-      this.db
-        .prepare("UPDATE notebooks SET properties_json='{}'")
-        .run();
-      this.db.exec(`
-        DROP TABLE pinned_search_results;
-        DROP TABLE cell_references;
-        DROP TABLE edges;
-        DROP TABLE runs;
-        DROP TABLE cells;
-      `);
-      this.db.exec(SEMANTIC_SCHEMA_SQL);
-      this.db
-        .prepare("UPDATE engine_schema SET version=? WHERE singleton=1")
-        .run(SCHEMA_VERSION);
-      this.commitSql();
-    } catch (error) {
-      this.rollback();
-      throw error;
-    } finally {
-      this.db.exec("PRAGMA foreign_keys = ON");
-    }
-    this.stageTables([
-      "engine_schema",
-      "notebooks",
-      "cells",
-      "edges",
-      "runs",
-      "cell_references",
-      "pinned_search_results",
-    ]);
-    this.assertOnlyVersionedStaged();
-    this.sqlCommit("Upgrade notebook schema to version 12");
   }
 
   private configureRemote(remote: CatalogBackupConfig): void {
