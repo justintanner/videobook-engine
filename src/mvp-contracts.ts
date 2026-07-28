@@ -572,6 +572,38 @@ export type SearchReference =
   | { kind: "video"; range: SourceRange }
   | { kind: "audio"; range: SourceRange };
 
+export interface PreparedSearchFingerprint {
+  kind: string;
+  value: string;
+}
+
+export interface PreparedSearchVideoSample {
+  offsetMs: number;
+  vector: number[];
+}
+
+export type PreparedSearchReference =
+  | {
+      kind: "image";
+      embeddingSpace: string;
+      vector: number[];
+      fingerprints?: PreparedSearchFingerprint[];
+    }
+  | {
+      kind: "video";
+      embeddingSpace: string;
+      samples: PreparedSearchVideoSample[];
+    };
+
+export interface PreparedSearchRange {
+  startMs: number;
+  durationMs?: number;
+}
+
+export interface PreparedSearchOptions {
+  range?: PreparedSearchRange;
+}
+
 export interface SearchQuery {
   text?: string;
   reference?: SearchReference;

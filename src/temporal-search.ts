@@ -7,6 +7,9 @@ import type {
   IndexCoverage,
   IndexManifest,
   IndexPhase,
+  PreparedSearchFingerprint,
+  PreparedSearchOptions,
+  PreparedSearchReference,
   SearchCoverage,
   SearchHit,
   SearchModality,
@@ -157,6 +160,12 @@ export function createTemporalSearchApi(context: EngineContext) {
       query: SearchQuery,
     ): Promise<Result<SearchPage, EngineError>> =>
       queryTemporalIndex(context, providers, query),
+    queryPrepared: (
+      query: SearchQuery,
+      reference: PreparedSearchReference,
+      options: PreparedSearchOptions = {},
+    ): Promise<Result<SearchPage, EngineError>> =>
+      queryTemporalIndex(context, providers, query, { reference, options }),
     invalidate: (
       artifact: string,
       objectHash?: string,
@@ -735,9 +744,14 @@ async function queryTemporalIndex(
   context: EngineContext,
   providers: Map<string, TemporalSearchProvider>,
   query: SearchQuery,
+  prepared?: {
+    reference: PreparedSearchReference;
+    options: PreparedSearchOptions;
+  },
 ): Promise<Result<SearchPage, EngineError>> {
   return resultOf(async () => {
-    validateQuery(query);
+    validateQuery(query, prepared?.reference);
+    if (prepared) validatePreparedReference(prepared.reference, prepared.options);
     const active = activeGenerations(context);
     const generationKey = hashJson(
       active.map((item) => [item.embedding_space, item.generation]),
@@ -766,6 +780,15 @@ async function queryTemporalIndex(
     }
     if (query.reference) {
       addReferenceSignals(context, candidates, query.reference, active);
+    }
+    if (prepared) {
+      addPreparedReferenceSignals(
+        context,
+        candidates,
+        prepared.reference,
+        prepared.options,
+        active,
+      );
     }
     const ranked = [...candidates.values()]
       .filter(
@@ -1111,6 +1134,10 @@ interface OrderedEmbedding {
   vector: Float32Array;
 }
 
+interface VectorEmbedding {
+  vector: Float32Array;
+}
+
 function addOrderedVideoSignals(
   context: EngineContext,
   candidates: Map<string, Candidate>,
@@ -1133,6 +1160,59 @@ function addOrderedVideoSignals(
   );
   if (query.length === 0) return;
   const sample = evenlySample(query, Math.min(query.length, 16));
+  addOrderedVideoVectorSignals(context, candidates, sample, generation);
+}
+
+function addPreparedReferenceSignals(
+  context: EngineContext,
+  candidates: Map<string, Candidate>,
+  reference: PreparedSearchReference,
+  options: PreparedSearchOptions,
+  active: GenerationRow[],
+): void {
+  for (const generation of active) {
+    if (generation.embedding_space !== reference.embeddingSpace) continue;
+    const manifest = requiredManifest(context, generation.manifest_id);
+    if (reference.kind === "image") {
+      const queryVector = preparedVector(reference.vector, manifest.dimensions);
+      rankVectorRows(
+        context,
+        candidates,
+        generation,
+        queryVector,
+        "visual",
+        "Prepared image reference similarity",
+      );
+      addPreparedFingerprintSignals(
+        context,
+        candidates,
+        reference.fingerprints ?? [],
+        generation,
+      );
+      continue;
+    }
+    const samples = preparedVideoSamples(reference, options);
+    for (const sample of samples) {
+      preparedVector(sample.vector, manifest.dimensions);
+    }
+    addOrderedVideoVectorSignals(
+      context,
+      candidates,
+      samples.map((sample) => ({
+        vector: Float32Array.from(sample.vector),
+      })),
+      generation,
+    );
+  }
+}
+
+function addOrderedVideoVectorSignals(
+  context: EngineContext,
+  candidates: Map<string, Candidate>,
+  sample: VectorEmbedding[],
+  generation: GenerationRow,
+): void {
+  if (sample.length === 0) return;
   const all = orderedEmbeddings(context, generation, () => true);
   const byStream = new Map<string, OrderedEmbedding[]>();
   for (const item of all) {
@@ -1240,8 +1320,8 @@ function orderedEmbeddings(
 }
 
 function transitionCoherence(
-  query: OrderedEmbedding[],
-  candidate: OrderedEmbedding[],
+  query: VectorEmbedding[],
+  candidate: VectorEmbedding[],
 ): number {
   if (query.length < 2) return 1;
   let score = 0;
@@ -1420,6 +1500,20 @@ function addFingerprintSignals(
        ORDER BY kind, value`,
     )
     .all(...segmentIds) as unknown as Array<{ kind: string; value: string }>;
+  addPreparedFingerprintSignals(
+    context,
+    candidates,
+    fingerprints,
+    generation,
+  );
+}
+
+function addPreparedFingerprintSignals(
+  context: EngineContext,
+  candidates: Map<string, Candidate>,
+  fingerprints: PreparedSearchFingerprint[],
+  generation: GenerationRow,
+): void {
   for (const fingerprint of fingerprints) {
     const rows = context.store.db
       .prepare(
@@ -1747,11 +1841,20 @@ function assertArtifactObject(
   }
 }
 
-function validateQuery(query: SearchQuery): void {
-  if (!query.text && !query.reference) {
+function validateQuery(
+  query: SearchQuery,
+  prepared?: PreparedSearchReference,
+): void {
+  if (!query.text && !query.reference && !prepared) {
     throw new EngineFault({
       code: "INVALID_INPUT",
       message: "Search requires text, reference media, or both",
+    });
+  }
+  if (query.reference && prepared) {
+    throw new EngineFault({
+      code: "INVALID_INPUT",
+      message: "Search cannot combine artifact and prepared references",
     });
   }
   if (query.text !== undefined) requiredText(query.text, "Search text");
@@ -1759,6 +1862,115 @@ function validateQuery(query: SearchQuery): void {
   if (query.minScore !== undefined && !Number.isFinite(query.minScore)) {
     throw new Error("Search minScore must be finite");
   }
+}
+
+function validatePreparedReference(
+  reference: PreparedSearchReference,
+  options: PreparedSearchOptions,
+): void {
+  requiredText(reference.embeddingSpace, "Prepared reference embedding space");
+  if (reference.kind === "image") {
+    preparedVector(reference.vector);
+    if (options.range) {
+      throw new EngineFault({
+        code: "INVALID_INPUT",
+        message: "Image references do not accept a time range",
+      });
+    }
+    for (const fingerprint of reference.fingerprints ?? []) {
+      requiredText(fingerprint.kind, "Prepared fingerprint kind");
+      requiredText(fingerprint.value, "Prepared fingerprint value");
+    }
+    return;
+  }
+  if (reference.samples.length === 0 || reference.samples.length > 16) {
+    throw new EngineFault({
+      code: "INVALID_INPUT",
+      message: "Prepared video references require between 1 and 16 samples",
+    });
+  }
+  let previousOffset = -1;
+  for (const sample of reference.samples) {
+    if (!Number.isFinite(sample.offsetMs) || sample.offsetMs < 0) {
+      throw new EngineFault({
+        code: "INVALID_INPUT",
+        message: "Prepared video sample offsets must be finite and non-negative",
+      });
+    }
+    if (sample.offsetMs <= previousOffset) {
+      throw new EngineFault({
+        code: "INVALID_INPUT",
+        message: "Prepared video sample offsets must be strictly increasing",
+      });
+    }
+    previousOffset = sample.offsetMs;
+    preparedVector(sample.vector);
+  }
+  const range = options.range;
+  if (range) {
+    if (!Number.isFinite(range.startMs) || range.startMs < 0) {
+      throw new EngineFault({
+        code: "INVALID_RANGE",
+        message: "Prepared video range start must be finite and non-negative",
+      });
+    }
+    if (
+      range.durationMs !== undefined
+      && (!Number.isFinite(range.durationMs) || range.durationMs <= 0)
+    ) {
+      throw new EngineFault({
+        code: "INVALID_RANGE",
+        message: "Prepared video range duration must be finite and positive",
+      });
+    }
+  }
+  preparedVideoSamples(reference, options);
+}
+
+function preparedVideoSamples(
+  reference: Extract<PreparedSearchReference, { kind: "video" }>,
+  options: PreparedSearchOptions,
+) {
+  const range = options.range;
+  const endMs = range?.durationMs === undefined
+    ? Number.POSITIVE_INFINITY
+    : range.startMs + range.durationMs;
+  const samples = range
+    ? reference.samples.filter(
+        (sample) =>
+          sample.offsetMs >= range.startMs && sample.offsetMs <= endMs,
+      )
+    : reference.samples;
+  if (samples.length === 0) {
+    throw new EngineFault({
+      code: "INVALID_RANGE",
+      message: "Prepared video range does not contain a sampled frame",
+    });
+  }
+  return samples;
+}
+
+function preparedVector(
+  vector: number[],
+  dimensions?: number,
+): Float32Array {
+  if (
+    !Array.isArray(vector)
+    || vector.length === 0
+    || vector.some((value) => !Number.isFinite(value))
+  ) {
+    throw new EngineFault({
+      code: "INVALID_INPUT",
+      message: "Prepared reference vectors must contain finite values",
+    });
+  }
+  if (dimensions !== undefined && vector.length !== dimensions) {
+    throw new EngineFault({
+      code: "MANIFEST_INCOMPATIBLE",
+      message: "Prepared reference vector dimensions do not match the index",
+    });
+  }
+  return Float32Array.from(vector);
 }
 
 function aggregateCoverageState(

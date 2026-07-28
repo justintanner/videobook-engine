@@ -362,6 +362,37 @@ describe("progressive temporal multimodal search", () => {
         expect.objectContaining({ kind: "near" }),
       ]),
     });
+    const preparedReverseImage = value(
+      await engine.temporalSearch.queryPrepared(
+        { artifactKinds: ["video"] },
+        {
+          kind: "image",
+          embeddingSpace: manifest.embeddingSpace,
+          vector: [1, 0, 0],
+          fingerprints: [{ kind: "perceptual", value: "van-near" }],
+        },
+      ),
+    );
+    expect(preparedReverseImage.hits[0]).toMatchObject({
+      artifactId: van.artifact.artifactId,
+      signals: expect.arrayContaining([
+        expect.objectContaining({ kind: "near" }),
+        expect.objectContaining({ kind: "visual" }),
+      ]),
+    });
+    expect(
+      await engine.temporalSearch.queryPrepared(
+        { artifactKinds: ["video"] },
+        {
+          kind: "image",
+          embeddingSpace: manifest.embeddingSpace,
+          vector: [1, 0],
+        },
+      ),
+    ).toMatchObject({
+      ok: false,
+      error: { code: "MANIFEST_INCOMPATIBLE" },
+    });
 
     const reverseFrame = value(
       await engine.temporalSearch.query({
@@ -736,6 +767,67 @@ describe("progressive temporal multimodal search", () => {
     });
     expect(result.hits[1]?.artifactId).toBe(shuffled.artifact.artifactId);
     expect(result.hits[0]!.score).toBeGreaterThan(result.hits[1]!.score);
+    const portable = value(
+      await engine.temporalSearch.queryPrepared(
+        {
+          sourceArtifactIds: [
+            coherent.artifact.artifactId,
+            shuffled.artifact.artifactId,
+          ],
+        },
+        {
+          kind: "video",
+          embeddingSpace: manifest.embeddingSpace,
+          samples: vectors.map((vector, index) => ({
+            offsetMs: index * 1_000,
+            vector,
+          })),
+        },
+      ),
+    );
+    expect(portable.hits[0]?.artifactId).toBe(coherent.artifact.artifactId);
+    const trimmed = value(
+      await engine.temporalSearch.queryPrepared(
+        {
+          sourceArtifactIds: [
+            coherent.artifact.artifactId,
+            shuffled.artifact.artifactId,
+          ],
+        },
+        {
+          kind: "video",
+          embeddingSpace: manifest.embeddingSpace,
+          samples: vectors.map((vector, index) => ({
+            offsetMs: index * 1_000,
+            vector,
+          })),
+        },
+        { range: { startMs: 1_000, durationMs: 1_000 } },
+      ),
+    );
+    expect(trimmed.hits[0]).toMatchObject({
+      artifactId: coherent.artifact.artifactId,
+      location: {
+        kind: "timed",
+        range: { startTick: 1_000, durationTicks: 2_000 },
+      },
+    });
+    expect(
+      await engine.temporalSearch.queryPrepared(
+        {},
+        {
+          kind: "video",
+          embeddingSpace: manifest.embeddingSpace,
+          samples: Array.from({ length: 17 }, (_, index) => ({
+            offsetMs: index,
+            vector: [1, 0, 0],
+          })),
+        },
+      ),
+    ).toMatchObject({
+      ok: false,
+      error: { code: "INVALID_INPUT" },
+    });
     engine.close();
   });
 });
