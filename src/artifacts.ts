@@ -94,22 +94,31 @@ async function createArtifact(
             explicitSlug: input.slug,
           };
     const base = artifactSlug(parsed.kind, parsed.explicitSlug ?? parsed.name);
-    const slug =
-      parsed.explicitSlug === undefined
-        ? nextActiveSlug(context, base)
-        : base;
     const artifactId = newUuidV7();
+    // The dedup read and the insert must both run inside the serialized
+    // write chain: picking the suffix before store.semantic would race a
+    // concurrent create minting the same base slug (merge policy,
+    // ve-mim.6). details/writeSet are finalized inside the callback, which
+    // runs before the commit message is rendered.
+    const details: Record<string, unknown> = {
+      slug: parsed.explicitSlug ?? base,
+      kind: parsed.kind,
+    };
+    const writeSet = [
+      `artifact:${artifactId}`,
+      `artifact-slug:${String(details.slug)}`,
+    ];
     const mutation = await context.store.semantic(
       {
         operation: "create_artifact",
         artifactId,
-        details: { slug, kind: parsed.kind },
-        writeSet: [
-          `artifact:${artifactId}`,
-          `artifact-slug:${slug}`,
-        ],
+        details,
+        writeSet,
       },
       (_operationId, now) => {
+        const slug = parsed.explicitSlug ?? nextActiveSlug(context, base);
+        details.slug = slug;
+        writeSet[1] = `artifact-slug:${slug}`;
         context.store.db
           .prepare(
             `INSERT INTO artifacts(
@@ -382,6 +391,10 @@ function artifactReferences(
   context: EngineContext,
   artifactId: string,
 ): Array<{ kind: string; id: string }> {
+  // Covers every RESTRICT foreign key targeting artifacts so a refused
+  // delete surfaces as IN_USE rather than a raw FK error mapped to
+  // IO_ERROR. CASCADE-owned rows (artifact_files, artifact_metadata,
+  // audio_waveforms) are deleted with the artifact and are not listed.
   const references: Array<{ kind: string; id: string }> = [];
   const cells = context.store.db
     .prepare(
@@ -396,6 +409,52 @@ function artifactReferences(
     ...cells.map((cell) => ({
       kind: "cell.outputArtifact",
       id: `${cell.notebook_id}/${cell.cell_id}`,
+    })),
+  );
+  const streams = context.store.db
+    .prepare(
+      `SELECT stream_id FROM artifact_streams
+       WHERE artifact_id=? ORDER BY stream_id`,
+    )
+    .all(artifactId) as unknown as Array<{ stream_id: string }>;
+  references.push(
+    ...streams.map((stream) => ({ kind: "stream", id: stream.stream_id })),
+  );
+  const transcripts = context.store.db
+    .prepare(
+      `SELECT transcript_id FROM transcripts
+       WHERE artifact_id=? ORDER BY transcript_id`,
+    )
+    .all(artifactId) as unknown as Array<{ transcript_id: string }>;
+  references.push(
+    ...transcripts.map((row) => ({
+      kind: "transcript",
+      id: row.transcript_id,
+    })),
+  );
+  const clips = context.store.db
+    .prepare(
+      `SELECT clip_id FROM sequence_clips
+       WHERE artifact_id=? ORDER BY clip_id`,
+    )
+    .all(artifactId) as unknown as Array<{ clip_id: string }>;
+  references.push(
+    ...clips.map((clip) => ({ kind: "sequenceClip", id: clip.clip_id })),
+  );
+  const pinned = context.store.db
+    .prepare(
+      `SELECT notebook_id, cell_id, result_id FROM pinned_search_results
+       WHERE artifact_id=? ORDER BY notebook_id, cell_id, result_id`,
+    )
+    .all(artifactId) as unknown as Array<{
+    notebook_id: string;
+    cell_id: string;
+    result_id: string;
+  }>;
+  references.push(
+    ...pinned.map((row) => ({
+      kind: "pinnedSearchResult",
+      id: `${row.notebook_id}/${row.cell_id}/${row.result_id}`,
     })),
   );
   return references;

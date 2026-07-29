@@ -70,7 +70,12 @@ one stable UUIDv7 row; it does not use a synthetic singleton column.
   reverse, inserting in forward, parent-before-child order), so the restored
   state is exactly the state that revision recorded.
 - Backup publishes referenced CAS objects before pushing the Dolt `main` branch.
-- An open engine never pulls or merges a live catalog.
+- An open engine never pulls or merges a live catalog. The per-constraint
+  merge policy (same-schema precondition, slug conflicts, RESTRICT
+  verification, derived singleton flags) lives in `src/merge-policy.ts` and
+  docs/engine-layout.md ("Merge policy per constraint class"); engine-level
+  branch/merge integration is blocked on upstream doltlite bugs (ve-wsu)
+  and tracked as ve-mim.7.
 - Future collaboration uses DoltHub-native catalog forks with the same
   `book_id`; fork/user/origin/PR APIs are deferred.
 

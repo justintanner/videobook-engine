@@ -204,6 +204,63 @@ Its committed rows are:
 | `job_runs` | `1` | Never version terminal job audit blobs. |
 | `sqlite_sequence` | `1` | Never version local AUTOINCREMENT counters. |
 
+### Merge policy per constraint class
+
+Merges run through `mergeWithPolicy` (`src/merge-policy.ts`), which encodes
+one rule per constraint class. doltlite verifies the merged working set
+against UNIQUE, CHECK, and foreign-key constraints and rolls a violating
+merge back atomically ("working set with constraint violations"); there is
+no `dolt_verify_constraints()` in doltlite, so the merge itself plus
+post-merge scans (`PRAGMA foreign_key_check`, duplicate-singleton scans)
+are the constraint-verification primitives.
+
+- **Precondition: same schema version.** Both sides must carry the same
+  `engine_schema.version`; a mismatch is refused with
+  `SCHEMA_INCOMPATIBLE` before any merge is attempted
+  (`assertSameSchemaVersion`). This was previously only implied by the
+  engine's open-time version gate.
+- **`artifacts.slug` (globally unique) → user-facing conflict.** Two forks
+  minting the same slug for different artifacts is detected before the
+  merge by a three-way (merge-base/ours/theirs) simulation over the
+  artifacts slug projection (`findSlugConflicts`, using `dolt_merge_base`
+  and `dolt_at_artifacts`), and refused with `MERGE_CONFLICT` listing the
+  slug and both artifact ids. doltlite's own verification is the backstop:
+  refusals it reports are re-diagnosed and surface as `MERGE_CONFLICT`
+  when attributable to slugs. Row-level same-row edits surface as
+  `MERGE_CONFLICT` as well. At create time, slug dedup runs inside the
+  serialized write chain (not as a read-then-write outside it), so
+  concurrent creates cannot race onto the same slug.
+- **RESTRICT foreign keys → verification-surfaced typed violation.** A
+  fork that deletes a row another fork newly references is caught by
+  doltlite's merge-time working-set verification, which refuses and rolls
+  back; the policy maps that refusal to `MERGE_VIOLATION` (never a raw
+  `IO_ERROR`) and re-verifies referential integrity after every successful
+  merge (`verifyConstraintHealth`). Delete-time `IN_USE` pre-checks cover
+  every RESTRICT referencing table of `artifacts` (cells, streams,
+  transcripts, clips, pinned search results) so single-branch deletes also
+  fail with typed errors.
+- **`transcripts.state='current'` / `sequences.is_primary` → derived
+  singletons.** A merge of forks that each crowned a different row yields
+  duplicates. Reads resolve a deterministic winner and the post-merge
+  reconcile (`reconcileSingletonFlags`) rewrites losers: transcripts keep
+  the latest `created_at` (ties: lowest `transcript_id`), sequences keep
+  the earliest `created_at` — the original primary (ties: lowest
+  `sequence_id`). The reconcile is Dolt-committed so the working set is
+  clean for the next merge.
+- **Grid slots and order keys** need no resolution: `(grid_row,
+  grid_column)` collisions and identical fractional order keys are both
+  resolved at read time by the stable row-UUID tie-break (see the order
+  rules above).
+
+ve-wsu: doltlite currently corrupts secondary UNIQUE indexes on
+`dolt_checkout` once a working set has three or more tables, corrupts full
+engine catalogs on checkout, and misfires its "uncommitted changes" merge
+guard (deterministically with >=10 tables, and after any merge that
+persists a corrupted working set). The engine therefore does not branch or
+merge a live catalog yet; `mergeWithPolicy` is the policy the ve-mim.7
+integration must use, exercised against the real semantic DDL in
+`tests/merge-policy.test.ts`.
+
 ### Semantic indexes
 
 Primary keys and unique declarations create their own backing indexes. The
@@ -560,6 +617,7 @@ must reproduce a render.
 | DDL, table allowlists, indexes | [`src/schema.ts`](../src/schema.ts) |
 | Fractional order keys and minimal rekeying | [`src/order-keys.ts`](../src/order-keys.ts) |
 | SQL transactions, Dolt staging, commits, outbox recovery | [`src/store.ts`](../src/store.ts) |
+| Merge policy per constraint class | [`src/merge-policy.ts`](../src/merge-policy.ts) |
 | Engine paths and row projections | [`src/context.ts`](../src/context.ts) |
 | Content-addressed object layout, remote keys, deletion | [`src/cas.ts`](../src/cas.ts) |
 | Object publication, deletion, GC, and catalog backup | [`src/storage.ts`](../src/storage.ts) |

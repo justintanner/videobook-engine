@@ -527,8 +527,18 @@ function listSequences(context: EngineContext): Sequence[] {
 }
 
 function primarySequence(context: EngineContext): Sequence {
+  // is_primary is a derived singleton: a merge can transiently yield more
+  // than one primary row per book (see docs/engine-layout.md "Merge policy
+  // per constraint class"), so the read resolves a deterministic winner —
+  // earliest created_at, then lowest sequence_id — matching the post-merge
+  // reconcile in src/merge-policy.ts instead of returning an arbitrary row.
   const row = context.store.db
-    .prepare(`${SEQUENCE_SELECT} FROM sequences WHERE is_primary=1`)
+    .prepare(
+      `${SEQUENCE_SELECT} FROM sequences
+       WHERE is_primary=1
+       ORDER BY created_at, sequence_id
+       LIMIT 1`,
+    )
     .get() as unknown as SequenceRow | undefined;
   if (!row) {
     throw new EngineFault({
