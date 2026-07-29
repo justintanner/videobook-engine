@@ -113,15 +113,21 @@ async function backup(
     } catch (error) {
       const message =
         error instanceof Error ? error.message : String(error);
-      const state = /diverg|non-fast-forward|fetch first/i.test(message)
-        ? "diverged"
-        : "offline";
+      // doltlite reports a rejected push as "push failed (not a
+      // fast-forward?)"; keep the detection tolerant of other phrasings.
+      const diverged = /diverg|fast-forward|fetch first/i.test(message);
+      const state = diverged ? "diverged" : "offline";
       setBackupState(context, state, message);
       return {
         ok: false,
         error: {
           code: state === "diverged" ? "DIVERGED" : "OFFLINE",
-          message,
+          message: diverged
+            ? `${message} — the upstream catalog has moved ahead. A live ` +
+              "engine never pulls; run the dedicated merge-back flow " +
+              "(mergeBack in src/fork.ts) on a healthy upstream catalog " +
+              "copy to integrate this fork's commits, then back up again."
+            : message,
         },
       };
     }

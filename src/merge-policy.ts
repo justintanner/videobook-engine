@@ -403,12 +403,15 @@ function commitReconcile(
  * verification with typed errors, deterministic singleton-flag reconcile,
  * and a post-merge constraint health check.
  *
- * NOTE (ve-wsu): doltlite currently corrupts full engine catalogs on
- * checkout and misfires its "uncommitted changes" merge guard on working
- * roots with many tables, so the engine does not call this on a live
- * catalog yet — that integration is ve-mim.7. This function is the policy
- * that integration must use, and it is exercised against the real semantic
- * schema in tests/merge-policy.test.ts.
+ * NOTE (ve-wsu): doltlite corrupts full engine catalogs on checkout and
+ * clone, misfires its "uncommitted changes" merge guard on the full
+ * 28-table working set, and — when the guard is bypassed — fails true
+ * merges of engine history in schema loading. The dedicated merge-back
+ * flow in src/fork.ts therefore applies this policy's primitives around a
+ * projection-level three-way merge instead of calling this function;
+ * `mergeWithPolicy` remains the drop-in mechanism once the upstream bugs
+ * are fixed, and it is exercised against the real semantic schema in
+ * tests/merge-policy.test.ts.
  */
 export function mergeWithPolicy(
   db: DatabaseSync,

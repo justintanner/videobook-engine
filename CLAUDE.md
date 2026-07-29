@@ -70,14 +70,26 @@ one stable UUIDv7 row; it does not use a synthetic singleton column.
   reverse, inserting in forward, parent-before-child order), so the restored
   state is exactly the state that revision recorded.
 - Backup publishes referenced CAS objects before pushing the Dolt `main` branch.
-- An open engine never pulls or merges a live catalog. The per-constraint
-  merge policy (same-schema precondition, slug conflicts, RESTRICT
-  verification, derived singleton flags) lives in `src/merge-policy.ts` and
-  docs/engine-layout.md ("Merge policy per constraint class"); engine-level
-  branch/merge integration is blocked on upstream doltlite bugs (ve-wsu)
-  and tracked as ve-mim.7.
+- An open engine never pulls or merges a live catalog; `main` is the only
+  live branch. The per-constraint merge policy (same-schema precondition,
+  slug conflicts, RESTRICT verification, derived singleton flags) lives in
+  `src/merge-policy.ts` and docs/engine-layout.md ("Merge policy per
+  constraint class"). Fork bootstrap (`bootstrapFork`) and the dedicated
+  merge-back integration flow (`mergeBack`) live in `src/fork.ts`: forks
+  bootstrap from a byte snapshot of a healthy catalog database plus a
+  public-read `ContentStore` (lazy `ensureLocal` fetch), and merge-back
+  runs on a throwaway copy of a closed upstream catalog in a temp dir —
+  fetch, policy-checked three-way merge, fork objects uploaded upstream
+  before the catalog ref moves, one forward integration commit, push.
+  doltlite's `dolt_clone`/`dolt_checkout`/`dolt_merge` are unusable on the
+  full 28-table catalog (upstream bugs, ve-wsu), so bootstrap uses
+  snapshot copy and the merge runs at the projection layer
+  (`dolt_merge_base` + `dolt_at_*`); a diverged backup push surfaces
+  `DIVERGED` with guidance into `mergeBack`. See docs/engine-layout.md
+  "Forks and merge-back integration".
 - Future collaboration uses DoltHub-native catalog forks with the same
-  `book_id`; fork/user/origin/PR APIs are deferred.
+  `book_id`; creating the hosted platform fork itself is the hosting
+  layer's job, out of engine scope.
 
 Core modules are flat and single-purpose:
 
@@ -91,6 +103,7 @@ Core modules are flat and single-purpose:
 - `job-queue.ts`, `runtime-services.ts`, `status.ts` — runtime coordination
 - `history.ts` — Dolt projections, generic action graph, forward restores
 - `storage.ts` — object publication, deletion, GC, and catalog backup
+- `fork.ts` — fork bootstrap (snapshot clone) and merge-back integration
 
 Public domain operations return `Result<T, EngineError>`. `IN_USE` errors
 include stable `{kind, id}` references. Queue and lease primitives return

@@ -107,6 +107,14 @@ export {
 export { normalizeFilePath } from "./files.js";
 export { isUuidV7 } from "./ids.js";
 export { JobQueue, QueueRunner } from "./job-queue.js";
+export {
+  bootstrapFork,
+  mergeBack,
+  type ForkBootstrapOptions,
+  type MergeBackOptions,
+  type MergeBackResult,
+  type RowConflict,
+} from "./fork.js";
 export type { StoredObject } from "./cas.js";
 export {
   CELLS_TABLE_COLUMNS,

@@ -254,12 +254,84 @@ are the constraint-verification primitives.
 
 ve-wsu: doltlite currently corrupts secondary UNIQUE indexes on
 `dolt_checkout` once a working set has three or more tables, corrupts full
-engine catalogs on checkout, and misfires its "uncommitted changes" merge
-guard (deterministically with >=10 tables, and after any merge that
-persists a corrupted working set). The engine therefore does not branch or
-merge a live catalog yet; `mergeWithPolicy` is the policy the ve-mim.7
-integration must use, exercised against the real semantic DDL in
-`tests/merge-policy.test.ts`.
+engine catalogs on checkout and `dolt_clone` (the cloned file's schema does
+not even parse: `invalid rootpage` on a secondary autoindex), misfires its
+"uncommitted changes" merge guard on the full 28-table catalog (every
+table reports a phantom `modified` status with zero row diffs), and — when
+the guard is bypassed by committing the phantom dirt — dies in schema
+loading on true merges (`schema conflict on table 'sqlite_autoindex_*'`).
+The dedicated merge-back flow therefore runs this policy around a
+projection-level three-way merge instead of `dolt_merge`; see "Forks and
+merge-back integration" below. `mergeWithPolicy` remains the drop-in merge
+mechanism once the upstream bugs are fixed, exercised against the real
+semantic DDL in `tests/merge-policy.test.ts`.
+
+### Forks and merge-back integration
+
+A fork of a public book is, from the engine's point of view:
+
+1. **A platform fork.** Creating the hosted copy of a catalog and giving
+   it a URL is the hosting layer's job; it is out of engine scope.
+2. **A clone of the catalog into a local engine root** (`bootstrapFork` in
+   [`src/fork.ts`](../src/fork.ts)). Because `dolt_clone` corrupts full
+   catalogs (ve-wsu), bootstrap takes a byte snapshot of a healthy upstream
+   `videobook.db` (captured while the upstream engine is closed) and opens
+   it as a normal engine — no `initialBookSlug`, the singleton book row
+   comes along with the snapshot. A URL bootstrap path attempts
+   `dolt_clone` and health-validates the result, surfacing a typed
+   `FEATURE_UNAVAILABLE` while the upstream bug stands; it starts working
+   unchanged once doltlite is fixed.
+3. **A public-read object store keyed by SHA-256.** `ContentStore` stays
+   the abstraction; the existing `ensureLocal` lazy fetch in
+   [`src/cas.ts`](../src/cas.ts) downloads any object the fork lacks on
+   first touch, so upstream objects of a public book are readable to
+   forkers without a bulk copy. Whether the fork's store proxies to
+   upstream's is a hosting concern — an engine root only ever sees one
+   `ContentStore`.
+
+The fork is then a full citizen: it commits on its own `main` and backs up
+to its own catalog remote and object store.
+
+**The live-engine never-pulls rule stands.** An open engine never fetches,
+pulls, or merges, and `main` remains the only supported live branch.
+Integration is a dedicated flow, `mergeBack` in
+[`src/fork.ts`](../src/fork.ts), separate from any live engine:
+
+1. Copy a healthy upstream `videobook.db` (engine closed) into a throwaway
+   temp workspace. The flow never requires or mutates the user's open
+   catalog — the source file is only read.
+2. Register/fetch the fork remote (`dolt_remote`, `dolt_fetch`) and
+   resolve heads and the merge base (`dolt_merge_base`; commit hashes via
+   `dolt_log`/`dolt_branches` — `doltHashOf` returns content hashes, not
+   commit hashes; the fetched remote-tracking ref gets a local branch
+   pointer, a ref-only write that is safe under ve-wsu).
+3. Run the merge policy: same-schema precondition, pre-merge slug-conflict
+   detection (`MERGE_CONFLICT`), then a projection-level three-way row
+   merge over `dolt_at_<table>` snapshots of base/ours/theirs (row
+   semantics mirror Dolt: one-sided changes win, identical changes
+   resolve, incompatible changes abort with `MERGE_CONFLICT`), deterministic
+   singleton-flag reconcile, and post-merge constraint verification
+   (`MERGE_VIOLATION`). The working-set rewrite uses the restore idiom —
+   delete all semantic tables in reverse, reinsert parent-before-child.
+4. Upload the fork's new objects (rows in `dolt_at_objects(theirs)` not at
+   ours, tombstones excluded) from the fork's object store to upstream's
+   BEFORE the catalog ref moves — the same objects-before-push ordering as
+   `engine.storage.backup`.
+5. Land one forward integration commit on `main` and `dolt_push` it.
+
+ve-wsu makes a true two-parent `dolt_merge` commit impossible on full
+catalogs today, so the integration commit is single-parent and records the
+integrated fork head in a `merged-revision` commit-message trailer (plus
+`base-revision`, per the structured-message convention). Re-running the
+flow is a no-op when the fork's net changes are already on `main`. The
+projection merge in `mergeRefs` is the single swap point: when doltlite is
+fixed, `mergeWithPolicy` + `dolt_merge` replace it and the commit becomes
+a true merge commit.
+
+When a plain `engine.storage.backup()` push is rejected because upstream
+moved, the backup surfaces `DIVERGED` with guidance into this flow —
+someone with a healthy upstream catalog runs `mergeBack`; the fork never
+pulls to catch up.
 
 ### Semantic indexes
 
@@ -618,6 +690,7 @@ must reproduce a render.
 | Fractional order keys and minimal rekeying | [`src/order-keys.ts`](../src/order-keys.ts) |
 | SQL transactions, Dolt staging, commits, outbox recovery | [`src/store.ts`](../src/store.ts) |
 | Merge policy per constraint class | [`src/merge-policy.ts`](../src/merge-policy.ts) |
+| Fork bootstrap and merge-back integration | [`src/fork.ts`](../src/fork.ts) |
 | Engine paths and row projections | [`src/context.ts`](../src/context.ts) |
 | Content-addressed object layout, remote keys, deletion | [`src/cas.ts`](../src/cas.ts) |
 | Object publication, deletion, GC, and catalog backup | [`src/storage.ts`](../src/storage.ts) |
