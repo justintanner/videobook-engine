@@ -72,6 +72,11 @@ export interface ContentStore {
   head(key: string): Promise<ContentStoreHead>;
   uploadFile(key: string, sourcePath: string): Promise<void>;
   downloadFile(key: string, destinationPath: string): Promise<void>;
+  /**
+   * Unpublishes an object. Deleting a key that does not exist is not an
+   * error, so unpublish is idempotent.
+   */
+  delete(key: string): Promise<void>;
 }
 
 export interface CatalogBackupConfig {
@@ -425,6 +430,63 @@ export interface StorageStatus {
   head: string;
   pendingObjects: number;
   lastError?: string;
+}
+
+/**
+ * One place at HEAD that references a content object. `table` is the
+ * semantic table holding the reference and `id` identifies the referencing
+ * row (for example `artifact:<id>:<path>` for a file mapping).
+ */
+export interface ObjectReference {
+  table: string;
+  id: string;
+}
+
+export interface DeleteObjectOptions {
+  /**
+   * Delete even when the object is still referenced at HEAD. This is the
+   * takedown path: referencing rows become tombstones (hash + size remain)
+   * and later reads surface OBJECT_UNAVAILABLE.
+   */
+  force?: boolean;
+  /** Also unpublish the object from the configured remote content store. */
+  remote?: boolean;
+}
+
+export interface DeleteObjectResult {
+  hash: string;
+  sizeBytes: number;
+  deletedLocal: boolean;
+  deletedRemote: boolean;
+  /** HEAD references that were forcibly cut; empty for a clean delete. */
+  severedReferences: ObjectReference[];
+}
+
+export interface CollectGarbageOptions {
+  /** Report what would be collected without deleting anything. */
+  dryRun?: boolean;
+  /** Also unpublish collected objects from the configured remote store. */
+  remote?: boolean;
+  /**
+   * Run Dolt's `dolt_gc()` afterwards to physically reclaim chunks left by
+   * dropped table data in the versioned catalog.
+   */
+  doltGc?: boolean;
+}
+
+export interface CollectedObject {
+  hash: string;
+  sizeBytes: number;
+}
+
+export interface CollectGarbageResult {
+  dryRun: boolean;
+  scannedObjects: number;
+  referencedObjects: number;
+  collected: CollectedObject[];
+  reclaimedBytes: number;
+  /** Summary returned by `dolt_gc()` when the `doltGc` option was set. */
+  doltGc?: string;
 }
 
 export type JobState =

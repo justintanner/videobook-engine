@@ -1,4 +1,4 @@
-export const SCHEMA_VERSION = 15;
+export const SCHEMA_VERSION = 16;
 
 export const NOTEBOOK_CELL_TYPES = [
   "audio",
@@ -152,7 +152,8 @@ export const SEMANTIC_SCHEMA_SQL = `
   CREATE TABLE IF NOT EXISTS objects (
     object_hash TEXT PRIMARY KEY,
     size_bytes INTEGER NOT NULL CHECK (size_bytes >= 0),
-    created_at INTEGER NOT NULL
+    created_at INTEGER NOT NULL,
+    forgotten_at INTEGER
   );
 
   CREATE TABLE IF NOT EXISTS artifact_files (
@@ -331,6 +332,8 @@ export const SEMANTIC_SCHEMA_SQL = `
       REFERENCES artifact_streams(stream_id) ON DELETE RESTRICT,
     object_hash TEXT NOT NULL
       REFERENCES objects(object_hash) ON DELETE RESTRICT,
+    payload_hash TEXT NOT NULL
+      REFERENCES objects(object_hash) ON DELETE RESTRICT,
     language TEXT NOT NULL,
     provider TEXT,
     model TEXT,
@@ -347,7 +350,6 @@ export const SEMANTIC_SCHEMA_SQL = `
     start_tick INTEGER NOT NULL CHECK (start_tick >= 0),
     duration_ticks INTEGER NOT NULL CHECK (duration_ticks > 0),
     speaker TEXT,
-    text TEXT NOT NULL,
     confidence REAL CHECK (
       confidence IS NULL OR (confidence >= 0 AND confidence <= 1)
     ),
@@ -363,7 +365,6 @@ export const SEMANTIC_SCHEMA_SQL = `
     ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
     start_tick INTEGER NOT NULL CHECK (start_tick >= 0),
     duration_ticks INTEGER NOT NULL CHECK (duration_ticks > 0),
-    text TEXT NOT NULL,
     confidence REAL CHECK (
       confidence IS NULL OR (confidence >= 0 AND confidence <= 1)
     ),

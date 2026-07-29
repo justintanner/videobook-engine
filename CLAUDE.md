@@ -3,7 +3,7 @@
 ## Project
 
 `videobook-engine` is an ESM TypeScript package for Node.js 22+. Catalog
-schema v4 is Dolt-native and deliberately has no compatibility or migration
+schema v16 is Dolt-native and deliberately has no compatibility or migration
 layer for v3, the former multi-project catalog, or the earlier
 Git/project-directory/SQLite-sidecar engine.
 
@@ -31,12 +31,33 @@ one stable UUIDv7 row; it does not use a synthetic singleton column.
 - Semantic tables are explicitly allowlisted, staged, and committed to Dolt.
 - `runtime_*` tables are covered by the committed `dolt_ignore` policy and are
   never staged or versioned.
-- `dataDir/objects/sha256/` is the immutable local content-addressed store.
+- `dataDir/objects/sha256/` is the local content-addressed store. Objects
+  are content-immutable but forgettable: `engine.storage.deleteObject` and
+  `engine.storage.gc` remove bytes (locally, and remotely via
+  `ContentStore.delete` when configured) and mark the `objects` row with
+  `forgotten_at`. Object rows are never deleted — a forgotten row is the
+  tombstone (hash + size + forgotten timestamp) for every historical
+  reference, and reads of forgotten content surface `OBJECT_UNAVAILABLE`.
 - `workspaceDir/<artifact UUID>/` is disposable materialization.
 - Book, artifact, entity, notebook, cell, edge, run, prompt, message, action,
   timeline-slot, and timeline-audio surrogate identities are UUIDv7 values.
 - Deletes are hard deletes. Owned children cascade; referenced live artifacts
-  and entities return `IN_USE`; immutable CAS objects and Dolt history remain.
+  and entities return `IN_USE`; Dolt history remains.
+- Published history is append-only: once a catalog has been pushed anywhere
+  someone could fork it, its commits are permanent. Forgettable payloads
+  therefore live behind hashes in CAS — bulk transcript text is stored as a
+  CAS object named by `transcripts.payload_hash`, not in versioned columns —
+  so forgetting means deleting objects, never rewriting history. Other raw
+  text (prompts, entities, captions, messages, search snapshots) is accepted
+  as permanent working data; see `docs/engine-layout.md` for the audit.
+  History squash tooling would only be legal before the first push; the
+  engine does not implement it.
+- GC is precise about its roots: a hash is referenced at HEAD when a HEAD
+  row names it in a first-class `object_hash`/`payload_hash` column
+  (`artifact_files`, `artifact_streams`, `pinned_search_results`,
+  `sequence_clips`, `transcripts`) or in a `cell_references` snapshot.
+  Everything else is collectable; historical revisions are not consulted,
+  which is why restoring an old revision after GC yields tombstone reads.
 - Timeline state is normalized across `timeline`, `timeline_slots`, and
   `timeline_audio` and is only exposed through `engine.timeline`.
 - Restores are forward-only commits. The engine never rewinds a live branch.
@@ -56,7 +77,7 @@ Core modules are flat and single-purpose:
 - `ids.ts` — UUIDv7 generation and caller-ID validation
 - `job-queue.ts`, `runtime-services.ts`, `status.ts` — runtime coordination
 - `history.ts` — Dolt projections, generic action graph, forward restores
-- `storage.ts` — object publication and catalog backup
+- `storage.ts` — object publication, deletion, GC, and catalog backup
 
 Public domain operations return `Result<T, EngineError>`. `IN_USE` errors
 include stable `{kind, id}` references. Queue and lease primitives return

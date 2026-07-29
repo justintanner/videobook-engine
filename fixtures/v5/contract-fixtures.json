@@ -1,7 +1,7 @@
 {
   "compatibility": {
     "contractVersion": 1,
-    "schemaVersion": 15,
+    "schemaVersion": 16,
     "minimumReaderContractVersion": 1,
     "legacySchemaVersions": [
       4,
@@ -62,6 +62,7 @@
     "artifactId": "0197-artifact-audio",
     "streamId": "0197-stream-audio",
     "objectHash": "sha256:audio-object",
+    "payloadHash": "sha256:transcript-payload",
     "language": "en",
     "provider": "fixture",
     "model": "fixture-word-timing-v1",
@@ -1479,7 +1480,7 @@
   "migrationDryRun": {
     "contractVersion": 1,
     "sourceSchemaVersion": 4,
-    "destinationSchemaVersion": 15,
+    "destinationSchemaVersion": 16,
     "sourceBookId": "0197-book-v4",
     "sourceHeadRevision": "dolt-v4-head",
     "artifactCount": 8,
@@ -1501,7 +1502,7 @@
   "migrationResult": {
     "contractVersion": 1,
     "sourceSchemaVersion": 4,
-    "destinationSchemaVersion": 15,
+    "destinationSchemaVersion": 16,
     "sourceBookId": "0197-book-v4",
     "sourceHeadRevision": "dolt-v4-head",
     "artifactCount": 8,

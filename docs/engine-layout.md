@@ -1,8 +1,9 @@
 # Videobook engine layout
 
 This document is the column-by-column layout of the engine-owned data model.
-It describes schema version 4 as implemented today, then identifies the
-additional structures needed for a full non-linear video editor.
+It describes the original schema version 4 layout, notes where later schema
+versions changed the picture (currently v16), and identifies the additional
+structures needed for a full non-linear video editor.
 
 The executable source of truth remains
 [`src/schema.ts`](../src/schema.ts). If this document and the DDL disagree, the
@@ -41,7 +42,7 @@ flowchart LR
   OUTBOX --> STAGE
   STAGE --> REV[Dolt main revision]
 
-  FILES[Artifact file APIs] --> CAS[Immutable SHA-256 objects]
+  FILES[Artifact file APIs] --> CAS[SHA-256 objects, forgettable]
   FILES --> MAP[Versioned artifact_files mapping]
   CAS --> WS[Disposable artifact workspace]
   MAP --> WS
@@ -73,8 +74,16 @@ flowchart LR
   currently modeled use integer frames.
 - JSON is stored as canonical text with recursively sorted object keys.
 - Deletes are hard deletes. Owned rows cascade; live artifact/entity
-  references restrict deletion; immutable objects and prior Dolt revisions
-  remain available.
+  references restrict deletion; prior Dolt revisions remain available.
+- Objects are content-immutable but forgettable. `engine.storage.deleteObject`
+  forgets one object (refusing `IN_USE` references at HEAD unless forced);
+  `engine.storage.gc` sweeps every object nothing references at HEAD.
+  Forgetting is a semantic commit that sets `objects.forgotten_at`; the row
+  is never deleted, so it remains as the tombstone (hash + size + forgotten
+  timestamp) for historical references, and reads of forgotten content
+  surface `OBJECT_UNAVAILABLE` rather than failing or lying. Published
+  history is append-only, so bulk forgettable text lives behind CAS hashes
+  (see "Forgettable data and raw-text audit" below).
 
 ## Dolt-versioned semantic schema
 
@@ -95,7 +104,7 @@ There are 31 allowlisted semantic tables.
 | `engine_schema` | `singleton INTEGER`<br>`version INTEGER`<br>`created_at INTEGER` | `singleton PK CHECK(singleton = 1)`. Records the clean-break catalog version. The recorded version rejects older catalogs rather than migrating them. |
 | `book` | `book_id TEXT`<br>`slug TEXT`<br>`created_at INTEGER` | `book_id PK`; `slug UQ`. Exactly one row per engine root. |
 | `artifacts` | `artifact_id TEXT`<br>`slug TEXT`<br>`kind TEXT`<br>`created_at INTEGER` | `artifact_id PK`; `slug UQ`; `kind CHECK IN (video, image, audio, script, character, prompt, scene, final)`. The artifact is the stable identity for source media, generated media, documents, and final renders. |
-| `objects` | `object_hash TEXT`<br>`size_bytes INTEGER`<br>`created_at INTEGER` | `object_hash PK`; `size_bytes CHECK >= 0`. This is versioned metadata for immutable bytes stored outside the database. |
+| `objects` | `object_hash TEXT`<br>`size_bytes INTEGER`<br>`created_at INTEGER`<br>`forgotten_at INTEGER?` | `object_hash PK`; `size_bytes CHECK >= 0`. Versioned metadata for bytes stored outside the database. Rows are append-only: `forgotten_at` marks a tombstone whose bytes were deleted by `deleteObject`/`gc`. |
 | `artifact_files` | `artifact_id TEXT`<br>`path TEXT`<br>`object_hash TEXT`<br>`mtime_ms INTEGER`<br>`created_at INTEGER` | `(artifact_id, path) PK`; `artifact_id FK → artifacts.artifact_id ON DELETE CASCADE`; `object_hash FK → objects.object_hash ON DELETE RESTRICT`. Maps a logical artifact path to immutable content. |
 | `book_metadata` | `key TEXT`<br>`value_json TEXT` | `key PK`. Singleton-book key/value metadata; no redundant `book_id`. |
 | `artifact_metadata` | `artifact_id TEXT`<br>`key TEXT`<br>`value_json TEXT` | `(artifact_id, key) PK`; `artifact_id FK → artifacts.artifact_id ON DELETE CASCADE`. Extensible artifact metadata that participates in revisions. |
@@ -286,6 +295,60 @@ commit: terminal-job reconciliation writes the ignored `job_runs` table
 through a runtime transaction. Historical reads use
 `dolt_at_<semantic_table>(revision)`; history and conflict projections use
 Dolt log, status, and diff APIs. Remote catalog support is push-backup only.
+
+## Forgettable data and raw-text audit
+
+Published history is append-only: once a catalog has been pushed anywhere
+someone could fork it, its commits are permanent. Forgetting therefore means
+deleting content-addressed objects, never rewriting history. History squash
+tooling would only be legal before the first push (before anyone can fork);
+the engine deliberately does not implement it.
+
+### Object deletion and GC
+
+- `engine.storage.deleteObject(hash, { force?, remote? })` forgets one
+  object. It refuses with `IN_USE` (listing the HEAD references) when a HEAD
+  row still names the hash, unless `force` is given — the takedown path.
+- `engine.storage.gc({ dryRun?, remote?, doltGc? })` sweeps every object
+  nothing references at HEAD, plus stray local files that never got an
+  `objects` row. A hash is referenced at HEAD when a HEAD row names it in a
+  first-class `object_hash`/`payload_hash` column (`artifact_files`,
+  `artifact_streams`, `pinned_search_results`, `sequence_clips`,
+  `transcripts`) or embeds it as an `objectHash` in a `cell_references`
+  snapshot. Historical revisions are not consulted.
+- Both record forgetting as a semantic commit (`delete_object` /
+  `gc_objects`) that sets `objects.forgotten_at`. The row is never deleted:
+  it stays as the tombstone (hash + size + forgotten timestamp) for every
+  historical row that named the object, and backup never tries to publish a
+  forgotten object again. Re-importing the same bytes resurrects the row
+  (`forgotten_at` is cleared when the object is re-linked).
+- Restoring an old revision whose object was forgotten relinks the
+  tombstone: the forward restore commit stands, and reads of the missing
+  bytes surface `OBJECT_UNAVAILABLE` through the existing error path instead
+  of crashing. Deleting a referenced object with `force` behaves the same
+  way at HEAD.
+- With `remote: true`, deletion also unpublishes via
+  `ContentStore.delete(key)` and clears the `runtime_object_publications`
+  marker so a later re-import is published again.
+- doltlite exposes `dolt_gc()` as a SQL function (verified: it returns a
+  `"N chunks removed, M chunks kept"` summary). `gc({ doltGc: true })` runs
+  it after collecting to physically reclaim chunks left behind by dropped
+  table data in the versioned catalog.
+- Run `deleteObject` and `gc` only while no imports are in flight; CAS puts
+  happen outside the serialized write chain, so a concurrent import could
+  race the sweep.
+
+### Raw-text audit
+
+| Table / column | Decision | Rationale |
+| --- | --- | --- |
+| `transcript_segments.text`, `transcript_words.text` | **Moved behind CAS** (schema v16) | Full transcripts are the bulk-text case. Segment/word text lives in one CAS object named by `transcripts.payload_hash`; the versioned rows keep only structure (IDs, ordinals, ticks, speaker, confidence, kind), so `transcripts.selectionRange` and caption-cue word references keep working after the payload is forgotten. `transcripts.delete` removes the rows; the payload then becomes GC-collectable. |
+| `caption_cues.text` | Accepted permanent | Short editorial cue text needed to render without CAS access; a deliberate editorial snapshot that can diverge from the transcript. |
+| `prompt_entries.prompt`, `cells.prompt`, `entities.prompt`/`description` | Accepted permanent | Small user-authored creative working data; part of the semantic record users expect to persist, like commit messages. |
+| `messages.body_json` | Accepted permanent | Small per-row authored conversation record. |
+| `pinned_search_results.query_json`/`signals_json`/`representative_json`, `cell_references.snapshot_json` | Accepted permanent | Small selection snapshots; may embed short excerpts. Snapshot `objectHash` values are honored as loose GC roots. |
+| `runs.cell_order_json`/`outputs_json`/`error`, `book_metadata`/`artifact_metadata.value_json` | Accepted permanent | Structural or small key/value data. |
+| `runtime_segment_text.text`, `runtime_text_similarity_chunks.chunk_text` | Out of scope | `runtime_*` tables are never versioned or pushed, so they never enter the public record; rebuild or drop them locally at will. |
 
 ## Video-editing structures exposed today
 
@@ -510,7 +573,8 @@ must reproduce a render.
 | Fractional order keys and minimal rekeying | [`src/order-keys.ts`](../src/order-keys.ts) |
 | SQL transactions, Dolt staging, commits, outbox recovery | [`src/store.ts`](../src/store.ts) |
 | Engine paths and row projections | [`src/context.ts`](../src/context.ts) |
-| Immutable object layout and remote keys | [`src/cas.ts`](../src/cas.ts) |
+| Content-addressed object layout, remote keys, deletion | [`src/cas.ts`](../src/cas.ts) |
+| Object publication, deletion, GC, and catalog backup | [`src/storage.ts`](../src/storage.ts) |
 | Artifact mappings and workspace materialization | [`src/files.ts`](../src/files.ts) |
 | Current timeline API and row synchronization | [`src/timeline.ts`](../src/timeline.ts) |
 | Public timeline, manifest, job, status, and similarity types | [`src/engine-types.ts`](../src/engine-types.ts) |

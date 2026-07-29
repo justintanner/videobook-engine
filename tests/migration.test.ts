@@ -105,7 +105,7 @@ describe("schema-v4 copy-forward migration", () => {
     const dryRun = value(dryRunV4Migration(source.root));
     expect(dryRun).toMatchObject({
       sourceSchemaVersion: 4,
-      destinationSchemaVersion: 15,
+      destinationSchemaVersion: 16,
       sourceBookId: source.bookId,
       artifactCount: 1,
       notebookCount: 1,

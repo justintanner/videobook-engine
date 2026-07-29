@@ -251,6 +251,7 @@ const transcript: Transcript = {
   artifactId: "0197-artifact-audio",
   streamId: audioRange.streamId,
   objectHash: audioRange.objectHash,
+  payloadHash: "sha256:transcript-payload",
   language: "en",
   provider: "fixture",
   model: "fixture-word-timing-v1",
@@ -528,7 +529,7 @@ const jobFailure: MvpJobFailure = {
 const migrationDryRun: V4MigrationDryRun = {
   contractVersion: MVP_CONTRACT_VERSION,
   sourceSchemaVersion: 4,
-  destinationSchemaVersion: 15,
+  destinationSchemaVersion: 16,
   sourceBookId: "0197-book-v4",
   sourceHeadRevision: "dolt-v4-head",
   artifactCount: 8,

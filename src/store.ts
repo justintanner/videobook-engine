@@ -176,6 +176,19 @@ export class DoltStore {
       .get(remoteName);
   }
 
+  /**
+   * Physically reclaims unreferenced chunks in the Dolt storage layer.
+   * doltlite exposes `dolt_gc()` as a SQL function and returns a human
+   * readable summary such as "3 chunks removed, 42 chunks kept".
+   */
+  doltGc(): string {
+    this.assertRuntimeUnstaged();
+    const row = this.db
+      .prepare("SELECT dolt_gc() AS result")
+      .get() as unknown as { result: string } | undefined;
+    return row?.result ?? "";
+  }
+
   private configureConnection(): void {
     this.db.exec("PRAGMA foreign_keys = ON");
     this.db.exec("PRAGMA synchronous = FULL");

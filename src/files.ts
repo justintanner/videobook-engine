@@ -562,11 +562,15 @@ function linkObject(
   file: PreparedFile,
   now: number,
 ): void {
+  // Re-linking resurrects a forgotten object: the bytes were re-created by
+  // the caller before this mutation, so the tombstone marker is cleared and
+  // backup will publish the object again. A no-op rewrite of an already
+  // clear row produces no Dolt row diff and therefore no commit.
   context.store.db
     .prepare(
       `INSERT INTO objects(object_hash, size_bytes, created_at)
        VALUES (?, ?, ?)
-       ON CONFLICT(object_hash) DO NOTHING`,
+       ON CONFLICT(object_hash) DO UPDATE SET forgotten_at=NULL`,
     )
     .run(file.objectHash, file.size, now);
   context.store.db

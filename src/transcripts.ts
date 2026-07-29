@@ -24,13 +24,14 @@ import {
   rationalEquals,
   sourceRangeEndTick,
 } from "./mvp-time.js";
-import { EngineFault } from "./store.js";
+import { canonicalJson, EngineFault } from "./store.js";
 
 interface TranscriptRow {
   transcript_id: string;
   artifact_id: string;
   stream_id: string;
   object_hash: string;
+  payload_hash: string;
   language: string;
   provider: string | null;
   model: string | null;
@@ -43,7 +44,6 @@ interface SegmentRow {
   start_tick: number;
   duration_ticks: number;
   speaker: string | null;
-  text: string;
   confidence: number | null;
   kind: TranscriptSegmentKind;
 }
@@ -54,7 +54,6 @@ interface WordRow {
   ordinal: number;
   start_tick: number;
   duration_ticks: number;
-  text: string;
   confidence: number | null;
   corrected: number;
 }
@@ -90,25 +89,42 @@ interface NormalizedWord {
   corrected: boolean;
 }
 
+/**
+ * Bulk transcript text (segment and word `text`) is the forgettable part of
+ * a transcript: it lives in one CAS object behind `transcripts.payload_hash`
+ * instead of raw versioned columns, so object deletion or GC can forget it
+ * while the structural rows (IDs, ticks, speaker, confidence, kind) remain
+ * as the permanent record. Reading a transcript whose payload object was
+ * deleted surfaces OBJECT_UNAVAILABLE.
+ */
+interface TranscriptPayload {
+  version: 1;
+  segments: NormalizedSegment[];
+}
+
 export function createTranscriptsApi(context: EngineContext) {
   return {
     import: (
       input: ImportTranscriptInput,
     ): Promise<Result<Transcript, EngineError>> =>
       importTranscript(context, input),
-    get: (transcriptId: string): Result<Transcript, EngineError> =>
-      syncResultOf(() => requiredTranscript(context, transcriptId)),
+    get: (transcriptId: string): Promise<Result<Transcript, EngineError>> =>
+      resultOf(() => requiredTranscript(context, transcriptId)),
     getAtRevision: (
       transcriptId: string,
       revision: string,
-    ): Result<Transcript, EngineError> =>
-      syncResultOf(() => requiredTranscript(context, transcriptId, revision)),
-    list: (artifact?: string): Result<Transcript[], EngineError> =>
-      syncResultOf(() => listTranscripts(context, artifact)),
+    ): Promise<Result<Transcript, EngineError>> =>
+      resultOf(() => requiredTranscript(context, transcriptId, revision)),
+    list: (artifact?: string): Promise<Result<Transcript[], EngineError>> =>
+      resultOf(() => listTranscripts(context, artifact)),
     revise: (
       input: ReviseTranscriptInput,
     ): Promise<Result<Transcript, EngineError>> =>
       reviseTranscript(context, input),
+    delete: (
+      transcriptId: string,
+    ): Promise<Result<{ transcriptId: string }, EngineError>> =>
+      deleteTranscript(context, transcriptId),
     selectionRange: (
       transcriptId: string,
       startWordId: string,
@@ -130,19 +146,17 @@ async function reviseTranscript(
   input: ReviseTranscriptInput,
 ): Promise<Result<Transcript, EngineError>> {
   return resultOf(async () => {
-    const source = requiredTranscript(context, input.sourceTranscriptId);
+    const source = requiredTranscriptRow(context, input.sourceTranscriptId);
+    const provider = input.provider ?? source.provider ?? undefined;
+    const model = input.model ?? source.model ?? undefined;
     return importTranscript(context, {
       ...(input.transcriptId ? { transcriptId: input.transcriptId } : {}),
-      artifactId: source.artifactId,
-      streamId: source.streamId,
-      objectHash: source.objectHash,
+      artifactId: source.artifact_id,
+      streamId: source.stream_id,
+      objectHash: source.object_hash,
       language: input.language ?? source.language,
-      ...(input.provider ?? source.provider
-        ? { provider: input.provider ?? source.provider }
-        : {}),
-      ...(input.model ?? source.model
-        ? { model: input.model ?? source.model }
-        : {}),
+      ...(provider ? { provider } : {}),
+      ...(model ? { model } : {}),
       state: "current",
       segments: input.segments,
     });
@@ -155,8 +169,12 @@ function transcriptSelectionRange(
   startWordId: string,
   endWordId: string,
 ): ReturnType<typeof normalizeSourceRange> {
-  const transcript = requiredTranscript(context, transcriptId);
-  const words = transcript.segments.flatMap((segment) => segment.words);
+  // Selection ranges are structural: they are computed from versioned IDs
+  // and ticks only, so they keep working after the text payload is forgotten.
+  const row = requiredTranscriptRow(context, transcriptId);
+  const stream = requiredStreamRow(context, row.stream_id);
+  const segments = structuralSegments(context, row.transcript_id);
+  const words = segments.flatMap((segment) => segment.words);
   const startIndex = words.findIndex((word) => word.wordId === startWordId);
   const endIndex = words.findIndex((word) => word.wordId === endWordId);
   if (startIndex < 0 || endIndex < startIndex) {
@@ -167,21 +185,21 @@ function transcriptSelectionRange(
   }
   const start = words[startIndex]!;
   const end = words[endIndex]!;
-  const firstSegment = transcript.segments.find((segment) =>
-    segment.words.some((word) => word.wordId === start.wordId),
-  );
-  if (!firstSegment) {
+  if (segments.length === 0) {
     throw new EngineFault({
       code: "INVALID_RANGE",
       message: "Transcript selection has no source range",
     });
   }
   return normalizeSourceRange({
-    streamId: transcript.streamId,
-    objectHash: transcript.objectHash,
+    streamId: row.stream_id,
+    objectHash: row.object_hash,
     startTick: start.startTick,
     durationTicks: end.startTick + end.durationTicks - start.startTick,
-    timeBase: firstSegment.range.timeBase,
+    timeBase: {
+      numerator: stream.time_base_numerator,
+      denominator: stream.time_base_denominator,
+    },
   });
 }
 
@@ -207,6 +225,8 @@ async function importTranscript(
     const language = requiredText(input.language, "Transcript language");
     const segments = normalizeSegments(input.segments, stream);
     const state = input.state ?? "current";
+    const payload = transcriptPayload(segments);
+    const payloadObject = await context.objects.put(payload);
     const mutation = await context.store.semantic(
       {
         operation: "import_transcript",
@@ -215,6 +235,7 @@ async function importTranscript(
           transcriptId,
           streamId: input.streamId,
           objectHash: input.objectHash,
+          payloadHash: payloadObject.hash,
           language,
           state,
           segmentCount: segments.length,
@@ -230,6 +251,13 @@ async function importTranscript(
         ],
       },
       (_operationId, now) => {
+        context.store.db
+          .prepare(
+            `INSERT INTO objects(object_hash, size_bytes, created_at)
+             VALUES (?, ?, ?)
+             ON CONFLICT(object_hash) DO UPDATE SET forgotten_at=NULL`,
+          )
+          .run(payloadObject.hash, payloadObject.size, now);
         if (state === "current") {
           context.store.db
             .prepare(
@@ -243,14 +271,15 @@ async function importTranscript(
           .prepare(
             `INSERT INTO transcripts(
               transcript_id, artifact_id, stream_id, object_hash,
-              language, provider, model, state, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+              payload_hash, language, provider, model, state, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
           )
           .run(
             transcriptId,
             artifact.artifact_id,
             input.streamId,
             input.objectHash,
+            payloadObject.hash,
             language,
             input.provider ?? null,
             input.model ?? null,
@@ -261,17 +290,75 @@ async function importTranscript(
       },
     );
     return ok(
-      requiredTranscript(context, transcriptId, mutation.revision),
+      await requiredTranscript(context, transcriptId, mutation.revision),
       mutation.revision,
     );
   });
 }
 
-function requiredTranscript(
+async function deleteTranscript(
+  context: EngineContext,
+  transcriptId: string,
+): Promise<Result<{ transcriptId: string }, EngineError>> {
+  return resultOf(async () => {
+    assertUuidV7(transcriptId, "Transcript ID");
+    const row = requiredTranscriptRow(context, transcriptId);
+    // Caption cues pin a transcript for editorial selections; they must be
+    // removed (or the transcript left in place) before it can be forgotten.
+    const cues = context.store.db
+      .prepare(
+        `SELECT cue_id FROM caption_cues
+         WHERE transcript_id=? ORDER BY cue_id`,
+      )
+      .all(row.transcript_id) as unknown as Array<{ cue_id: string }>;
+    if (cues.length > 0) {
+      throw new EngineFault({
+        code: "IN_USE",
+        message:
+          `Transcript ${transcriptId} is referenced by `
+          + `${cues.length} caption cue(s)`,
+        details: { cueIds: cues.map((cue) => cue.cue_id) },
+      });
+    }
+    const mutation = await context.store.semantic(
+      {
+        operation: "delete_transcript",
+        artifactId: row.artifact_id,
+        details: {
+          transcriptId: row.transcript_id,
+          streamId: row.stream_id,
+          objectHash: row.object_hash,
+          payloadHash: row.payload_hash,
+        },
+        writeSet: [`transcript:${row.transcript_id}`],
+      },
+      () => {
+        // Segments and words cascade. The payload object is deliberately
+        // left behind: it becomes collectable by storage.gc() once no HEAD
+        // row references its hash.
+        context.store.db
+          .prepare("DELETE FROM transcripts WHERE transcript_id=?")
+          .run(row.transcript_id);
+      },
+    );
+    return ok({ transcriptId: row.transcript_id }, mutation.revision);
+  });
+}
+
+async function requiredTranscript(
   context: EngineContext,
   transcriptId: string,
   revision?: string,
-): Transcript {
+): Promise<Transcript> {
+  const row = requiredTranscriptRow(context, transcriptId, revision);
+  return transcriptFromRow(context, row, revision);
+}
+
+function requiredTranscriptRow(
+  context: EngineContext,
+  transcriptId: string,
+  revision?: string,
+): TranscriptRow {
   assertUuidV7(transcriptId, "Transcript ID");
   const transcriptSource = revision
     ? "dolt_at_transcripts(?)"
@@ -289,13 +376,13 @@ function requiredTranscript(
         : `Transcript not found: ${transcriptId}`,
     });
   }
-  return transcriptFromRow(context, row, revision);
+  return row;
 }
 
-function listTranscripts(
+async function listTranscripts(
   context: EngineContext,
   artifact?: string,
-): Transcript[] {
+): Promise<Transcript[]> {
   const artifactId = artifact
     ? context.artifactRow(artifact).artifact_id
     : undefined;
@@ -313,21 +400,128 @@ function listTranscripts(
            ORDER BY artifact_id, created_at, transcript_id`,
         )
         .all() as unknown as TranscriptRow[]);
-  return rows.map((row) => transcriptFromRow(context, row));
+  const transcripts: Transcript[] = [];
+  for (const row of rows) {
+    transcripts.push(await transcriptFromRow(context, row));
+  }
+  return transcripts;
 }
 
-function transcriptFromRow(
+async function transcriptFromRow(
   context: EngineContext,
   row: TranscriptRow,
   revision?: string,
-): Transcript {
+): Promise<Transcript> {
+  // A forgotten payload surfaces through the shared OBJECT_UNAVAILABLE
+  // mapping ("Object unavailable: <hash>"); the row itself stays readable
+  // as a tombstone of hash + size via the objects table.
+  const payload = await readTranscriptPayload(context, row.payload_hash);
+  const textBySegment = new Map<string, TranscriptPayload["segments"][number]>();
+  const textByWord = new Map<string, { text: string }>();
+  for (const segment of payload.segments) {
+    textBySegment.set(segment.segmentId, segment);
+    for (const word of segment.words) textByWord.set(word.wordId, word);
+  }
+  const segments = structuralSegments(context, row.transcript_id, revision);
+  const stream = requiredStreamRow(context, row.stream_id, revision);
+  return {
+    transcriptId: row.transcript_id,
+    artifactId: row.artifact_id,
+    streamId: row.stream_id,
+    objectHash: row.object_hash,
+    payloadHash: row.payload_hash,
+    language: row.language,
+    ...(row.provider ? { provider: row.provider } : {}),
+    ...(row.model ? { model: row.model } : {}),
+    revision: revision ?? context.store.head,
+    segments: segments.map((segment) =>
+      segmentFromStructure(
+        segment,
+        row,
+        stream,
+        requiredPayloadText(textBySegment, segment.segmentId, "segment"),
+        textByWord,
+      ),
+    ),
+    createdAt: row.created_at,
+  };
+}
+
+function requiredPayloadText<T extends { text: string }>(
+  texts: Map<string, T>,
+  id: string,
+  label: string,
+): T {
+  const entry = texts.get(id);
+  if (!entry) {
+    throw new EngineFault({
+      code: "STORAGE_ERROR",
+      message: `Transcript payload has no text for ${label} ${id}`,
+    });
+  }
+  return entry;
+}
+
+async function readTranscriptPayload(
+  context: EngineContext,
+  payloadHash: string,
+): Promise<TranscriptPayload> {
+  const buffer = await context.objects.read(payloadHash);
+  let payload: TranscriptPayload;
+  try {
+    payload = JSON.parse(buffer.toString("utf8")) as TranscriptPayload;
+  } catch {
+    throw new EngineFault({
+      code: "STORAGE_ERROR",
+      message: `Transcript payload is not valid JSON: ${payloadHash}`,
+    });
+  }
+  if (payload.version !== 1 || !Array.isArray(payload.segments)) {
+    throw new EngineFault({
+      code: "STORAGE_ERROR",
+      message: `Transcript payload has an unsupported shape: ${payloadHash}`,
+    });
+  }
+  return payload;
+}
+
+function transcriptPayload(segments: NormalizedSegment[]): string {
+  const payload: TranscriptPayload = { version: 1, segments };
+  return canonicalJson(payload);
+}
+
+interface StructuralWord {
+  wordId: string;
+  ordinal: number;
+  startTick: number;
+  durationTicks: number;
+  confidence: number | null;
+  corrected: boolean;
+}
+
+interface StructuralSegment {
+  segmentId: string;
+  ordinal: number;
+  startTick: number;
+  durationTicks: number;
+  speaker: string | null;
+  confidence: number | null;
+  kind: TranscriptSegmentKind;
+  words: StructuralWord[];
+}
+
+function structuralSegments(
+  context: EngineContext,
+  transcriptId: string,
+  revision?: string,
+): StructuralSegment[] {
   const segmentSource = revision
     ? "dolt_at_transcript_segments(?)"
     : "transcript_segments";
   const wordSource = revision
     ? "dolt_at_transcript_words(?)"
     : "transcript_words";
-  const params = revision ? [revision, row.transcript_id] : [row.transcript_id];
+  const params = revision ? [revision, transcriptId] : [transcriptId];
   const segments = context.store.db
     .prepare(
       `${SEGMENT_SELECT} FROM ${segmentSource}
@@ -335,8 +529,8 @@ function transcriptFromRow(
     )
     .all(...params) as unknown as SegmentRow[];
   const wordParams = revision
-    ? [revision, revision, row.transcript_id]
-    : [row.transcript_id];
+    ? [revision, revision, transcriptId]
+    : [transcriptId];
   const words = context.store.db
     .prepare(
       `${WORD_SELECT} FROM ${wordSource}
@@ -347,33 +541,29 @@ function transcriptFromRow(
        ORDER BY segment_id, ordinal, word_id`,
     )
     .all(...wordParams) as unknown as WordRow[];
-  const wordsBySegment = new Map<string, TranscriptWord[]>();
+  const wordsBySegment = new Map<string, StructuralWord[]>();
   for (const word of words) {
     const values = wordsBySegment.get(word.segment_id) ?? [];
-    values.push(wordFromRow(word));
+    values.push({
+      wordId: word.word_id,
+      ordinal: word.ordinal,
+      startTick: word.start_tick,
+      durationTicks: word.duration_ticks,
+      confidence: word.confidence,
+      corrected: word.corrected === 1,
+    });
     wordsBySegment.set(word.segment_id, values);
   }
-  const stream = requiredStreamRow(context, row.stream_id, revision);
-  return {
-    transcriptId: row.transcript_id,
-    artifactId: row.artifact_id,
-    streamId: row.stream_id,
-    objectHash: row.object_hash,
-    language: row.language,
-    ...(row.provider ? { provider: row.provider } : {}),
-    ...(row.model ? { model: row.model } : {}),
-    revision: revision ?? context.store.head,
-    segments: segments.map((segment) =>
-      segmentFromRow(
-        segment,
-        row.stream_id,
-        row.object_hash,
-        stream,
-        wordsBySegment.get(segment.segment_id) ?? [],
-      ),
-    ),
-    createdAt: row.created_at,
-  };
+  return segments.map((segment) => ({
+    segmentId: segment.segment_id,
+    ordinal: segment.ordinal,
+    startTick: segment.start_tick,
+    durationTicks: segment.duration_ticks,
+    speaker: segment.speaker,
+    confidence: segment.confidence,
+    kind: segment.kind,
+    words: wordsBySegment.get(segment.segment_id) ?? [],
+  }));
 }
 
 function normalizeSegments(
@@ -467,17 +657,19 @@ function insertSegments(
   transcriptId: string,
   segments: NormalizedSegment[],
 ): void {
+  // Only structure is versioned; segment and word text lives in the CAS
+  // payload object named by transcripts.payload_hash.
   const insertSegment = context.store.db.prepare(
     `INSERT INTO transcript_segments(
       segment_id, transcript_id, ordinal, start_tick, duration_ticks,
-      speaker, text, confidence, kind
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      speaker, confidence, kind
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   const insertWord = context.store.db.prepare(
     `INSERT INTO transcript_words(
       word_id, segment_id, ordinal, start_tick, duration_ticks,
-      text, confidence, corrected
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      confidence, corrected
+    ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
   );
   for (const segment of segments) {
     insertSegment.run(
@@ -487,7 +679,6 @@ function insertSegments(
       segment.startTick,
       segment.durationTicks,
       segment.speaker ?? null,
-      segment.text,
       segment.confidence ?? null,
       segment.kind,
     );
@@ -498,7 +689,6 @@ function insertSegments(
         word.ordinal,
         word.startTick,
         word.durationTicks,
-        word.text,
         word.confidence ?? null,
         word.corrected ? 1 : 0,
       );
@@ -532,43 +722,55 @@ function requiredStreamRow(
   return row;
 }
 
-function segmentFromRow(
-  row: SegmentRow,
-  streamIdValue: string,
-  objectHash: string,
+function segmentFromStructure(
+  structure: StructuralSegment,
+  row: TranscriptRow,
   stream: StreamRow,
-  words: TranscriptWord[],
+  payloadSegment: { text: string },
+  textByWord: Map<string, { text: string }>,
 ): TranscriptSegment {
   return {
-    segmentId: row.segment_id,
-    ordinal: row.ordinal,
+    segmentId: structure.segmentId,
+    ordinal: structure.ordinal,
     range: {
-      streamId: streamIdValue,
-      objectHash,
-      startTick: row.start_tick,
-      durationTicks: row.duration_ticks,
+      streamId: row.stream_id,
+      objectHash: row.object_hash,
+      startTick: structure.startTick,
+      durationTicks: structure.durationTicks,
       timeBase: {
         numerator: stream.time_base_numerator,
         denominator: stream.time_base_denominator,
       },
     },
-    ...(row.speaker ? { speaker: row.speaker } : {}),
-    text: row.text,
-    ...(row.confidence === null ? {} : { confidence: row.confidence }),
-    kind: row.kind,
-    words,
+    ...(structure.speaker ? { speaker: structure.speaker } : {}),
+    text: payloadSegment.text,
+    ...(structure.confidence === null
+      ? {}
+      : { confidence: structure.confidence }),
+    kind: structure.kind,
+    words: structure.words.map((word) =>
+      wordFromStructure(
+        word,
+        requiredPayloadText(textByWord, word.wordId, "word"),
+      ),
+    ),
   };
 }
 
-function wordFromRow(row: WordRow): TranscriptWord {
+function wordFromStructure(
+  structure: StructuralWord,
+  payloadWord: { text: string },
+): TranscriptWord {
   return {
-    wordId: row.word_id,
-    ordinal: row.ordinal,
-    startTick: row.start_tick,
-    durationTicks: row.duration_ticks,
-    text: row.text,
-    ...(row.confidence === null ? {} : { confidence: row.confidence }),
-    corrected: row.corrected === 1,
+    wordId: structure.wordId,
+    ordinal: structure.ordinal,
+    startTick: structure.startTick,
+    durationTicks: structure.durationTicks,
+    text: payloadWord.text,
+    ...(structure.confidence === null
+      ? {}
+      : { confidence: structure.confidence }),
+    corrected: structure.corrected,
   };
 }
 
@@ -599,12 +801,12 @@ function safeIntegerAtLeast(value: number, minimum: number, label: string): void
 
 const TRANSCRIPT_SELECT = `
   SELECT transcript_id, artifact_id, stream_id, object_hash,
-         language, provider, model, created_at`;
+         payload_hash, language, provider, model, created_at`;
 
 const SEGMENT_SELECT = `
   SELECT segment_id, ordinal, start_tick, duration_ticks,
-         speaker, text, confidence, kind`;
+         speaker, confidence, kind`;
 
 const WORD_SELECT = `
   SELECT word_id, segment_id, ordinal, start_tick, duration_ticks,
-         text, confidence, corrected`;
+         confidence, corrected`;

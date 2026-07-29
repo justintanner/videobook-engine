@@ -147,7 +147,7 @@ describe("v5 semantic media model", () => {
     ]);
     expect(
       value(
-        engine.transcripts.getAtRevision(
+        await engine.transcripts.getAtRevision(
           transcript.transcriptId,
           transcript.revision,
         ),

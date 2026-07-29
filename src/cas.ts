@@ -4,6 +4,7 @@ import {
   constants,
   copyFile,
   mkdir,
+  readdir,
   readFile,
   rename,
   rm,
@@ -22,6 +23,15 @@ export interface StoredObject {
   path: string;
 }
 
+/**
+ * Local content-addressed store with an optional remote ContentStore.
+ *
+ * Objects are content-immutable (a hash always names the same bytes) but no
+ * longer undeletable: `deleteLocal` and `unpublish` support the forgettable
+ * data policy. Deleting an object that versioned rows still reference turns
+ * those rows into tombstones — the `objects` table keeps hash + size and
+ * reads surface OBJECT_UNAVAILABLE through `ensureLocal`.
+ */
 export class ObjectStore {
   readonly root: string;
   readonly prefix: string;
@@ -117,6 +127,58 @@ export class ObjectStore {
   pathFor(hash: string): string {
     validateHash(hash);
     return path.join(this.root, hash.slice(0, 2), hash);
+  }
+
+  /**
+   * Removes the local copy of an object. Returns whether a local file was
+   * actually removed; deleting an object that is not stored locally is not
+   * an error.
+   */
+  async deleteLocal(hash: string): Promise<boolean> {
+    const destination = this.pathFor(hash);
+    try {
+      await rm(destination);
+      return true;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+      throw error;
+    }
+  }
+
+  /**
+   * Unpublishes an object from the remote content store. Returns whether a
+   * remote object was deleted. Without a configured remote this is a no-op.
+   */
+  async unpublish(hash: string): Promise<boolean> {
+    if (!this.remote) return false;
+    const key = this.keyFor(hash);
+    const current = await this.remote.head(key);
+    if (!current.exists) return false;
+    await this.remote.delete(key);
+    return true;
+  }
+
+  /**
+   * Lists every object hash stored locally, including stray files that have
+   * no `objects` row (for example leftovers from an interrupted import).
+   */
+  async listLocal(): Promise<string[]> {
+    const hashes: string[] = [];
+    let fanout: string[];
+    try {
+      fanout = await readdir(this.root);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+      throw error;
+    }
+    for (const directory of fanout.sort()) {
+      if (!/^[a-f0-9]{2}$/.test(directory)) continue;
+      const entries = await readdir(path.join(this.root, directory));
+      for (const entry of entries.sort()) {
+        if (/^[a-f0-9]{64}$/.test(entry)) hashes.push(entry);
+      }
+    }
+    return hashes;
   }
 
   keyFor(hash: string): string {

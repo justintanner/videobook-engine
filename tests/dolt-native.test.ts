@@ -153,6 +153,9 @@ function fileContentStore(root: string): ContentStore {
       await mkdir(path.dirname(destinationPath), { recursive: true });
       await copyFile(path.join(root, key), destinationPath);
     },
+    async delete(key) {
+      await rm(path.join(root, key), { force: true });
+    },
   };
 }
 
@@ -230,9 +233,9 @@ describe("single-book Dolt engine", () => {
     suppliedAgain.close();
   });
 
-  it("creates the exact normalized v15 semantic and runtime schema", async () => {
+  it("creates the exact normalized v16 semantic and runtime schema", async () => {
     const { engine, dataDir } = await setup();
-    expect(SCHEMA_VERSION).toBe(15);
+    expect(SCHEMA_VERSION).toBe(16);
     engine.close();
 
     const db = new DatabaseSync(path.join(dataDir, "videobook.db"));
@@ -305,6 +308,9 @@ describe("single-book Dolt engine", () => {
     ]);
     expect(columns("timeline_audio")).toContain("order_key");
     expect(columns("transcripts")).toContain("object_hash");
+    expect(columns("transcripts")).toContain("payload_hash");
+    expect(columns("transcript_segments")).not.toContain("text");
+    expect(columns("transcript_words")).not.toContain("text");
     expect(columns("sequences")).toContain("frame_rate_numerator");
     expect(columns("sequence_clips")).toContain("source_duration_ticks");
     expect(columns("caption_cues")).toContain("transcript_revision");
@@ -316,7 +322,7 @@ describe("single-book Dolt engine", () => {
       (db
         .prepare("SELECT version FROM engine_schema WHERE singleton=1")
         .get() as { version: number }).version,
-    ).toBe(15);
+    ).toBe(16);
     expect(
       db
         .prepare(

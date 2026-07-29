@@ -13,7 +13,7 @@ import type {
 } from "./mvp-time.js";
 
 export const MVP_CONTRACT_VERSION = 1 as const;
-export const MVP_SCHEMA_VERSION = 15 as const;
+export const MVP_SCHEMA_VERSION = 16 as const;
 export const MVP_LEGACY_SCHEMA_VERSION = 4 as const;
 export const MVP_PREVIOUS_SCHEMA_VERSION = 5 as const;
 
@@ -114,6 +114,14 @@ export interface Transcript {
   artifactId: string;
   streamId: string;
   objectHash: string;
+  /**
+   * SHA-256 of the CAS object holding the segment/word text payload. Bulk
+   * transcript text lives behind this hash so it can be forgotten by object
+   * deletion; the versioned rows keep only structure (IDs, ticks, speaker,
+   * confidence, kind). Reads of a transcript whose payload object was
+   * deleted surface OBJECT_UNAVAILABLE.
+   */
+  payloadHash: string;
   language: string;
   provider?: string;
   model?: string;
