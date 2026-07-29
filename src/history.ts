@@ -15,6 +15,7 @@ import {
 import { artifactSlug } from "./artifacts.js";
 import { materializeArtifact } from "./files.js";
 import { assertUuidV7, isUuidV7, newUuidV7 } from "./ids.js";
+import { SEMANTIC_TABLES } from "./schema.js";
 import {
   canonicalJson,
   type CommitOperation,
@@ -29,106 +30,9 @@ interface MetadataSnapshotRow {
   value_json: string;
 }
 
-interface ArtifactMetadataSnapshotRow extends MetadataSnapshotRow {
-  artifact_id: string;
-}
-
 interface WaveformSnapshotRow {
   artifact_id?: string;
   peaks_json: string;
-}
-
-interface EntitySnapshotRow {
-  entity_id: string;
-  type: string;
-  name: string;
-  description: string | null;
-  prompt: string | null;
-  data_json: string;
-  created_at: number;
-}
-
-interface NotebookSnapshotRow {
-  notebook_id: string;
-  name: string;
-  properties_json: string;
-  created_at: number;
-}
-
-interface NotebookCellSnapshotRow {
-  notebook_id: string;
-  cell_id: string;
-  type: string;
-  slug: string;
-  grid_row: number;
-  grid_column: number;
-  output_entity_id: string | null;
-  prompt: string | null;
-  provider: string | null;
-  model: string | null;
-  operation: string | null;
-  tool: string | null;
-  inputs_json: string;
-  output_artifact_id: string | null;
-}
-
-interface NotebookEdgeSnapshotRow {
-  notebook_id: string;
-  edge_id: string;
-  source_cell_id: string;
-  target_cell_id: string;
-  target_input: string;
-}
-
-interface NotebookRunSnapshotRow {
-  run_id: string;
-  notebook_id: string;
-  status: string;
-  started_at: number;
-  completed_at: number;
-  cell_order_json: string;
-  outputs_json: string;
-  error: string | null;
-}
-
-interface TimelineSnapshotRow {
-  book_id: string;
-  render: string;
-}
-
-interface TimelineSlotSnapshotRow {
-  slot_id: string;
-  artifact_id: string;
-  order_key: string;
-  volume: number | null;
-  audio_fade_in: number | null;
-  audio_fade_out: number | null;
-}
-
-interface TimelineAudioSnapshotRow {
-  audio_id: string;
-  artifact_id: string;
-  order_key: string;
-  start_frame: number;
-  duration_frames: number;
-  volume: number | null;
-  fade_in: number | null;
-  fade_out: number | null;
-}
-
-interface PromptSnapshotRow {
-  prompt_id: string;
-  surface: string;
-  prompt: string;
-  context_json: string;
-  created_at: number;
-}
-
-interface MessageSnapshotRow {
-  message_id: string;
-  role: string;
-  body_json: string;
-  created_at: number;
 }
 
 interface ArtifactFileSnapshotRow {
@@ -486,101 +390,6 @@ async function restoreBook(
       )
       .all(revision.hash) as unknown as HistoricalArtifactRow[];
     const targetIds = targetArtifacts.map((row) => row.artifact_id);
-    const targetFiles = rowsForArtifactIds<ArtifactFileSnapshotRow>(
-      context,
-      "artifact_files",
-      "artifact_id, path, object_hash, created_at",
-      revision.hash,
-      targetIds,
-    );
-    const bookMetadata = context.store.db
-      .prepare(
-        "SELECT key, value_json FROM dolt_at_book_metadata(?)",
-      )
-      .all(revision.hash) as unknown as MetadataSnapshotRow[];
-    const artifactMetadata = rowsForArtifactIds<ArtifactMetadataSnapshotRow>(
-      context,
-      "artifact_metadata",
-      "artifact_id, key, value_json",
-      revision.hash,
-      targetIds,
-    );
-    const waveforms = rowsForArtifactIds<WaveformSnapshotRow>(
-      context,
-      "audio_waveforms",
-      "artifact_id, peaks_json",
-      revision.hash,
-      targetIds,
-    );
-    const entities = context.store.db
-      .prepare(
-        `SELECT entity_id, type, name, description, prompt,
-                data_json, created_at
-         FROM dolt_at_entities(?)`,
-      )
-      .all(revision.hash) as unknown as EntitySnapshotRow[];
-    const notebooks = context.store.db
-      .prepare(
-        `SELECT notebook_id, name, properties_json, created_at
-         FROM dolt_at_notebooks(?)`,
-      )
-      .all(revision.hash) as unknown as NotebookSnapshotRow[];
-    const notebookIds = notebooks.map((row) => row.notebook_id);
-    const notebookCells = rowsForNotebookIds<NotebookCellSnapshotRow>(
-      context,
-      "cells",
-      `notebook_id, cell_id, type, slug, grid_row, grid_column,
-       output_entity_id, prompt, provider, model, operation, tool,
-       inputs_json, output_artifact_id`,
-      revision.hash,
-      notebookIds,
-    );
-    const notebookEdges = rowsForNotebookIds<NotebookEdgeSnapshotRow>(
-      context,
-      "edges",
-      "notebook_id, edge_id, source_cell_id, target_cell_id, target_input",
-      revision.hash,
-      notebookIds,
-    );
-    const notebookRuns = rowsForNotebookIds<NotebookRunSnapshotRow>(
-      context,
-      "runs",
-      `run_id, notebook_id, status, started_at, completed_at,
-       cell_order_json, outputs_json, error`,
-      revision.hash,
-      notebookIds,
-    );
-    const timeline = context.store.db
-      .prepare(
-        "SELECT book_id, render FROM dolt_at_timeline(?)",
-      )
-      .get(revision.hash) as unknown as TimelineSnapshotRow | undefined;
-    const timelineSlots = context.store.db
-      .prepare(
-        `SELECT slot_id, artifact_id, order_key, volume,
-                audio_fade_in, audio_fade_out
-         FROM dolt_at_timeline_slots(?)`,
-      )
-      .all(revision.hash) as unknown as TimelineSlotSnapshotRow[];
-    const timelineAudio = context.store.db
-      .prepare(
-        `SELECT audio_id, artifact_id, order_key, start_frame, duration_frames,
-                volume, fade_in, fade_out
-         FROM dolt_at_timeline_audio(?)`,
-      )
-      .all(revision.hash) as unknown as TimelineAudioSnapshotRow[];
-    const prompts = context.store.db
-      .prepare(
-        `SELECT prompt_id, surface, prompt, context_json, created_at
-         FROM dolt_at_prompt_entries(?)`,
-      )
-      .all(revision.hash) as unknown as PromptSnapshotRow[];
-    const messages = context.store.db
-      .prepare(
-        `SELECT message_id, role, body_json, created_at
-         FROM dolt_at_messages(?)`,
-      )
-      .all(revision.hash) as unknown as MessageSnapshotRow[];
     const currentArtifactIds = context.store.db
       .prepare("SELECT artifact_id FROM artifacts")
       .all()
@@ -593,155 +402,7 @@ async function restoreBook(
         writeSet: ["book"],
       },
       (_operationId, now) => {
-        context.store.db.prepare("DELETE FROM timeline_slots").run();
-        context.store.db.prepare("DELETE FROM timeline_audio").run();
-        context.store.db.prepare("DELETE FROM edges").run();
-        context.store.db.prepare("DELETE FROM runs").run();
-        context.store.db.prepare("DELETE FROM cells").run();
-        context.store.db.prepare("DELETE FROM notebooks").run();
-        context.store.db.prepare("DELETE FROM artifact_metadata").run();
-        context.store.db.prepare("DELETE FROM audio_waveforms").run();
-        context.store.db.prepare("DELETE FROM artifact_files").run();
-        context.store.db.prepare("DELETE FROM entities").run();
-        context.store.db.prepare("DELETE FROM artifacts").run();
-
-        context.store.db
-          .prepare("UPDATE book SET slug=?, created_at=? WHERE book_id=?")
-          .run(targetBook.slug, targetBook.created_at, targetBook.book_id);
-        const insertArtifact = context.store.db.prepare(
-          `INSERT INTO artifacts(artifact_id, slug, kind, created_at)
-           VALUES (?, ?, ?, ?)`,
-        );
-        for (const row of targetArtifacts) {
-          insertArtifact.run(
-            row.artifact_id,
-            row.slug,
-            row.kind,
-            row.created_at,
-          );
-        }
-
-        insertFiles(context, targetFiles);
-        const insertArtifactMetadata = context.store.db.prepare(
-          `INSERT INTO artifact_metadata(artifact_id, key, value_json)
-           VALUES (?, ?, ?)`,
-        );
-        for (const row of artifactMetadata) {
-          insertArtifactMetadata.run(
-            row.artifact_id,
-            row.key,
-            row.value_json,
-          );
-        }
-        const insertWaveform = context.store.db.prepare(
-          `INSERT INTO audio_waveforms(artifact_id, peaks_json)
-           VALUES (?, ?)`,
-        );
-        for (const row of waveforms) {
-          if (!row.artifact_id) continue;
-          insertWaveform.run(row.artifact_id, row.peaks_json);
-        }
-
-        context.store.db.prepare("DELETE FROM book_metadata").run();
-        const insertBookMetadata = context.store.db.prepare(
-          "INSERT INTO book_metadata(key, value_json) VALUES (?, ?)",
-        );
-        for (const row of bookMetadata) {
-          insertBookMetadata.run(row.key, row.value_json);
-        }
-
-        const insertEntity = context.store.db.prepare(
-          `INSERT INTO entities(
-            entity_id, type, name, description, prompt, data_json, created_at
-          ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-        );
-        for (const row of entities) {
-          insertEntity.run(
-            row.entity_id,
-            row.type,
-            row.name,
-            row.description,
-            row.prompt,
-            row.data_json,
-            row.created_at,
-          );
-        }
-
-        const insertNotebook = context.store.db.prepare(
-          `INSERT INTO notebooks(
-            notebook_id, name, properties_json, created_at
-          ) VALUES (?, ?, ?, ?)`,
-        );
-        for (const row of notebooks) {
-          insertNotebook.run(
-            row.notebook_id,
-            row.name,
-            row.properties_json,
-            row.created_at,
-          );
-        }
-        insertNotebookChildren(context, notebookCells, notebookEdges, notebookRuns);
-
-        context.store.db
-          .prepare("UPDATE timeline SET render=? WHERE book_id=?")
-          .run(timeline?.render ?? "landscape", targetBook.book_id);
-        const insertSlot = context.store.db.prepare(
-          `INSERT INTO timeline_slots(
-            slot_id, artifact_id, order_key, volume, audio_fade_in, audio_fade_out
-          ) VALUES (?, ?, ?, ?, ?, ?)`,
-        );
-        for (const row of timelineSlots) {
-          insertSlot.run(
-            row.slot_id,
-            row.artifact_id,
-            row.order_key,
-            row.volume,
-            row.audio_fade_in,
-            row.audio_fade_out,
-          );
-        }
-        const insertAudio = context.store.db.prepare(
-          `INSERT INTO timeline_audio(
-            audio_id, artifact_id, order_key, start_frame, duration_frames,
-            volume, fade_in, fade_out
-          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-        );
-        for (const row of timelineAudio) {
-          insertAudio.run(
-            row.audio_id,
-            row.artifact_id,
-            row.order_key,
-            row.start_frame,
-            row.duration_frames,
-            row.volume,
-            row.fade_in,
-            row.fade_out,
-          );
-        }
-
-        context.store.db.prepare("DELETE FROM prompt_entries").run();
-        const insertPrompt = context.store.db.prepare(
-          `INSERT INTO prompt_entries(
-            prompt_id, surface, prompt, context_json, created_at
-          ) VALUES (?, ?, ?, ?, ?)`,
-        );
-        for (const row of prompts) {
-          insertPrompt.run(
-            row.prompt_id,
-            row.surface,
-            row.prompt,
-            row.context_json,
-            row.created_at,
-          );
-        }
-        context.store.db.prepare("DELETE FROM messages").run();
-        const insertMessage = context.store.db.prepare(
-          `INSERT INTO messages(message_id, role, body_json, created_at)
-           VALUES (?, ?, ?, ?)`,
-        );
-        for (const row of messages) {
-          insertMessage.run(row.message_id, row.role, row.body_json, row.created_at);
-        }
+        reloadSemanticTables(context, revision.hash);
 
         abortActiveJobs(context, now, "Book restored");
         context.store.db
@@ -774,6 +435,44 @@ async function restoreBook(
     }
     return ok(revisionForHash(context, mutation.revision), mutation.revision);
   });
+}
+
+/**
+ * Restore is mechanical: every semantic table is reloaded from its
+ * `dolt_at_<table>` projection at the target revision, so the resulting
+ * state is exactly the state that revision recorded and no hand-maintained
+ * table list can drift. `SEMANTIC_TABLES` is ordered parent-before-child,
+ * so deleting in reverse order and reinserting in forward order satisfies
+ * foreign keys; columns come from `PRAGMA table_info`, not per-table code.
+ * Reinserted rows identical to HEAD produce no diff, so unchanged tables
+ * are never staged by the surrounding commit.
+ */
+function reloadSemanticTables(context: EngineContext, revision: string): void {
+  const db = context.store.db;
+  const snapshots = SEMANTIC_TABLES.map((table) => {
+    const columns = (
+      db.prepare(`PRAGMA table_info(${table})`).all() as unknown as Array<{
+        name: string;
+      }>
+    ).map((column) => column.name);
+    const rows = db
+      .prepare(`SELECT * FROM dolt_at_${table}(?)`)
+      .all(revision) as unknown as Array<Record<string, unknown>>;
+    return { table, columns, rows };
+  });
+  for (const { table } of [...snapshots].reverse()) {
+    db.prepare(`DELETE FROM ${table}`).run();
+  }
+  for (const { table, columns, rows } of snapshots) {
+    if (rows.length === 0) continue;
+    const insert = db.prepare(
+      `INSERT INTO ${table}(${columns.join(", ")})
+       VALUES (${columns.map(() => "?").join(", ")})`,
+    );
+    for (const row of rows) {
+      insert.run(...columns.map((column) => row[column] ?? null));
+    }
+  }
 }
 
 async function logAction(
@@ -911,40 +610,6 @@ function filesAt(
     .all(revision, artifactId) as unknown as ArtifactFileSnapshotRow[];
 }
 
-function rowsForArtifactIds<T>(
-  context: EngineContext,
-  table: "artifact_files" | "artifact_metadata" | "audio_waveforms",
-  columns: string,
-  revision: string,
-  artifactIds: string[],
-): T[] {
-  if (artifactIds.length === 0) return [];
-  const placeholders = artifactIds.map(() => "?").join(", ");
-  return context.store.db
-    .prepare(
-      `SELECT ${columns} FROM dolt_at_${table}(?)
-       WHERE artifact_id IN (${placeholders})`,
-    )
-    .all(revision, ...artifactIds) as unknown as T[];
-}
-
-function rowsForNotebookIds<T>(
-  context: EngineContext,
-  table: "cells" | "edges" | "runs",
-  columns: string,
-  revision: string,
-  notebookIds: string[],
-): T[] {
-  if (notebookIds.length === 0) return [];
-  const placeholders = notebookIds.map(() => "?").join(", ");
-  return context.store.db
-    .prepare(
-      `SELECT ${columns} FROM dolt_at_${table}(?)
-       WHERE notebook_id IN (${placeholders})`,
-    )
-    .all(revision, ...notebookIds) as unknown as T[];
-}
-
 function insertFiles(
   context: EngineContext,
   files: ArtifactFileSnapshotRow[],
@@ -960,71 +625,6 @@ function insertFiles(
       row.path,
       row.object_hash,
       row.created_at,
-    );
-  }
-}
-
-function insertNotebookChildren(
-  context: EngineContext,
-  cells: NotebookCellSnapshotRow[],
-  edges: NotebookEdgeSnapshotRow[],
-  runs: NotebookRunSnapshotRow[],
-): void {
-  const insertCell = context.store.db.prepare(
-    `INSERT INTO cells(
-      notebook_id, cell_id, type, slug, grid_row, grid_column,
-      output_entity_id, prompt, provider, model, operation, tool,
-      inputs_json, output_artifact_id
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  );
-  for (const row of cells) {
-    insertCell.run(
-      row.notebook_id,
-      row.cell_id,
-      row.type,
-      row.slug,
-      row.grid_row,
-      row.grid_column,
-      row.output_entity_id,
-      row.prompt,
-      row.provider,
-      row.model,
-      row.operation,
-      row.tool,
-      row.inputs_json,
-      row.output_artifact_id,
-    );
-  }
-  const insertEdge = context.store.db.prepare(
-    `INSERT INTO edges(
-      notebook_id, edge_id, source_cell_id, target_cell_id, target_input
-    ) VALUES (?, ?, ?, ?, ?)`,
-  );
-  for (const row of edges) {
-    insertEdge.run(
-      row.notebook_id,
-      row.edge_id,
-      row.source_cell_id,
-      row.target_cell_id,
-      row.target_input,
-    );
-  }
-  const insertRun = context.store.db.prepare(
-    `INSERT INTO runs(
-      run_id, notebook_id, status, started_at, completed_at,
-      cell_order_json, outputs_json, error
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-  );
-  for (const row of runs) {
-    insertRun.run(
-      row.run_id,
-      row.notebook_id,
-      row.status,
-      row.started_at,
-      row.completed_at,
-      row.cell_order_json,
-      row.outputs_json,
-      row.error,
     );
   }
 }

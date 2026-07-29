@@ -28,7 +28,6 @@ import { EngineContext } from "./context.js";
 import { JobQueue } from "./job-queue.js";
 import { canonicalJson } from "./store.js";
 import { createSimilarityApi } from "./similarity.js";
-import { createTimelineApi } from "./timeline.js";
 import { createStreamsApi } from "./streams.js";
 import { createTranscriptsApi } from "./transcripts.js";
 import { createSequencesApi } from "./sequences.js";
@@ -46,7 +45,6 @@ export class Engine {
   readonly sequences;
   readonly edits;
   readonly temporalSearch;
-  readonly timeline;
   readonly entities;
   readonly notebooks;
   readonly prompts;
@@ -76,7 +74,6 @@ export class Engine {
     this.sequences = createSequencesApi(this.context);
     this.edits = createEditsApi(this.context);
     this.temporalSearch = createTemporalSearchApi(this.context);
-    this.timeline = createTimelineApi(this.context);
     this.entities = createEntitiesApi(this.context);
     this.notebooks = createNotebooksApi(this.context);
     this.prompts = createPromptsApi(this.context);

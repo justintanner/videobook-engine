@@ -1,4 +1,4 @@
-export const SCHEMA_VERSION = 16;
+export const SCHEMA_VERSION = 17;
 
 export const NOTEBOOK_CELL_TYPES = [
   "audio",
@@ -63,6 +63,10 @@ export const CELLS_TABLE_COLUMNS = [
   "output_artifact_id",
 ] as const;
 
+// The staging allowlist is also the restore table list: history.restore
+// reloads every table below from its dolt_at_* projection, deleting in
+// reverse order and inserting in forward order. Keep the list ordered
+// parent-before-child so the mechanical reload satisfies foreign keys.
 export const SEMANTIC_TABLES = [
   "engine_schema",
   "book",
@@ -89,9 +93,6 @@ export const SEMANTIC_TABLES = [
   "clip_transforms",
   "transitions",
   "caption_cues",
-  "timeline",
-  "timeline_slots",
-  "timeline_audio",
   "audio_waveforms",
   "prompt_entries",
   "messages",
@@ -559,33 +560,6 @@ export const SEMANTIC_SCHEMA_SQL = `
       )
     )
   );
-  CREATE TABLE IF NOT EXISTS timeline (
-    book_id TEXT PRIMARY KEY
-      REFERENCES book(book_id) ON DELETE CASCADE,
-    render TEXT NOT NULL DEFAULT 'landscape'
-      CHECK (render IN ('landscape','portrait','square'))
-  );
-
-  CREATE TABLE IF NOT EXISTS timeline_slots (
-    slot_id TEXT PRIMARY KEY,
-    artifact_id TEXT NOT NULL
-      REFERENCES artifacts(artifact_id) ON DELETE RESTRICT,
-    order_key TEXT NOT NULL,
-    volume REAL CHECK (volume IS NULL OR volume >= 0),
-    audio_fade_in REAL CHECK (audio_fade_in IS NULL OR audio_fade_in >= 0),
-    audio_fade_out REAL CHECK (audio_fade_out IS NULL OR audio_fade_out >= 0)
-  );
-  CREATE TABLE IF NOT EXISTS timeline_audio (
-    audio_id TEXT PRIMARY KEY,
-    artifact_id TEXT NOT NULL
-      REFERENCES artifacts(artifact_id) ON DELETE RESTRICT,
-    order_key TEXT NOT NULL,
-    start_frame INTEGER NOT NULL CHECK (start_frame >= 0),
-    duration_frames INTEGER NOT NULL CHECK (duration_frames > 0),
-    volume REAL CHECK (volume IS NULL OR volume >= 0),
-    fade_in REAL CHECK (fade_in IS NULL OR fade_in >= 0),
-    fade_out REAL CHECK (fade_out IS NULL OR fade_out >= 0)
-  );
   CREATE TABLE IF NOT EXISTS audio_waveforms (
     artifact_id TEXT PRIMARY KEY
       REFERENCES artifacts(artifact_id) ON DELETE CASCADE,
@@ -650,14 +624,6 @@ export const SEMANTIC_SCHEMA_SQL = `
     ON transitions(track_id, outgoing_clip_id, incoming_clip_id);
   CREATE INDEX IF NOT EXISTS caption_cues_timeline
     ON caption_cues(track_id, timeline_start_frame, cue_id);
-  CREATE INDEX IF NOT EXISTS timeline_slots_order
-    ON timeline_slots(order_key, slot_id);
-  CREATE INDEX IF NOT EXISTS timeline_slots_artifact
-    ON timeline_slots(artifact_id);
-  CREATE INDEX IF NOT EXISTS timeline_audio_order
-    ON timeline_audio(order_key, audio_id);
-  CREATE INDEX IF NOT EXISTS timeline_audio_artifact
-    ON timeline_audio(artifact_id);
   CREATE INDEX IF NOT EXISTS prompt_entries_lookup
     ON prompt_entries(surface, created_at, prompt_id);
   CREATE INDEX IF NOT EXISTS messages_created

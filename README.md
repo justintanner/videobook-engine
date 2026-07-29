@@ -63,9 +63,10 @@ import {
 The typed fixtures cover every P0 edit operation and the main cross-repository
 projections. The equivalent checked-in JSON fixture is exported as
 `videobook-engine/fixtures/v5`. Contract objects use rational, half-open media
-ranges and immutable object-hash-qualified stream references. The existing
-schema-v4 timeline and similarity APIs remain compatibility surfaces until
-they compile into schema-v5 sequence and temporal-search semantics.
+ranges and immutable object-hash-qualified stream references. The legacy
+schema-v4 timeline compiles into the sequences model at import; the schema-v4
+similarity API remains a compatibility surface until it compiles into
+temporal-search semantics.
 
 ## Storage model
 
@@ -86,21 +87,20 @@ versioned `runtime_%` ignore policy, and are never staged. Semantic surrogate
 identities are UUIDv7 values. Artifact slugs are human-facing names and can be
 reused after hard deletion; immutable CAS objects remain available to history.
 
-The current catalog format is schema version 14. It intentionally rejects
+The current catalog format is schema version 17. It intentionally rejects
 older catalogs rather than migrating them; create a fresh engine root.
 
-The 31 versioned semantic tables are `engine_schema`, `book`, `artifacts`,
+The 28 versioned semantic tables are `engine_schema`, `book`, `artifacts`,
 `objects`, `artifact_files`, `artifact_streams`, `book_metadata`,
 `artifact_metadata`, `entities`, `notebooks`, `cells`, `edges`, `runs`,
 `cell_references`, `pinned_search_results`, `transcripts`,
 `transcript_segments`, `transcript_words`, `sequences`, `sequence_tracks`,
 `sequence_clips`, `clip_links`, `clip_transforms`, `transitions`,
-`caption_cues`, `timeline`, `timeline_slots`, `timeline_audio`,
-`audio_waveforms`, `prompt_entries`, and `messages`. Dolt's versioned
-`dolt_ignore` configuration table carries the local-table policy. Provenance
-is the commit log itself: every semantic commit carries its operation,
-parameters, and write set in a structured commit message, authored by the
-configured engine identity.
+`caption_cues`, `audio_waveforms`, `prompt_entries`, and `messages`. Dolt's
+versioned `dolt_ignore` configuration table carries the local-table policy.
+Provenance is the commit log itself: every semantic commit carries its
+operation, parameters, and write set in a structured commit message, authored
+by the configured engine identity.
 
 The 14 local-only tables are `runtime_meta`, `runtime_jobs`,
 `runtime_resource_leases`, `runtime_object_publications`,
@@ -140,8 +140,8 @@ graphs remain available separately through `engine.notebooks`.
 - `engine.files` and `engine.workspaces` — immutable object-backed files and
   disposable materialization
 - `engine.metadata` — book metadata, artifact metadata, and audio waveforms
-- `engine.timeline` — typed timeline reads, revision reads, replacement, and
-  reset
+- `engine.sequences` and `engine.edits` — the sequence/track/clip timeline
+  model and its transactional edit operations
 - `engine.entities` and `engine.notebooks` — normalized characters, prompts,
   scenes, and notebook graph documents
 - `engine.prompts` and `engine.messages` — semantic prompt and message history
@@ -155,8 +155,8 @@ graphs remain available separately through `engine.notebooks`.
 All APIs operate in the engine's one book. No method accepts or returns a
 project ID.
 
-Deleting an artifact or entity that is referenced by a live cell or timeline
-row returns `IN_USE` with `details.references`. Deleting a notebook cascades
+Deleting an artifact or entity that is referenced by a live cell or clip
+returns `IN_USE` with `details.references`. Deleting a notebook cascades
 its owned cells, edges, and terminal runs. There are no tombstone rows.
 
 ## Revisions and restores
@@ -177,14 +177,16 @@ await engine.history.restore(revisions[0]!.hash);
 ```
 
 `restoreArtifact` keeps the artifact UUID stable and restores its files,
-metadata, and waveform as a new forward revision. `restore` replays the whole
-book snapshot forward: book metadata, artifacts and files, entities,
-notebooks, timeline, prompts, and messages. Runtime work is invalidated and
-active jobs are aborted during a restore.
+metadata, and waveform as a new forward revision. `restore` mechanically
+reloads every semantic table from its `dolt_at_*` projection at the target
+revision — book metadata, artifacts and files, entities, notebooks, sequences,
+prompts, messages, and the rest — so the restored state is exactly the state
+that revision recorded. Runtime work is invalidated and active jobs are
+aborted during a restore.
 
 ## Future forks
 
-Schema v14 prepares stable row identities and normalized merge boundaries for
+Schema v17 prepares stable row identities and normalized merge boundaries for
 DoltHub-native forks. A fork is a separate catalog copy in another namespace,
 keeps the same `bookId`, and can open a pull request against the upstream
 `main` branch. User, origin, fork, and pull-request APIs are intentionally not

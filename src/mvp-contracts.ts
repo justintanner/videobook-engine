@@ -13,7 +13,7 @@ import type {
 } from "./mvp-time.js";
 
 export const MVP_CONTRACT_VERSION = 1 as const;
-export const MVP_SCHEMA_VERSION = 16 as const;
+export const MVP_SCHEMA_VERSION = 17 as const;
 export const MVP_LEGACY_SCHEMA_VERSION = 4 as const;
 export const MVP_PREVIOUS_SCHEMA_VERSION = 5 as const;
 

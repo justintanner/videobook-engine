@@ -2,6 +2,7 @@ import type { EngineErrorCode } from "./engine-types.js";
 import {
   MVP_CONTRACT_COMPATIBILITY,
   MVP_CONTRACT_VERSION,
+  MVP_SCHEMA_VERSION,
   type ArtifactStream,
   type CaptionCue,
   type EditCommit,
@@ -529,7 +530,7 @@ const jobFailure: MvpJobFailure = {
 const migrationDryRun: V4MigrationDryRun = {
   contractVersion: MVP_CONTRACT_VERSION,
   sourceSchemaVersion: 4,
-  destinationSchemaVersion: 16,
+  destinationSchemaVersion: MVP_SCHEMA_VERSION,
   sourceBookId: "0197-book-v4",
   sourceHeadRevision: "dolt-v4-head",
   artifactCount: 8,

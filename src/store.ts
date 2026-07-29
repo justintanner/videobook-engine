@@ -252,11 +252,6 @@ export class DoltStore {
           "INSERT INTO book(book_id, slug, created_at) VALUES (?, ?, ?)",
         )
         .run(initialBook.bookId, initialBook.slug, now);
-      this.db
-        .prepare(
-          "INSERT INTO timeline(book_id, render) VALUES (?, 'landscape')",
-        )
-        .run(initialBook.bookId);
       this.initializePrimarySequence(initialBook.bookId, now);
       this.stageTables(SEMANTIC_TABLES);
       this.db

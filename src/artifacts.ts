@@ -398,22 +398,6 @@ function artifactReferences(
       id: `${cell.notebook_id}/${cell.cell_id}`,
     })),
   );
-  const slots = context.store.db
-    .prepare(
-      "SELECT slot_id FROM timeline_slots WHERE artifact_id=? ORDER BY slot_id",
-    )
-    .all(artifactId) as unknown as Array<{ slot_id: string }>;
-  references.push(
-    ...slots.map((slot) => ({ kind: "timeline.slot", id: slot.slot_id })),
-  );
-  const audio = context.store.db
-    .prepare(
-      "SELECT audio_id FROM timeline_audio WHERE artifact_id=? ORDER BY audio_id",
-    )
-    .all(artifactId) as unknown as Array<{ audio_id: string }>;
-  references.push(
-    ...audio.map((item) => ({ kind: "timeline.audio", id: item.audio_id })),
-  );
   return references;
 }
 

@@ -1,6 +1,6 @@
 /**
  * Fractional/lexicographic order keys for engine-maintained orderings
- * (timeline slots, timeline audio, sequence tracks).
+ * (sequence tracks).
  *
  * Format (compatible with the "fractional-indexing" key scheme):
  * - A key is an integer part followed by an optional fractional part.

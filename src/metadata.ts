@@ -9,7 +9,6 @@ import {
   resultOf,
 } from "./context.js";
 import { canonicalJson, parseJson } from "./store.js";
-import { EngineFault } from "./store.js";
 
 interface MetadataRow {
   value_json: string;
@@ -105,7 +104,7 @@ async function deleteBookMetadata(
   key: string,
 ): Promise<Result<boolean, EngineError>> {
   return resultOf(async () => {
-    const normalizedKey = bookMetadataKey(key);
+    const normalizedKey = metadataKey(key);
     const exists = context.store.db
       .prepare("SELECT 1 AS present FROM book_metadata WHERE key=?")
       .get(normalizedKey);
@@ -251,7 +250,7 @@ async function writeBookMetadata(
   value: unknown,
 ): Promise<Result<string, EngineError>> {
   return resultOf(async () => {
-    const normalizedKey = bookMetadataKey(key);
+    const normalizedKey = metadataKey(key);
     const mutation = await context.store.semantic(
       {
         operation: "write_book_metadata",
@@ -278,7 +277,7 @@ async function readBookMetadata<T>(
   key: string,
 ): Promise<Result<T, EngineError>> {
   return resultOf(async () => {
-    const normalizedKey = bookMetadataKey(key);
+    const normalizedKey = metadataKey(key);
     const row = context.store.db
       .prepare("SELECT value_json FROM book_metadata WHERE key=?")
       .get(normalizedKey) as unknown as MetadataRow | undefined;
@@ -335,18 +334,6 @@ async function readWaveform(
       peaks: parseJson<number[]>(row.peaks_json, []),
     };
   });
-}
-
-function bookMetadataKey(input: string): string {
-  const key = metadataKey(input);
-  if (key === "timeline") {
-    throw new EngineFault({
-      code: "INVALID_INPUT",
-      message:
-        'Book metadata key "timeline" is reserved; use engine.timeline instead',
-    });
-  }
-  return key;
 }
 
 function metadataKey(input: string): string {

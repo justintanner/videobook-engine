@@ -38,12 +38,10 @@ try {
     if (!manifest.ok) throw new Error(manifest.error.message);
     console.log(`Stored files: ${manifest.value.files.map((file) => file.name).join(", ")}`);
 
-    const timeline = await engine.timeline.set({
-      render: "landscape",
-      slots: [{ artifactId: script.artifactId }],
-      audio: [],
-    });
-    if (!timeline.ok) throw new Error(timeline.error.message);
+    const sequence = engine.sequences.getPrimary();
+    console.log(
+      `Primary sequence: ${sequence.name} (${sequence.width}x${sequence.height}, ${sequence.tracks.length} tracks)`,
+    );
 
     console.log("Recent revisions:");
     for (const revision of engine.history.revisions(5)) {

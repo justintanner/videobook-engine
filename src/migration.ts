@@ -46,7 +46,7 @@ interface ObjectRow {
 interface TimelineSlotRow {
   slot_id: string;
   artifact_id: string;
-  order_key: string;
+  ordinal: number;
   kind: string;
   source_path: string | null;
   object_hash: string | null;
@@ -64,7 +64,6 @@ const COPY_TABLES = [
   "artifact_metadata",
   "entities",
   "notebooks",
-  "timeline",
   "audio_waveforms",
   "prompt_entries",
   "messages",
@@ -231,13 +230,21 @@ export async function migrateV4(
         copyTable(sourceDatabase, destinationDatabase, table);
       }
     }
-    copyLegacyTimelineRows(sourceDatabase, destinationDatabase, "timeline_slots");
-    copyLegacyTimelineRows(sourceDatabase, destinationDatabase, "timeline_audio");
     destinationDatabase
       .prepare("UPDATE engine_schema SET version=? WHERE singleton=1")
       .run(MVP_SCHEMA_VERSION);
-    initializePrimarySequence(destinationDatabase, book.book_id);
-    convertStillTimelineSlots(destinationDatabase);
+    // The legacy timeline triple does not exist in the v17 schema: the
+    // timeline row only pins the primary sequence's render orientation, and
+    // still-image slots convert into clips on that sequence. Timed-media
+    // slots and timeline audio are dropped with a PROBE_REQUIRED dry-run
+    // warning because clip conversion needs a media probe the v4 import
+    // does not perform.
+    initializePrimarySequence(
+      destinationDatabase,
+      book.book_id,
+      sourceRender(sourceDatabase, book.book_id),
+    );
+    convertStillTimelineSlots(sourceDatabase, destinationDatabase);
     stageMigration(destinationDatabase);
     destinationDatabase.close();
     destinationDatabase = undefined;
@@ -418,7 +425,6 @@ function clearFreshDestination(database: DatabaseSync): void {
   database.exec(`
     DELETE FROM sequence_tracks;
     DELETE FROM sequences;
-    DELETE FROM timeline;
     DELETE FROM book;
   `);
 }
@@ -443,39 +449,6 @@ function copyTable(
   for (const row of rows) {
     insert.run(...shared.map((column) => row[column] ?? null));
   }
-}
-
-/**
- * Legacy dense integer ordinals become fractional order keys, assigned in
- * legacy (ordinal, id) order so the migrated ordering matches the source.
- */
-function copyLegacyTimelineRows(
-  source: DatabaseSync,
-  destination: DatabaseSync,
-  table: "timeline_slots" | "timeline_audio",
-): void {
-  const idColumn = table === "timeline_slots" ? "slot_id" : "audio_id";
-  const sourceColumns = columns(source, table);
-  const destinationColumns = new Set(columns(destination, table));
-  const shared = sourceColumns.filter(
-    (column) => column !== "ordinal" && destinationColumns.has(column),
-  );
-  if (shared.length === 0) return;
-  const rows = source
-    .prepare(
-      `SELECT ${shared.join(", ")} FROM ${table} ORDER BY ordinal, ${idColumn}`,
-    )
-    .all() as unknown as SqlRow[];
-  if (rows.length === 0) return;
-  const keys = initialOrderKeys(rows.length);
-  const placeholders = shared.map(() => "?").join(", ");
-  const insert = destination.prepare(
-    `INSERT INTO ${table}(${shared.join(", ")}, order_key)
-     VALUES (${placeholders}, ?)`,
-  );
-  rows.forEach((row, index) => {
-    insert.run(...shared.map((column) => row[column] ?? null), keys[index]);
-  });
 }
 
 function copyLegacyNotebooks(
@@ -516,14 +489,18 @@ function columns(database: DatabaseSync, table: string): string[] {
   ).map((column) => column.name);
 }
 
-function initializePrimarySequence(
-  database: DatabaseSync,
-  bookId: string,
-): void {
+function sourceRender(database: DatabaseSync, bookId: string): string {
   const timeline = database
     .prepare("SELECT render FROM timeline WHERE book_id=?")
     .get(bookId) as unknown as { render: string } | undefined;
-  const render = timeline?.render ?? "landscape";
+  return timeline?.render ?? "landscape";
+}
+
+function initializePrimarySequence(
+  database: DatabaseSync,
+  bookId: string,
+  render: string,
+): void {
   const [width, height] = render === "portrait"
     ? [1080, 1920]
     : render === "square"
@@ -567,30 +544,40 @@ function initializePrimarySequence(
   );
 }
 
-function convertStillTimelineSlots(database: DatabaseSync): void {
-  const sequence = database
+/**
+ * Legacy still-image timeline slots become clips on the primary sequence's
+ * first video track, laid out back to back in legacy (ordinal, slot_id)
+ * order. Timed media is not converted: the dry run flags every non-image
+ * slot with PROBE_REQUIRED because clip conversion needs media probing the
+ * import does not perform.
+ */
+function convertStillTimelineSlots(
+  source: DatabaseSync,
+  destination: DatabaseSync,
+): void {
+  const sequence = destination
     .prepare("SELECT sequence_id FROM sequences WHERE is_primary=1")
     .get() as unknown as { sequence_id: string };
-  const track = database
+  const track = destination
     .prepare(
       `SELECT track_id FROM sequence_tracks
        WHERE sequence_id=? AND kind='video'
        ORDER BY order_key, track_id LIMIT 1`,
     )
     .get(sequence.sequence_id) as unknown as { track_id: string };
-  const rows = database
+  const rows = source
     .prepare(
-      `SELECT s.slot_id, s.artifact_id, s.order_key, a.kind,
+      `SELECT s.slot_id, s.artifact_id, s.ordinal, a.kind,
               f.path AS source_path, f.object_hash
        FROM timeline_slots s
        JOIN artifacts a ON a.artifact_id=s.artifact_id
        LEFT JOIN artifact_files f ON f.artifact_id=a.artifact_id
        WHERE a.kind='image'
-       ORDER BY s.order_key, s.slot_id, f.path`,
+       ORDER BY s.ordinal, s.slot_id, f.path`,
     )
     .all() as unknown as TimelineSlotRow[];
   const seen = new Set<string>();
-  const insertClip = database.prepare(
+  const insertClip = destination.prepare(
     `INSERT INTO sequence_clips(
       clip_id, track_id, source_kind, artifact_id, source_path,
       stream_id, object_hash, source_start_tick, source_duration_ticks,
@@ -601,7 +588,7 @@ function convertStillTimelineSlots(database: DatabaseSync): void {
     ) VALUES (?, ?, 'still', ?, ?, NULL, ?, NULL, NULL, NULL, NULL,
       ?, 90, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, 1)`,
   );
-  const insertTransform = database.prepare(
+  const insertTransform = destination.prepare(
     `INSERT INTO clip_transforms(
       clip_id, fit, position_x, position_y, scale_x, scale_y,
       anchor_x, anchor_y, rotation_degrees, crop_top, crop_right,

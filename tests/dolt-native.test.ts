@@ -32,8 +32,6 @@ const MERGE_TABLES = [
   "notebooks",
   "cells",
   "prompt_entries",
-  "timeline",
-  "timeline_slots",
 ] as const;
 const MERGE_SCHEMA_SQL = `
   CREATE TABLE engine_schema (
@@ -87,18 +85,6 @@ const MERGE_SCHEMA_SQL = `
     prompt TEXT NOT NULL,
     context_json TEXT NOT NULL,
     created_at INTEGER NOT NULL
-  );
-  CREATE TABLE timeline (
-    book_id TEXT PRIMARY KEY,
-    render TEXT NOT NULL
-  );
-  CREATE TABLE timeline_slots (
-    slot_id TEXT PRIMARY KEY,
-    artifact_id TEXT NOT NULL,
-    order_key TEXT NOT NULL,
-    volume REAL,
-    audio_fade_in REAL,
-    audio_fade_out REAL
   );
 `;
 
@@ -233,9 +219,9 @@ describe("single-book Dolt engine", () => {
     suppliedAgain.close();
   });
 
-  it("creates the exact normalized v16 semantic and runtime schema", async () => {
+  it("creates the exact normalized v17 semantic and runtime schema", async () => {
     const { engine, dataDir } = await setup();
-    expect(SCHEMA_VERSION).toBe(16);
+    expect(SCHEMA_VERSION).toBe(17);
     engine.close();
 
     const db = new DatabaseSync(path.join(dataDir, "videobook.db"));
@@ -253,7 +239,7 @@ describe("single-book Dolt engine", () => {
     expect(tables).toEqual(
       [...SEMANTIC_TABLES, ...RUNTIME_TABLES].sort(),
     );
-    expect(tables).toHaveLength(54);
+    expect(tables).toHaveLength(51);
 
     const columns = (table: string) =>
       (
@@ -298,15 +284,6 @@ describe("single-book Dolt engine", () => {
     expect(columns("artifact_streams")).toContain("time_base_numerator");
     expect(columns("sequence_tracks")).toContain("order_key");
     expect(columns("sequence_tracks")).not.toContain("ordinal");
-    expect(columns("timeline_slots")).toEqual([
-      "slot_id",
-      "artifact_id",
-      "order_key",
-      "volume",
-      "audio_fade_in",
-      "audio_fade_out",
-    ]);
-    expect(columns("timeline_audio")).toContain("order_key");
     expect(columns("transcripts")).toContain("object_hash");
     expect(columns("transcripts")).toContain("payload_hash");
     expect(columns("transcript_segments")).not.toContain("text");
@@ -322,14 +299,15 @@ describe("single-book Dolt engine", () => {
       (db
         .prepare("SELECT version FROM engine_schema WHERE singleton=1")
         .get() as { version: number }).version,
-    ).toBe(16);
+    ).toBe(17);
     expect(
       db
         .prepare(
           `SELECT 1 AS present FROM sqlite_master
            WHERE name IN (
              'notebook_cells','notebook_edges','notebook_runs',
-             'timelines','artifact_events','runtime_engine_leases',
+             'timelines','timeline','timeline_slots','timeline_audio',
+             'artifact_events','runtime_engine_leases',
              'operations','actions','action_events','action_parents',
              'action_artifacts','action_write_set','edit_batches'
            )`,
@@ -406,90 +384,22 @@ describe("single-book Dolt engine", () => {
     db.close();
   });
 
-  it("round-trips the typed timeline with stable UUIDv7 row identities", async () => {
+  it("treats sequences as the single timeline model", async () => {
     const { engine } = await setup();
-    const video = value(
-      await engine.artifacts.create({ kind: "video", slug: "vid-timeline" }),
-    );
-    const audio = value(
-      await engine.artifacts.create({ kind: "audio", slug: "aud-score" }),
-    );
-    const written = await engine.timeline.set({
-      render: "portrait",
-      slots: [
-        {
-          artifact: video.slug,
-          volume: 0.8,
-          audioFadeIn: 3,
-          audioFadeOut: 4,
-        },
-      ],
-      audio: [
-        {
-          artifactId: audio.artifactId,
-          startFrame: 12,
-          durationFrames: 96,
-          volume: 0.5,
-          fadeIn: 2,
-          fadeOut: 5,
-        },
-      ],
-    });
-    const timeline = value(written);
-    expect(timeline).toMatchObject({
-      bookId: engine.book.get().bookId,
-      render: "portrait",
-      slots: [{ artifactId: video.artifactId }],
-      audio: [{ artifactId: audio.artifactId, startFrame: 12, durationFrames: 96 }],
-    });
-    expect(timeline.slots[0]?.id).toMatch(
-      /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
-    );
-    expect(timeline.audio[0]?.id).toMatch(
-      /^[0-9a-f]{8}-[0-9a-f]{4}-7[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/,
-    );
-    expect(engine.timeline.get()).toEqual(timeline);
-    if (!written.ok || !written.revision) throw new Error("missing timeline revision");
-
-    value(
-      await engine.timeline.set({
-        render: "landscape",
-        slots: timeline.slots.map((slot) => ({
-          id: slot.id,
-          artifactId: slot.artifactId,
-        })),
-        audio: [],
-      }),
-    );
-    expect(value(engine.timeline.getAtRevision(written.revision))).toEqual(
-      timeline,
-    );
-    expect(await engine.metadata.book.write("timeline", {})).toMatchObject({
-      ok: false,
-      error: { code: "INVALID_INPUT" },
-    });
-    expect(await engine.artifacts.delete(video.artifactId)).toMatchObject({
-      ok: false,
-      error: {
-        code: "IN_USE",
-        details: {
-          references: [{ kind: "timeline.slot", id: timeline.slots[0]?.id }],
-        },
-      },
-    });
-
-    const semanticHead = engine.head;
-    expect(
-      engine.settings.set("timeline.viewerOrientation", "portrait").ok,
-    ).toBe(true);
-    expect(engine.head).toBe(semanticHead);
-    expect(value(await engine.timeline.reset())).toEqual({
-      bookId: engine.book.get().bookId,
-      render: "landscape",
-      slots: [],
-      audio: [],
-    });
-    value(await engine.artifacts.delete(video.artifactId));
+    expect("timeline" in engine).toBe(false);
+    expect(SEMANTIC_TABLES).not.toContain("timeline");
+    expect(SEMANTIC_TABLES).not.toContain("timeline_slots");
+    expect(SEMANTIC_TABLES).not.toContain("timeline_audio");
+    const sequence = engine.sequences.getPrimary();
+    expect(sequence.tracks.map((track) => track.kind)).toEqual([
+      "audio",
+      "audio",
+      "audio",
+      "audio",
+      "caption",
+      "video",
+      "video",
+    ]);
     engine.close();
   });
 
@@ -637,17 +547,12 @@ describe("single-book Dolt engine", () => {
         '{}', 0
       )`,
     ).run(notebookId);
-    db.prepare(
-      "INSERT INTO timeline(book_id, render) VALUES (?, 'landscape')",
-    ).run(bookId);
     commitTables(db, [...MERGE_TABLES], "initial merge fixture");
 
     const leftCell = uuidv7();
     const rightCell = uuidv7();
     const leftPrompt = uuidv7();
     const rightPrompt = uuidv7();
-    const leftSlot = uuidv7();
-    const rightSlot = uuidv7();
 
     db.doltBranch("fork-left");
     db.doltCheckout("fork-left");
@@ -664,13 +569,9 @@ describe("single-book Dolt engine", () => {
         prompt_id, surface, prompt, context_json, created_at
       ) VALUES (?, 'merge', 'left', '{}', 1)`,
     ).run(leftPrompt);
-    db.prepare(
-      `INSERT INTO timeline_slots(slot_id, artifact_id, order_key)
-       VALUES (?, ?, 'a1')`,
-    ).run(leftSlot, leftArtifact);
     commitTables(
       db,
-      ["entities", "cells", "prompt_entries", "timeline_slots"],
+      ["entities", "cells", "prompt_entries"],
       "left fork",
     );
 
@@ -680,9 +581,9 @@ describe("single-book Dolt engine", () => {
     db.doltCheckout("fork-right");
     db.prepare("UPDATE entities SET name='Right fork' WHERE entity_id=?")
       .run(rightEntity);
-    // Both forks append at the same grid slot and the same timeline order
-    // key: positions are no longer unique, so the merge must keep both rows
-    // and order them deterministically by the row UUID tie-break.
+    // Both forks append at the same grid slot: positions are no longer
+    // unique, so the merge must keep both rows and order them
+    // deterministically by the row UUID tie-break.
     db.prepare(
       `INSERT INTO cells(
         notebook_id, cell_id, type, slug, grid_row, grid_column,
@@ -694,13 +595,9 @@ describe("single-book Dolt engine", () => {
         prompt_id, surface, prompt, context_json, created_at
       ) VALUES (?, 'merge', 'right', '{}', 2)`,
     ).run(rightPrompt);
-    db.prepare(
-      `INSERT INTO timeline_slots(slot_id, artifact_id, order_key)
-       VALUES (?, ?, 'a1')`,
-    ).run(rightSlot, rightArtifact);
     commitTables(
       db,
-      ["entities", "cells", "prompt_entries", "timeline_slots"],
+      ["entities", "cells", "prompt_entries"],
       "right fork",
     );
 
@@ -714,20 +611,10 @@ describe("single-book Dolt engine", () => {
       }).count,
     ).toBe(2);
     expect(
-      (db.prepare("SELECT COUNT(*) AS count FROM timeline_slots").get() as {
-        count: number;
-      }).count,
-    ).toBe(2);
-    expect(
       (db
         .prepare("SELECT cell_id FROM cells ORDER BY grid_row, grid_column, cell_id")
         .all() as Array<{ cell_id: string }>).map((row) => row.cell_id),
     ).toEqual([leftCell, rightCell].sort());
-    expect(
-      (db
-        .prepare("SELECT slot_id FROM timeline_slots ORDER BY order_key, slot_id")
-        .all() as Array<{ slot_id: string }>).map((row) => row.slot_id),
-    ).toEqual([leftSlot, rightSlot].sort());
     expect(
       (
         db
@@ -785,11 +672,6 @@ describe("single-book Dolt engine", () => {
         inputs_json TEXT NOT NULL,
         PRIMARY KEY(notebook_id, cell_id)
       );
-      CREATE TABLE timeline_slots (
-        slot_id TEXT PRIMARY KEY,
-        artifact_id TEXT NOT NULL,
-        order_key TEXT NOT NULL
-      );
       CREATE TABLE sequence_tracks (
         track_id TEXT PRIMARY KEY,
         sequence_id TEXT NOT NULL,
@@ -801,7 +683,6 @@ describe("single-book Dolt engine", () => {
     const tables = [
       "engine_schema",
       "cells",
-      "timeline_slots",
       "sequence_tracks",
     ];
     db.prepare(
@@ -811,17 +692,15 @@ describe("single-book Dolt engine", () => {
     const notebookId = uuidv7();
     const leftCell = uuidv7();
     const rightCell = uuidv7();
-    const leftSlot = uuidv7();
-    const rightSlot = uuidv7();
     const leftTrack = uuidv7();
     const rightTrack = uuidv7();
 
     // Both forks append at the same grid slot and mint the same fractional
     // order keys. Positions and order keys are not unique, so the merge must
     // keep both rows and order them by the stable UUID tie-break.
-    for (const [branch, cell, slot, track] of [
-      ["fork-left", leftCell, leftSlot, leftTrack],
-      ["fork-right", rightCell, rightSlot, rightTrack],
+    for (const [branch, cell, track] of [
+      ["fork-left", leftCell, leftTrack],
+      ["fork-right", rightCell, rightTrack],
     ] as const) {
       db.doltBranch(branch);
       db.doltCheckout(branch);
@@ -831,14 +710,11 @@ describe("single-book Dolt engine", () => {
         ) VALUES (?, ?, 'scene', ?, 0, 0, '{}')`,
       ).run(notebookId, cell, `scene-${branch}`);
       db.prepare(
-        "INSERT INTO timeline_slots(slot_id, artifact_id, order_key) VALUES (?, ?, 'a1')",
-      ).run(slot, uuidv7());
-      db.prepare(
         `INSERT INTO sequence_tracks(
           track_id, sequence_id, kind, order_key, name
         ) VALUES (?, 'merge-sequence', 'video', 'a1', ?)`,
       ).run(track, `Track ${branch}`);
-      commitTables(db, ["cells", "timeline_slots", "sequence_tracks"], branch);
+      commitTables(db, ["cells", "sequence_tracks"], branch);
       db.doltCheckout("main");
       db.doltReset("--hard");
     }
@@ -853,11 +729,6 @@ describe("single-book Dolt engine", () => {
         )
         .all() as Array<{ cell_id: string }>).map((row) => row.cell_id),
     ).toEqual([leftCell, rightCell].sort());
-    expect(
-      (db
-        .prepare("SELECT slot_id FROM timeline_slots ORDER BY order_key, slot_id")
-        .all() as Array<{ slot_id: string }>).map((row) => row.slot_id),
-    ).toEqual([leftSlot, rightSlot].sort());
     expect(
       (db
         .prepare(
@@ -1024,13 +895,12 @@ describe("single-book Dolt engine", () => {
     );
     const entity = value(await engine.entities.create("character", "Target Character"));
     value(await engine.notebooks.create("Target Notebook"));
-    value(
-      await engine.timeline.set({
-        render: "portrait",
-        slots: [{ artifact: artifact.slug }],
-        audio: [],
-      }),
-    );
+    const sequence = engine.sequences.getPrimary();
+    const addedTrack = value(
+      await engine.sequences.addTrack(sequence.sequenceId, { kind: "video" }),
+    ).tracks.find((track) => track.kind === "video" && track.ordinal === 2);
+    if (!addedTrack) throw new Error("missing added track");
+    value(await engine.sequences.rename(sequence.sequenceId, "Target Cut"));
     value(await engine.prompts.record({ surface: "chat", prompt: "target prompt" }));
     value(await engine.messages.append({ role: "user", body: { text: "target message" } }));
     const target = engine.head;
@@ -1040,6 +910,8 @@ describe("single-book Dolt engine", () => {
     value(await engine.metadata.artifacts.write(artifact.artifactId, "caption", "later"));
     value(await engine.entities.delete(entity.id));
     value(await engine.artifacts.create({ kind: "image", slug: "img-later" }));
+    value(await engine.sequences.removeTrack(addedTrack.trackId));
+    value(await engine.sequences.rename(sequence.sequenceId, "Later Cut"));
     value(await engine.prompts.record({ surface: "chat", prompt: "later prompt" }));
     value(await engine.messages.append({ role: "assistant", body: { text: "later message" } }));
 
@@ -1060,8 +932,62 @@ describe("single-book Dolt engine", () => {
     expect(value(engine.messages.list<{ text: string }>()).map((message) => message.body.text)).toEqual([
       "target message",
     ]);
-    expect(engine.timeline.get().render).toBe("portrait");
+    const restored = engine.sequences.getPrimary();
+    expect(restored.name).toBe("Target Cut");
+    expect(
+      restored.tracks
+        .filter((track) => track.kind === "video")
+        .map((track) => track.trackId),
+    ).toContain(addedTrack.trackId);
     engine.close();
+  });
+
+  it("restore reloads every semantic table from the target revision", async () => {
+    const { engine, dataDir } = await setup();
+    const target = engine.head;
+
+    // Dirty every table family the APIs can reach: sequences, tracks,
+    // prompts, messages, metadata, entities, notebooks, and artifacts.
+    value(await engine.artifacts.create({ kind: "image", slug: "img-extra" }));
+    value(await engine.entities.create("scene", "Later Scene"));
+    value(await engine.notebooks.create("Later Notebook"));
+    value(await engine.metadata.book.write("theme", { mode: "dark" }));
+    const sequence = engine.sequences.getPrimary();
+    value(await engine.sequences.addTrack(sequence.sequenceId, { kind: "audio" }));
+    value(await engine.prompts.record({ surface: "chat", prompt: "later" }));
+    value(await engine.messages.append({ role: "user", body: {} }));
+
+    value(await engine.history.restore(target));
+    // Rows created after the target revision are gone again.
+    expect(engine.artifacts.list()).toHaveLength(0);
+    expect(
+      engine.sequences.getPrimary().tracks.filter(
+        (track) => track.kind === "audio",
+      ),
+    ).toHaveLength(4);
+    engine.close();
+
+    // The state after restore must equal the state at the target revision in
+    // every semantic table, not just the tables the engine APIs read back.
+    const db = new DatabaseSync(path.join(dataDir, "videobook.db"));
+    const mismatched: string[] = [];
+    for (const table of SEMANTIC_TABLES) {
+      const current = db
+        .prepare(`SELECT * FROM ${table}`)
+        .all()
+        .map((row) => JSON.stringify(row))
+        .sort();
+      const atTarget = db
+        .prepare(`SELECT * FROM dolt_at_${table}(?)`)
+        .all(target)
+        .map((row) => JSON.stringify(row))
+        .sort();
+      if (JSON.stringify(current) !== JSON.stringify(atTarget)) {
+        mismatched.push(table);
+      }
+    }
+    db.close();
+    expect(mismatched).toEqual([]);
   });
 
   it("derives history listings from structured commit messages", async () => {

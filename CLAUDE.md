@@ -3,7 +3,7 @@
 ## Project
 
 `videobook-engine` is an ESM TypeScript package for Node.js 22+. Catalog
-schema v16 is Dolt-native and deliberately has no compatibility or migration
+schema v17 is Dolt-native and deliberately has no compatibility or migration
 layer for v3, the former multi-project catalog, or the earlier
 Git/project-directory/SQLite-sidecar engine.
 
@@ -40,7 +40,7 @@ one stable UUIDv7 row; it does not use a synthetic singleton column.
   reference, and reads of forgotten content surface `OBJECT_UNAVAILABLE`.
 - `workspaceDir/<artifact UUID>/` is disposable materialization.
 - Book, artifact, entity, notebook, cell, edge, run, prompt, message, action,
-  timeline-slot, and timeline-audio surrogate identities are UUIDv7 values.
+  sequence, track, and clip surrogate identities are UUIDv7 values.
 - Deletes are hard deletes. Owned children cascade; referenced live artifacts
   and entities return `IN_USE`; Dolt history remains.
 - Published history is append-only: once a catalog has been pushed anywhere
@@ -58,9 +58,17 @@ one stable UUIDv7 row; it does not use a synthetic singleton column.
   `sequence_clips`, `transcripts`) or in a `cell_references` snapshot.
   Everything else is collectable; historical revisions are not consulted,
   which is why restoring an old revision after GC yields tombstone reads.
-- Timeline state is normalized across `timeline`, `timeline_slots`, and
-  `timeline_audio` and is only exposed through `engine.timeline`.
+- Sequences are the single timeline model: `sequences`, `sequence_tracks`,
+  `sequence_clips`, `clip_links`, `clip_transforms`, `transitions`, and
+  `caption_cues`, exposed through `engine.sequences` and `engine.edits`. The
+  legacy `timeline`/`timeline_slots`/`timeline_audio` tables and the
+  `engine.timeline` API are gone; schema-v4 imports convert still-image slots
+  into clips on the primary sequence.
 - Restores are forward-only commits. The engine never rewinds a live branch.
+  `history.restore` mechanically reloads every table in `SEMANTIC_TABLES`
+  from its `dolt_at_*` projection at the target revision (deleting in
+  reverse, inserting in forward, parent-before-child order), so the restored
+  state is exactly the state that revision recorded.
 - Backup publishes referenced CAS objects before pushing the Dolt `main` branch.
 - An open engine never pulls or merges a live catalog.
 - Future collaboration uses DoltHub-native catalog forks with the same
@@ -72,8 +80,8 @@ Core modules are flat and single-purpose:
 - `store.ts` — SQL transactions, Dolt staging/commit, outbox recovery, push
 - `books.ts` and `artifacts.ts` — singleton book and artifact lifecycle rules
 - `cas.ts`, `files.ts`, `media.ts` — objects, mappings, materialization
-- `domain.ts`, `metadata.ts`, `timeline.ts`, `communications.ts` — normalized
-  semantic data
+- `domain.ts`, `metadata.ts`, `communications.ts` — normalized semantic data
+- `sequences.ts`, `edits.ts` — the sequence/track/clip timeline model
 - `ids.ts` — UUIDv7 generation and caller-ID validation
 - `job-queue.ts`, `runtime-services.ts`, `status.ts` — runtime coordination
 - `history.ts` — Dolt projections, generic action graph, forward restores

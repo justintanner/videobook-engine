@@ -2,7 +2,7 @@
 
 This document is the column-by-column layout of the engine-owned data model.
 It describes the original schema version 4 layout, notes where later schema
-versions changed the picture (currently v16), and identifies the additional
+versions changed the picture (currently v17), and identifies the additional
 structures needed for a full non-linear video editor.
 
 The executable source of truth remains
@@ -53,8 +53,8 @@ flowchart LR
 
 ## Global invariants
 
-- One engine catalog contains exactly one `book` row and one matching
-  `timeline` row. There is no project scope.
+- One engine catalog contains exactly one `book` row and one primary
+  `sequences` row. There is no project scope.
 - The only supported live Dolt branch is `main`.
 - Semantic mutations are SQL transactions followed by forward-only Dolt
   commits. A restore creates a new commit; it never rewinds the live branch.
@@ -95,7 +95,7 @@ Notation used below:
 - `→` names the referenced column.
 - Defaults and checks are shown inline.
 
-There are 31 allowlisted semantic tables.
+There are 28 allowlisted semantic tables.
 
 ### Catalog, artifacts, and content
 
@@ -119,31 +119,36 @@ There are 31 allowlisted semantic tables.
 | `edges` | `notebook_id TEXT`<br>`edge_id TEXT`<br>`source_cell_id TEXT`<br>`target_cell_id TEXT`<br>`target_input TEXT` | `(notebook_id, edge_id) PK`; notebook `FK → notebooks ON DELETE CASCADE`; composite source and target FKs reference cells in the same notebook and cascade on cell deletion. |
 | `runs` | `run_id TEXT`<br>`notebook_id TEXT`<br>`status TEXT`<br>`started_at INTEGER`<br>`completed_at INTEGER`<br>`cell_order_json TEXT`<br>`outputs_json TEXT`<br>`error TEXT?` | `run_id PK`; notebook `FK → notebooks ON DELETE CASCADE`; `status CHECK IN (completed, failed, aborted)`. Terminal, versioned notebook execution records. |
 
-### Current timeline and media editing state
+### Sequence timeline and media editing state
+
+Sequences are the single timeline model. `sequences`, `sequence_tracks`,
+`sequence_clips`, `clip_links`, `clip_transforms`, `transitions`, and
+`caption_cues` hold the edit; `engine.sequences` and `engine.edits` are the
+only timeline APIs. The legacy schema-v4 `timeline`, `timeline_slots`, and
+`timeline_audio` tables were removed in v17 — schema-v4 imports convert
+still-image slots into clips on the primary sequence instead. See
+[`src/schema.ts`](../src/schema.ts) for the full sequence DDL.
 
 | Table | Columns | Keys, constraints, and purpose |
 | --- | --- | --- |
-| `timeline` | `book_id TEXT`<br>`render TEXT DEFAULT 'landscape'` | `book_id PK FK → book.book_id ON DELETE CASCADE`; `render CHECK IN (landscape, portrait, square)`. One sequence-level orientation row. |
-| `timeline_slots` | `slot_id TEXT`<br>`artifact_id TEXT`<br>`ordinal INTEGER`<br>`volume REAL?`<br>`audio_fade_in REAL?`<br>`audio_fade_out REAL?` | `slot_id PK`; artifact `FK → artifacts ON DELETE RESTRICT`; `ordinal CHECK >= 0`; volume and fades are null or `>= 0`. A single ordered visual lane; ownership by the singleton timeline is implicit. |
-| `timeline_audio` | `audio_id TEXT`<br>`artifact_id TEXT`<br>`ordinal INTEGER`<br>`start_frame INTEGER`<br>`duration_frames INTEGER`<br>`volume REAL?`<br>`fade_in REAL?`<br>`fade_out REAL?` | `audio_id PK`; artifact `FK → artifacts ON DELETE RESTRICT`; ordinal/start `CHECK >= 0`; duration `CHECK > 0`; volume and fades are null or `>= 0`. Ordered overlays with explicit timeline timing. |
 | `audio_waveforms` | `artifact_id TEXT`<br>`peaks_json TEXT` | `artifact_id PK FK → artifacts.artifact_id ON DELETE CASCADE`. Versioned waveform peaks used by editing UI. |
 
 The normalized current relationship is:
 
 ```mermaid
 erDiagram
-  BOOK ||--|| TIMELINE : owns
-  ARTIFACTS ||--o{ TIMELINE_SLOTS : supplies
-  ARTIFACTS ||--o{ TIMELINE_AUDIO : supplies
+  BOOK ||--o{ SEQUENCES : owns
+  SEQUENCES ||--o{ SEQUENCE_TRACKS : orders
+  SEQUENCE_TRACKS ||--o{ SEQUENCE_CLIPS : places
+  ARTIFACTS ||--o{ SEQUENCE_CLIPS : supplies
   ARTIFACTS ||--o| AUDIO_WAVEFORMS : has
   ARTIFACTS ||--o{ ARTIFACT_FILES : maps
   OBJECTS ||--o{ ARTIFACT_FILES : backs
 ```
 
-`timeline_slots` order is defined by `(ordinal, slot_id)`. It does not
-currently store timeline start, source in/out, duration, track, transform,
-speed, opacity, effects, or transitions. `timeline_audio` does store start and
-duration frames, but there is no catalog-level frame-rate/timebase row yet.
+Sequence timing is integer frames against each sequence's rational frame
+rate; timed clip sources use rational timebase ticks. Track and clip
+ordering uses fractional order keys with the row UUID as tie-breaker.
 
 ### Prompts and messages
 
@@ -184,7 +189,7 @@ survives artifact deletion.
 
 ### Committed Dolt policy table
 
-`dolt_ignore` is created and staged separately from the 31-table allowlist:
+`dolt_ignore` is created and staged separately from the 28-table allowlist:
 
 | Column | Constraint |
 | --- | --- |
@@ -215,10 +220,6 @@ schema additionally defines every index below.
 | `edges_source` | `edges(notebook_id, source_cell_id)` |
 | `edges_target` | `edges(notebook_id, target_cell_id)` |
 | `runs_notebook_completed` | `runs(notebook_id, completed_at, run_id)` |
-| `timeline_slots_order` | `timeline_slots(ordinal, slot_id)` |
-| `timeline_slots_artifact` | `timeline_slots(artifact_id)` |
-| `timeline_audio_order` | `timeline_audio(ordinal, audio_id)` |
-| `timeline_audio_artifact` | `timeline_audio(artifact_id)` |
 | `prompt_entries_lookup` | `prompt_entries(surface, created_at, prompt_id)` |
 | `messages_created` | `messages(created_at, message_id)` |
 
@@ -294,7 +295,12 @@ checked before writes and after commits. Opening a catalog never creates a
 commit: terminal-job reconciliation writes the ignored `job_runs` table
 through a runtime transaction. Historical reads use
 `dolt_at_<semantic_table>(revision)`; history and conflict projections use
-Dolt log, status, and diff APIs. Remote catalog support is push-backup only.
+Dolt log, status, and diff APIs. A whole-book restore reloads **every** table
+in `SEMANTIC_TABLES` from its `dolt_at_*` projection at the target revision —
+deleting in reverse and reinserting in forward, parent-before-child order,
+with columns taken from `PRAGMA table_info` — so the restored state is
+exactly the recorded state and no hand-maintained table list can drift.
+Remote catalog support is push-backup only.
 
 ## Forgettable data and raw-text audit
 
@@ -355,40 +361,16 @@ the engine deliberately does not implement it.
 The SQL schema is only one part of the editing model. These structures and
 conventions are also important.
 
-### Timeline contract
+### Sequence contract
 
-```ts
-type TimelineRender = "landscape" | "portrait" | "square";
-
-interface Timeline {
-  bookId: string;
-  render: TimelineRender;
-  slots: TimelineSlot[];
-  audio: TimelineAudio[];
-}
-
-interface TimelineSlot {
-  id: string;                 // UUIDv7
-  artifactId: string;
-  volume?: number;
-  audioFadeIn?: number;
-  audioFadeOut?: number;
-}
-
-interface TimelineAudio {
-  id: string;                 // UUIDv7
-  artifactId: string;
-  startFrame: number;
-  durationFrames: number;
-  volume?: number;
-  fadeIn?: number;
-  fadeOut?: number;
-}
-```
-
-`engine.timeline.set()` replaces/synchronizes the normalized rows while
-preserving caller-supplied stable IDs. `getAtRevision()` projects the three
-timeline tables at a Dolt revision.
+The timeline is a `Sequence` projection: rational frame rate and pixel
+aspect, an audio sample rate and channel layout, ordered video/audio/caption
+tracks, clips with source ranges and transforms, transitions, and caption
+cues. `engine.sequences` reads and mutates sequence structure (tracks,
+names, primary sequence); `engine.edits` applies transactional clip,
+transition, and caption operations. `getAtRevision()` projects the sequence
+tables at a Dolt revision. The full contract types live in
+[`src/mvp-contracts.ts`](../src/mvp-contracts.ts).
 
 ### Artifact manifest and content
 
@@ -465,10 +447,15 @@ status, and error. Entities provide structured prompts, characters, and scenes.
 
 ## Full NLE structures not yet implemented
 
-Schema v4 can assemble one ordered visual lane plus timed audio overlays. It is
-not yet a complete non-linear editor model. The following is a concrete
-candidate layout for a future clean-break schema. Every name in this section
-is proposed and does **not** exist in schema v4.
+The core sequence model proposed below has since landed (`sequences`,
+`sequence_tracks`, `sequence_clips`, `clip_links`, `clip_transforms`,
+`transitions`, `caption_cues`) and is now the only timeline model; the
+legacy v4 lane described here was removed in v17. The remaining proposals —
+effects, keyframes, audio buses, markers, derivatives — are still open.
+Schema v4 assembled one ordered visual lane plus timed audio overlays. The
+following is a concrete candidate layout for the remaining pieces. Every
+name in this section is proposed and, unless noted above, does **not** exist
+in the catalog.
 
 ### Core sequence model
 
@@ -544,11 +531,12 @@ must reproduce a render.
 - Preserve loose references only in audit/lineage records that must outlive the
   target.
 - Keep order as an integer plus stable ID tie-breaker, or use a documented
-  fractional ordering key if frequent insertion warrants it. Schema v15 uses
+  fractional ordering key if frequent insertion warrants it. The engine uses
   fractional/lexicographic order keys (base-62, `"a0"`-style midpoint keys,
-  see `src/order-keys.ts`) for engine-maintained orderings — timeline slots,
-  timeline audio, and sequence tracks — with the row UUID as tie-breaker, so
-  inserting or moving one row never renumbers its neighbors. Notebook cells
+  see `src/order-keys.ts`) for engine-maintained orderings — sequence tracks
+  and, before the legacy triple was removed in v17, timeline slots and
+  timeline audio — with the row UUID as tie-breaker, so inserting or moving
+  one row never renumbers its neighbors. Notebook cells
   keep their explicit integer `(grid_row, grid_column)` slot as the ordering
   key with the cell UUID as tie-breaker; slot uniqueness is no longer
   enforced by the schema and collisions left by a merge are repaired on the
@@ -576,8 +564,8 @@ must reproduce a render.
 | Content-addressed object layout, remote keys, deletion | [`src/cas.ts`](../src/cas.ts) |
 | Object publication, deletion, GC, and catalog backup | [`src/storage.ts`](../src/storage.ts) |
 | Artifact mappings and workspace materialization | [`src/files.ts`](../src/files.ts) |
-| Current timeline API and row synchronization | [`src/timeline.ts`](../src/timeline.ts) |
-| Public timeline, manifest, job, status, and similarity types | [`src/engine-types.ts`](../src/engine-types.ts) |
+| Sequence reads/structure and transactional edits | [`src/sequences.ts`](../src/sequences.ts), [`src/edits.ts`](../src/edits.ts) |
+| Public manifest, job, status, and similarity types | [`src/engine-types.ts`](../src/engine-types.ts) |
 | Entity/notebook graph types | [`src/notebook/types.ts`](../src/notebook/types.ts) |
 | Revision and action projections/restores | [`src/history.ts`](../src/history.ts), [`src/history-types.ts`](../src/history-types.ts) |
 | Media naming and discovery conventions | [`src/media.ts`](../src/media.ts) |
