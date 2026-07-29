@@ -1,5 +1,7 @@
 import { createHash } from "node:crypto";
 
+import type { StatementSync } from "@dolthub/doltlite";
+
 import type { ArtifactKind, EngineError, Result } from "./engine-types.js";
 import type {
   CommitTemporalIndexBatchInput,
@@ -106,6 +108,39 @@ interface Candidate {
   signals: SearchSignal[];
   excerpt?: string;
   score: number;
+}
+
+interface StreamValidationRow {
+  artifact_id: string;
+  object_hash: string;
+  duration_ticks: number;
+  time_base_numerator: number;
+  time_base_denominator: number;
+}
+
+interface ObservationStatements {
+  upsertSegment: StatementSync;
+  deleteText: StatementSync;
+  deleteEmbeddings: StatementSync;
+  deleteFingerprints: StatementSync;
+  insertText: StatementSync;
+  insertEmbedding: StatementSync;
+  insertFingerprint: StatementSync;
+}
+
+interface AcceptedInterval {
+  start: number;
+  end: number;
+  duration: number;
+  segmentId: string;
+}
+
+interface IntervalNode {
+  interval: AcceptedInterval;
+  priority: number;
+  maxEnd: number;
+  left: IntervalNode | null;
+  right: IntervalNode | null;
 }
 
 const INDEX_PHASES: IndexPhase[] = [
@@ -358,8 +393,16 @@ function commitIndexBatch(
       generation: input.generation,
     });
   }
+  const streamCache = new Map<string, StreamValidationRow | undefined>();
   const observations = input.observations.map((observation, index) =>
-    normalizeObservation(context, manifest, input, observation, index),
+    normalizeObservation(
+      context,
+      manifest,
+      input,
+      observation,
+      index,
+      streamCache,
+    ),
   );
   const coveredRanges = input.coveredRanges.map(normalizeSourceRange);
   const result: IndexBatchResult = {
@@ -374,8 +417,19 @@ function commitIndexBatch(
   };
   context.store.runtime((now) => {
     ensureGeneration(context, manifest, input.generation, now);
+    const statements = prepareObservationStatements(context);
+    const existingSegments = existingSegmentIds(context, observations);
+    const writtenSegments = new Set<string>();
     for (const observation of observations) {
-      upsertObservation(context, input, observation, now);
+      upsertObservation(
+        input,
+        observation,
+        now,
+        statements,
+        existingSegments.has(observation.segmentId)
+          || writtenSegments.has(observation.segmentId),
+      );
+      writtenSegments.add(observation.segmentId);
     }
     const prior = context.store.db
       .prepare(
@@ -450,6 +504,7 @@ function normalizeObservation(
   batch: CommitTemporalIndexBatchInput,
   input: TemporalIndexObservation,
   index: number,
+  streamCache: Map<string, StreamValidationRow | undefined>,
 ): TemporalIndexObservation & { segmentId: string } {
   if (
     input.artifactId !== batch.artifactId
@@ -466,8 +521,8 @@ function normalizeObservation(
       batch.generation,
       `${batch.artifactId}:${batch.phase}:${batch.cursor ?? "start"}:${index}`,
     );
-  if (input.range) {
-    const range = normalizeSourceRange(input.range);
+  const range = input.range ? normalizeSourceRange(input.range) : undefined;
+  if (range) {
     if (
       range.objectHash !== batch.objectHash
       || (input.streamId && range.streamId !== input.streamId)
@@ -477,21 +532,17 @@ function normalizeObservation(
         message: "Observation range does not match its stream identity",
       });
     }
-    const stream = context.store.db
-      .prepare(
-        `SELECT artifact_id, object_hash, duration_ticks,
-                time_base_numerator, time_base_denominator
-         FROM artifact_streams WHERE stream_id=?`,
-      )
-      .get(range.streamId) as unknown as
-      | {
-          artifact_id: string;
-          object_hash: string;
-          duration_ticks: number;
-          time_base_numerator: number;
-          time_base_denominator: number;
-        }
-      | undefined;
+    let stream = streamCache.get(range.streamId);
+    if (!streamCache.has(range.streamId)) {
+      stream = context.store.db
+        .prepare(
+          `SELECT artifact_id, object_hash, duration_ticks,
+                  time_base_numerator, time_base_denominator
+           FROM artifact_streams WHERE stream_id=?`,
+        )
+        .get(range.streamId) as unknown as StreamValidationRow | undefined;
+      streamCache.set(range.streamId, stream);
+    }
     if (
       !stream
       || stream.artifact_id !== batch.artifactId
@@ -548,9 +599,9 @@ function normalizeObservation(
     }
   }
   return {
-    ...structuredClone(input),
+    ...input,
     segmentId,
-    ...(input.range ? { range: normalizeSourceRange(input.range) } : {}),
+    ...(range ? { range } : {}),
   };
 }
 
@@ -585,58 +636,33 @@ function ensureGeneration(
 }
 
 function upsertObservation(
-  context: EngineContext,
   batch: CommitTemporalIndexBatchInput,
   observation: TemporalIndexObservation & { segmentId: string },
   now: number,
+  statements: ObservationStatements,
+  replaceChildren: boolean,
 ): void {
-  context.store.db
-    .prepare(
-      `INSERT INTO runtime_media_segments(
-        segment_id, artifact_id, stream_id, object_hash,
-        source_range_json, source_path, segment_kind,
-        representative_tick, segmentation_version,
-        generation, manifest_id, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-      ON CONFLICT(segment_id) DO UPDATE SET
-        source_range_json=excluded.source_range_json,
-        source_path=excluded.source_path,
-        segment_kind=excluded.segment_kind,
-        representative_tick=excluded.representative_tick,
-        segmentation_version=excluded.segmentation_version`,
-    )
-    .run(
-      observation.segmentId,
-      observation.artifactId,
-      observation.streamId ?? observation.range?.streamId ?? null,
-      observation.objectHash,
-      observation.range ? canonicalJson(observation.range) : null,
-      observation.sourcePath ?? null,
-      observation.kind,
-      observation.representativeTick ?? null,
-      observation.segmentationVersion,
-      batch.generation,
-      batch.manifestId,
-      now,
-    );
-  context.store.db
-    .prepare("DELETE FROM runtime_segment_text WHERE segment_id=?")
-    .run(observation.segmentId);
-  context.store.db
-    .prepare("DELETE FROM runtime_segment_embeddings WHERE segment_id=?")
-    .run(observation.segmentId);
-  context.store.db
-    .prepare("DELETE FROM runtime_segment_fingerprints WHERE segment_id=?")
-    .run(observation.segmentId);
-  const insertText = context.store.db.prepare(
-    `INSERT INTO runtime_segment_text(
-      text_id, segment_id, kind, language, text,
-      start_utf8_byte, end_utf8_byte, confidence,
-      provenance_json, generation
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+  statements.upsertSegment.run(
+    observation.segmentId,
+    observation.artifactId,
+    observation.streamId ?? observation.range?.streamId ?? null,
+    observation.objectHash,
+    observation.range ? canonicalJson(observation.range) : null,
+    observation.sourcePath ?? null,
+    observation.kind,
+    observation.representativeTick ?? null,
+    observation.segmentationVersion,
+    batch.generation,
+    batch.manifestId,
+    now,
   );
+  if (replaceChildren) {
+    statements.deleteText.run(observation.segmentId);
+    statements.deleteEmbeddings.run(observation.segmentId);
+    statements.deleteFingerprints.run(observation.segmentId);
+  }
   observation.texts.forEach((text, index) => {
-    insertText.run(
+    statements.insertText.run(
       text.textId ?? deterministicUuid(observation.segmentId, `text:${index}`),
       observation.segmentId,
       text.kind,
@@ -649,14 +675,8 @@ function upsertObservation(
       batch.generation,
     );
   });
-  const insertEmbedding = context.store.db.prepare(
-    `INSERT INTO runtime_segment_embeddings(
-      embedding_id, segment_id, modality, embedding_space,
-      dimensions, vector_blob, source_hash, generation, updated_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-  );
   observation.embeddings.forEach((embedding, index) => {
-    insertEmbedding.run(
+    statements.insertEmbedding.run(
       embedding.embeddingId
         ?? deterministicUuid(observation.segmentId, `embedding:${index}`),
       observation.segmentId,
@@ -669,14 +689,8 @@ function upsertObservation(
       now,
     );
   });
-  const insertFingerprint = context.store.db.prepare(
-    `INSERT INTO runtime_segment_fingerprints(
-      fingerprint_id, segment_id, kind, value,
-      extractor_version, generation
-    ) VALUES (?, ?, ?, ?, ?, ?)`,
-  );
   observation.fingerprints.forEach((fingerprint, index) => {
-    insertFingerprint.run(
+    statements.insertFingerprint.run(
       fingerprint.fingerprintId
         ?? deterministicUuid(observation.segmentId, `fingerprint:${index}`),
       observation.segmentId,
@@ -686,6 +700,76 @@ function upsertObservation(
       batch.generation,
     );
   });
+}
+
+function existingSegmentIds(
+  context: EngineContext,
+  observations: Array<TemporalIndexObservation & { segmentId: string }>,
+): Set<string> {
+  const existing = new Set<string>();
+  for (let offset = 0; offset < observations.length; offset += 500) {
+    const ids = observations
+      .slice(offset, offset + 500)
+      .map((observation) => observation.segmentId);
+    if (ids.length === 0) continue;
+    const rows = context.store.db
+      .prepare(
+        `SELECT segment_id FROM runtime_media_segments
+         WHERE segment_id IN (${ids.map(() => "?").join(",")})`,
+      )
+      .all(...ids) as unknown as Array<{ segment_id: string }>;
+    for (const row of rows) existing.add(row.segment_id);
+  }
+  return existing;
+}
+
+function prepareObservationStatements(
+  context: EngineContext,
+): ObservationStatements {
+  return {
+    upsertSegment: context.store.db.prepare(
+      `INSERT INTO runtime_media_segments(
+        segment_id, artifact_id, stream_id, object_hash,
+        source_range_json, source_path, segment_kind,
+        representative_tick, segmentation_version,
+        generation, manifest_id, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(segment_id) DO UPDATE SET
+        source_range_json=excluded.source_range_json,
+        source_path=excluded.source_path,
+        segment_kind=excluded.segment_kind,
+        representative_tick=excluded.representative_tick,
+        segmentation_version=excluded.segmentation_version`,
+    ),
+    deleteText: context.store.db.prepare(
+      "DELETE FROM runtime_segment_text WHERE segment_id=?",
+    ),
+    deleteEmbeddings: context.store.db.prepare(
+      "DELETE FROM runtime_segment_embeddings WHERE segment_id=?",
+    ),
+    deleteFingerprints: context.store.db.prepare(
+      "DELETE FROM runtime_segment_fingerprints WHERE segment_id=?",
+    ),
+    insertText: context.store.db.prepare(
+      `INSERT INTO runtime_segment_text(
+        text_id, segment_id, kind, language, text,
+        start_utf8_byte, end_utf8_byte, confidence,
+        provenance_json, generation
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ),
+    insertEmbedding: context.store.db.prepare(
+      `INSERT INTO runtime_segment_embeddings(
+        embedding_id, segment_id, modality, embedding_space,
+        dimensions, vector_blob, source_hash, generation, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ),
+    insertFingerprint: context.store.db.prepare(
+      `INSERT INTO runtime_segment_fingerprints(
+        fingerprint_id, segment_id, kind, value,
+        extractor_version, generation
+      ) VALUES (?, ?, ?, ?, ?, ?)`,
+    ),
+  };
 }
 
 function activateGeneration(
@@ -1571,22 +1655,126 @@ function compareCandidates(left: Candidate, right: Candidate): number {
 
 function collapseOverlaps(candidates: Candidate[]): Candidate[] {
   const accepted: Candidate[] = [];
+  const intervals = new Map<string, IntervalNode | null>();
   for (const candidate of candidates) {
     const range = segmentRange(candidate.segment);
-    const duplicate = accepted.some((item) => {
-      if (item.segment.artifact_id !== candidate.segment.artifact_id) return false;
-      const other = segmentRange(item.segment);
-      if (!range || !other || range.streamId !== other.streamId) return false;
-      const overlap = Math.max(
-        0,
-        Math.min(sourceRangeEndTick(range), sourceRangeEndTick(other))
-          - Math.max(range.startTick, other.startTick),
-      );
-      return overlap / Math.min(range.durationTicks, other.durationTicks) >= 0.8;
-    });
-    if (!duplicate) accepted.push(candidate);
+    if (!range) {
+      accepted.push(candidate);
+      continue;
+    }
+    const key = `${candidate.segment.artifact_id}\u0000${range.streamId}`;
+    const interval: AcceptedInterval = {
+      start: range.startTick,
+      end: sourceRangeEndTick(range),
+      duration: range.durationTicks,
+      segmentId: candidate.segment.segment_id,
+    };
+    const root = intervals.get(key) ?? null;
+    if (hasDuplicateInterval(root, interval)) continue;
+    intervals.set(key, insertInterval(root, interval));
+    accepted.push(candidate);
   }
   return accepted;
+}
+
+function hasDuplicateInterval(
+  node: IntervalNode | null,
+  candidate: AcceptedInterval,
+): boolean {
+  if (!node || node.maxEnd <= candidate.start) return false;
+  if (
+    node.left
+    && node.left.maxEnd > candidate.start
+    && hasDuplicateInterval(node.left, candidate)
+  ) {
+    return true;
+  }
+  const other = node.interval;
+  if (other.start < candidate.end) {
+    const overlap = Math.max(
+      0,
+      Math.min(candidate.end, other.end) - Math.max(candidate.start, other.start),
+    );
+    if (overlap / Math.min(candidate.duration, other.duration) >= 0.8) {
+      return true;
+    }
+  } else {
+    return false;
+  }
+  return hasDuplicateInterval(node.right, candidate);
+}
+
+function insertInterval(
+  node: IntervalNode | null,
+  interval: AcceptedInterval,
+): IntervalNode {
+  if (!node) {
+    return {
+      interval,
+      priority: intervalPriority(interval),
+      maxEnd: interval.end,
+      left: null,
+      right: null,
+    };
+  }
+  if (compareIntervals(interval, node.interval) < 0) {
+    node.left = insertInterval(node.left, interval);
+    if (node.left.priority > node.priority) node = rotateIntervalRight(node);
+  } else {
+    node.right = insertInterval(node.right, interval);
+    if (node.right.priority > node.priority) node = rotateIntervalLeft(node);
+  }
+  refreshMaxEnd(node);
+  return node;
+}
+
+function rotateIntervalLeft(node: IntervalNode): IntervalNode {
+  const pivot = node.right;
+  if (!pivot) return node;
+  node.right = pivot.left;
+  pivot.left = node;
+  refreshMaxEnd(node);
+  refreshMaxEnd(pivot);
+  return pivot;
+}
+
+function rotateIntervalRight(node: IntervalNode): IntervalNode {
+  const pivot = node.left;
+  if (!pivot) return node;
+  node.left = pivot.right;
+  pivot.right = node;
+  refreshMaxEnd(node);
+  refreshMaxEnd(pivot);
+  return pivot;
+}
+
+function refreshMaxEnd(node: IntervalNode): void {
+  node.maxEnd = Math.max(
+    node.interval.end,
+    node.left?.maxEnd ?? Number.NEGATIVE_INFINITY,
+    node.right?.maxEnd ?? Number.NEGATIVE_INFINITY,
+  );
+}
+
+function compareIntervals(
+  left: AcceptedInterval,
+  right: AcceptedInterval,
+): number {
+  return (
+    left.start - right.start
+    || left.end - right.end
+    || left.segmentId.localeCompare(right.segmentId)
+  );
+}
+
+function intervalPriority(interval: AcceptedInterval): number {
+  let hash = 2_166_136_261;
+  const key = `${interval.segmentId}:${interval.start}:${interval.end}`;
+  for (let index = 0; index < key.length; index += 1) {
+    hash ^= key.charCodeAt(index);
+    hash = Math.imul(hash, 16_777_619);
+  }
+  return hash >>> 0;
 }
 
 function candidateToHit(candidate: Candidate): SearchHit {

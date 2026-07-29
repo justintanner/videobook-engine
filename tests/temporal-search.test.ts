@@ -259,6 +259,95 @@ describe("progressive temporal multimodal search", () => {
     engine.close();
   });
 
+  it("replaces observation children and collapses only overlapping moments", async () => {
+    const engine = await setup();
+    const source = await media(engine, "video", "collapse-source");
+    const first = {
+      ...timedObservation(
+        source.artifact,
+        source.stream,
+        0,
+        1_000,
+        [1, 0, 0],
+        [{ kind: "description" as const, text: "obsolete-only" }],
+        "old-fingerprint",
+      ),
+      segmentId: "stable-segment",
+    };
+    commit(
+      engine,
+      source.artifact,
+      source.stream.objectHash,
+      "visual",
+      [first],
+    );
+    const replacement = {
+      ...timedObservation(
+        source.artifact,
+        source.stream,
+        100,
+        1_000,
+        [1, 0, 0],
+        [{ kind: "description" as const, text: "replacement-only" }],
+        "new-fingerprint",
+      ),
+      segmentId: first.segmentId,
+    };
+    const independent = timedObservation(
+      source.artifact,
+      source.stream,
+      3_000,
+      1_000,
+      [1, 0, 0],
+      [{ kind: "description", text: "replacement-only" }],
+      "independent-fingerprint",
+    );
+    commit(
+      engine,
+      source.artifact,
+      source.stream.objectHash,
+      "visual",
+      [replacement, independent],
+    );
+    value(engine.temporalSearch.activate(manifest.manifestId, "generation-1"));
+
+    expect(
+      value(
+        await engine.temporalSearch.query({
+          text: "obsolete-only",
+          modalities: ["metadata"],
+        }),
+      ).hits,
+    ).toEqual([]);
+    const page = value(
+      await engine.temporalSearch.queryPrepared(
+        {
+          sourceArtifactIds: [source.artifact.artifactId],
+          modalities: ["visual"],
+          limit: 10,
+        },
+        {
+          kind: "image",
+          embeddingSpace: manifest.embeddingSpace,
+          vector: [1, 0, 0],
+        },
+      ),
+    );
+    expect(page.hits).toHaveLength(2);
+    expect(
+      page.hits.map((hit) =>
+        hit.location.kind === "timed" ? hit.location.range.startTick : -1,
+      ),
+    ).toEqual(expect.arrayContaining([100, 3_000]));
+    expect(engine.temporalSearch.stats()).toMatchObject({
+      segments: 2,
+      textObservations: 2,
+      embeddings: 2,
+      fingerprints: 2,
+    });
+    engine.close();
+  });
+
   it("retrieves bounded visual moments from language and reverse image/frame queries", async () => {
     const engine = await setup();
     const van = await media(engine, "video", "red-van");
