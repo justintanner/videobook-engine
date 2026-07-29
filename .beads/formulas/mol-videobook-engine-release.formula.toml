@@ -1,6 +1,6 @@
 description = """
-videocity-engine npm release formula — cut a release of the single
-`videocity-engine` npm package from the `main` branch to the public npm
+videobook-engine npm release formula — cut a release of the single
+`videobook-engine` npm package from the `main` branch to the public npm
 registry.
 
 Branch model:
@@ -12,23 +12,23 @@ passes local release gates and GitHub CI. The package version is bumped in
 `npm pack --dry-run`, then the package is published with the npm `latest` tag.
 
 The real publish step expects an npm token in `NPM_TOKEN`. The token must have
-publish access for the `videocity-engine` package. The token is written only
+publish access for the `videobook-engine` package. The token is written only
 to a temporary npm user config that is removed before the formula exits.
 
 ## Variables
 
 | Variable     | Source | Default | Description                              |
 |--------------|--------|---------|------------------------------------------|
-| version      | caller | —       | Three-part semver to publish, e.g. 0.6.1 |
+| version      | caller | —       | Three-part semver to publish, e.g. 4.0.1 |
 | dry_run      | caller | false   | If "true", stop after publish-dry-run    |
 | release_bead | caller | —       | Tracking bead this release closes        |
 """
-formula = "mol-videocity-engine-release"
+formula = "mol-videobook-engine-release"
 version = 1
 
 [vars]
 [vars.version]
-description = "Three-part semver string to publish, e.g. 0.6.1."
+description = "Three-part semver string to publish, e.g. 4.0.1."
 required = true
 
 [vars.dry_run]
@@ -66,11 +66,11 @@ unstaged, uncommitted, or untracked work.
 
 **4. Confirm intent:**
 
-You are about to publish `videocity-engine` to the public npm registry.
+You are about to publish `videobook-engine` to the public npm registry.
 Once a version is published, npm registry unpublish rules apply. Read the
 values:
 
-  - package = videocity-engine
+  - package = videobook-engine
   - version = {{version}}
   - npm tag = latest
   - dry_run = {{dry_run}}
@@ -119,7 +119,7 @@ Mirror the GitHub Actions workflow locally using this repo's npm lockfile.
 ```bash
 npm ci
 git config --global user.name "CI"
-git config --global user.email "ci@videocity.test"
+git config --global user.email "ci@videobook.test"
 npm run typecheck
 npm run build
 npm test
@@ -187,15 +187,20 @@ function fail(message) {
   bad++;
 }
 
-if (pkg.name !== "videocity-engine") fail(`expected package name videocity-engine, got ${pkg.name}`);
+if (pkg.name !== "videobook-engine") fail(`expected package name videobook-engine, got ${pkg.name}`);
 if (pkg.private === true) fail("package.json has private=true");
 if (pkg.type !== "module") fail("package.json should publish as an ES module package");
 if (pkg.main !== "./dist/index.js") fail("main should point at ./dist/index.js");
 if (pkg.types !== "./dist/index.d.ts") fail("types should point at ./dist/index.d.ts");
-if (!Array.isArray(pkg.files) || !pkg.files.includes("dist")) fail("files should include dist");
+if (!Array.isArray(pkg.files)) fail("files should be an allowlist array");
+else {
+  for (const entry of ["dist", "docs", "fixtures"]) {
+    if (!pkg.files.includes(entry)) fail(`files allowlist should include ${entry}`);
+  }
+}
 if (!fs.existsSync("package-lock.json")) fail("package-lock.json is required for npm ci");
 if (!fs.existsSync("README.md")) fail("README.md is required for npm package docs");
-if (!pkg.engines || pkg.engines.node !== ">=20") fail("engines.node should be >=20");
+if (!pkg.engines || pkg.engines.node !== ">=22") fail("engines.node should be >=22");
 
 if (bad === 0) console.log("✓ package metadata is publish-ready");
 process.exit(bad === 0 ? 0 : 1);
@@ -208,7 +213,7 @@ If this fails, STOP and fix the package metadata before publishing.
 
 [[steps]]
 id = "bump-version"
-title = "Bump videocity-engine to {{version}}"
+title = "Bump videobook-engine to {{version}}"
 needs = ["verify-package"]
 description = """
 Bump the package version without creating a tag yet. The tag is created only
@@ -244,8 +249,8 @@ npm pack --dry-run
 ```
 
 Review the tarball summary. It should include compiled files under `dist/`,
-type declarations, `README.md`, and `package.json`; it should not include
-source tests, Beads state, or local project artifacts.
+type declarations, `docs/`, `fixtures/`, `README.md`, and `package.json`; it
+should not include source tests, Beads state, or local project artifacts.
 
 If `dry_run` is true, restore the temporary version bump and stop after this
 step:
@@ -262,14 +267,14 @@ fi
 
 [[steps]]
 id = "publish"
-title = "Publish videocity-engine to npm"
+title = "Publish videobook-engine to npm"
 needs = ["publish-dry-run"]
 description = """
-Publish `videocity-engine@{{version}}` to npm with the `latest` tag.
+Publish `videobook-engine@{{version}}` to npm with the `latest` tag.
 
 ```bash
 test -n "${NPM_TOKEN:-}" || {
-  echo "NPM_TOKEN is required to publish videocity-engine";
+  echo "NPM_TOKEN is required to publish videobook-engine";
   exit 1;
 }
 
@@ -288,7 +293,7 @@ If `npm publish` fails because the version already exists, STOP and decide
 whether to smoke-test the existing release or cut a new patch version. Do not
 retag a different commit for an already published version.
 
-**Exit criteria:** npm accepts `videocity-engine@{{version}}` under the
+**Exit criteria:** npm accepts `videobook-engine@{{version}}` under the
 `latest` tag."""
 
 [[steps]]
@@ -302,10 +307,10 @@ GitHub.
 ```bash
 git status --porcelain
 git add package.json package-lock.json
-git commit -m "chore(release): videocity-engine {{version}}"
+git commit -m "chore(release): videobook-engine {{version}}"
 
 tag="v{{version}}"
-git tag -a "$tag" -m "videocity-engine {{version}}"
+git tag -a "$tag" -m "videobook-engine {{version}}"
 
 git push origin main
 git push origin "$tag"
@@ -326,8 +331,8 @@ Create a GitHub release page for the pushed tag.
 
 ```bash
 gh release create "v{{version}}" \
-  --repo justintanner/videocity-engine \
-  --title "videocity-engine {{version}}" \
+  --repo justintanner/videobook-engine \
+  --title "videobook-engine {{version}}" \
   --generate-notes
 ```
 
@@ -340,8 +345,8 @@ id = "smoke-install"
 title = "Smoke-test the published package"
 needs = ["github-release"]
 description = """
-Install the published package in a clean temporary project and verify the ESM
-entrypoint loads.
+Install the published package in a clean temporary project and verify the
+engine opens a catalog through the current `createEngine` contract.
 
 ```bash
 tmpdir=$(mktemp -d)
@@ -352,18 +357,22 @@ trap cleanup EXIT
 
 cd "$tmpdir"
 npm init -y >/dev/null
-npm install "videocity-engine@{{version}}"
+npm install "videobook-engine@{{version}}"
 node --input-type=module -e '
-import * as vc from "videocity-engine";
-if (!("createFs" in vc)) {
-  console.error("videocity-engine did not export createFs");
-  process.exit(1);
-}
-console.log("✓ videocity-engine import smoke test passed");
+import * as os from "node:os";
+import * as path from "node:path";
+import * as fs from "node:fs";
+import { createEngine } from "videobook-engine";
+
+const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), "videobook-smoke-"));
+const engine = createEngine({ rootDir, initialBookSlug: "smoke" });
+engine.close();
+fs.rmSync(rootDir, { recursive: true, force: true });
+console.log("✓ videobook-engine createEngine smoke test passed");
 '
 ```
 
-**Exit criteria:** Clean install and import smoke test pass."""
+**Exit criteria:** Clean install and `createEngine` open/close smoke test pass."""
 
 [[steps]]
 id = "close"
@@ -373,7 +382,7 @@ description = """
 Close the release bead and capture the released version.
 
 ```bash
-bd close {{release_bead}} --reason="Released videocity-engine {{version}} to npm"
+bd close {{release_bead}} --reason="Released videobook-engine {{version}} to npm"
 bd show {{release_bead}}
 ```
 
