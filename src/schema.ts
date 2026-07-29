@@ -1,4 +1,4 @@
-export const SCHEMA_VERSION = 14;
+export const SCHEMA_VERSION = 15;
 
 export const NOTEBOOK_CELL_TYPES = [
   "audio",
@@ -161,7 +161,6 @@ export const SEMANTIC_SCHEMA_SQL = `
     path TEXT NOT NULL,
     object_hash TEXT NOT NULL
       REFERENCES objects(object_hash) ON DELETE RESTRICT,
-    mtime_ms INTEGER NOT NULL,
     created_at INTEGER NOT NULL,
     PRIMARY KEY(artifact_id, path)
   );
@@ -246,7 +245,6 @@ export const SEMANTIC_SCHEMA_SQL = `
       REFERENCES artifacts(artifact_id) ON DELETE RESTRICT,
     PRIMARY KEY(notebook_id, cell_id),
     UNIQUE(notebook_id, slug),
-    UNIQUE(notebook_id, grid_row, grid_column),
     CHECK (
       (type = 'audio' AND slug LIKE 'aud-%')
       OR (type = 'image' AND slug LIKE 'img-%')
@@ -400,14 +398,13 @@ export const SEMANTIC_SCHEMA_SQL = `
     sequence_id TEXT NOT NULL
       REFERENCES sequences(sequence_id) ON DELETE CASCADE,
     kind TEXT NOT NULL CHECK (kind IN ('video','audio','caption')),
-    ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
+    order_key TEXT NOT NULL,
     name TEXT NOT NULL,
     enabled INTEGER NOT NULL DEFAULT 1 CHECK (enabled IN (0,1)),
     locked INTEGER NOT NULL DEFAULT 0 CHECK (locked IN (0,1)),
     muted INTEGER CHECK (muted IS NULL OR muted IN (0,1)),
     solo INTEGER CHECK (solo IS NULL OR solo IN (0,1)),
     blend_mode TEXT,
-    UNIQUE(sequence_id, kind, ordinal),
     CHECK (
       (kind = 'audio' AND muted IS NOT NULL AND solo IS NOT NULL)
       OR (kind <> 'audio' AND muted IS NULL AND solo IS NULL)
@@ -572,7 +569,7 @@ export const SEMANTIC_SCHEMA_SQL = `
     slot_id TEXT PRIMARY KEY,
     artifact_id TEXT NOT NULL
       REFERENCES artifacts(artifact_id) ON DELETE RESTRICT,
-    ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
+    order_key TEXT NOT NULL,
     volume REAL CHECK (volume IS NULL OR volume >= 0),
     audio_fade_in REAL CHECK (audio_fade_in IS NULL OR audio_fade_in >= 0),
     audio_fade_out REAL CHECK (audio_fade_out IS NULL OR audio_fade_out >= 0)
@@ -581,7 +578,7 @@ export const SEMANTIC_SCHEMA_SQL = `
     audio_id TEXT PRIMARY KEY,
     artifact_id TEXT NOT NULL
       REFERENCES artifacts(artifact_id) ON DELETE RESTRICT,
-    ordinal INTEGER NOT NULL CHECK (ordinal >= 0),
+    order_key TEXT NOT NULL,
     start_frame INTEGER NOT NULL CHECK (start_frame >= 0),
     duration_frames INTEGER NOT NULL CHECK (duration_frames > 0),
     volume REAL CHECK (volume IS NULL OR volume >= 0),
@@ -622,6 +619,8 @@ export const SEMANTIC_SCHEMA_SQL = `
     ON notebooks(created_at, notebook_id);
   CREATE INDEX IF NOT EXISTS cells_output_entity
     ON cells(output_entity_id);
+  CREATE INDEX IF NOT EXISTS cells_grid
+    ON cells(notebook_id, grid_row, grid_column, cell_id);
   CREATE INDEX IF NOT EXISTS cells_output_artifact
     ON cells(output_artifact_id);
   CREATE INDEX IF NOT EXISTS edges_source
@@ -641,7 +640,7 @@ export const SEMANTIC_SCHEMA_SQL = `
   CREATE INDEX IF NOT EXISTS transcript_words_order
     ON transcript_words(segment_id, ordinal);
   CREATE INDEX IF NOT EXISTS sequence_tracks_order
-    ON sequence_tracks(sequence_id, kind, ordinal);
+    ON sequence_tracks(sequence_id, kind, order_key);
   CREATE INDEX IF NOT EXISTS sequence_clips_timeline
     ON sequence_clips(track_id, timeline_start_frame, clip_id);
   CREATE INDEX IF NOT EXISTS sequence_clips_artifact
@@ -651,11 +650,11 @@ export const SEMANTIC_SCHEMA_SQL = `
   CREATE INDEX IF NOT EXISTS caption_cues_timeline
     ON caption_cues(track_id, timeline_start_frame, cue_id);
   CREATE INDEX IF NOT EXISTS timeline_slots_order
-    ON timeline_slots(ordinal, slot_id);
+    ON timeline_slots(order_key, slot_id);
   CREATE INDEX IF NOT EXISTS timeline_slots_artifact
     ON timeline_slots(artifact_id);
   CREATE INDEX IF NOT EXISTS timeline_audio_order
-    ON timeline_audio(ordinal, audio_id);
+    ON timeline_audio(order_key, audio_id);
   CREATE INDEX IF NOT EXISTS timeline_audio_artifact
     ON timeline_audio(artifact_id);
   CREATE INDEX IF NOT EXISTS prompt_entries_lookup

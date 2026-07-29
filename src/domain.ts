@@ -138,6 +138,27 @@ export function createNotebooksApi(context: EngineContext) {
     write: (
       notebook: NotebookDocument,
     ): Promise<Result<Revision, EngineError>> => writeNotebook(context, notebook),
+    insertCell: (
+      notebookId: string,
+      cell: NotebookCell,
+    ): Promise<Result<Revision, EngineError>> =>
+      insertNotebookCell(context, notebookId, cell),
+    updateCell: (
+      notebookId: string,
+      cell: NotebookCell,
+    ): Promise<Result<Revision, EngineError>> =>
+      updateNotebookCell(context, notebookId, cell),
+    moveCell: (
+      notebookId: string,
+      cellId: string,
+      slot: NotebookCell["slot"],
+    ): Promise<Result<Revision, EngineError>> =>
+      moveNotebookCell(context, notebookId, cellId, slot),
+    removeCell: (
+      notebookId: string,
+      cellId: string,
+    ): Promise<Result<Revision, EngineError>> =>
+      removeNotebookCell(context, notebookId, cellId),
     delete: (
       notebookId: string,
     ): Promise<Result<{ notebookId: string }, EngineError>> =>
@@ -354,6 +375,266 @@ async function writeNotebook(
   });
 }
 
+async function insertNotebookCell(
+  context: EngineContext,
+  notebookId: string,
+  cell: NotebookCell,
+): Promise<Result<Revision, EngineError>> {
+  return resultOf(async () => {
+    assertUuidV7(notebookId, "Notebook ID");
+    const notebook = requiredNotebook(context, notebookId);
+    if (notebook.cells.some((existing) => existing.id === cell.id)) {
+      throw new Error(`Cell already exists: ${cell.id}`);
+    }
+    const prospective = { ...notebook, cells: [...notebook.cells, cell] };
+    validateCellFields(context, prospective, cell);
+    assertCellSlugFree(context, notebookId, cell);
+    assertCellSlotFree(context, notebookId, cell);
+    const mutation = await context.store.semantic(
+      {
+        operation: "insert_cell",
+        details: { notebookId, cellId: cell.id },
+        writeSet: [`notebook:${notebookId}`, `cell:${notebookId}:${cell.id}`],
+      },
+      () => {
+        upsertNotebookCell(context, notebookId, cell);
+        repairCellSlots(context, notebookId, cell.id);
+      },
+    );
+    return ok(revisionFor(context, mutation.revision), mutation.revision);
+  });
+}
+
+async function updateNotebookCell(
+  context: EngineContext,
+  notebookId: string,
+  cell: NotebookCell,
+): Promise<Result<Revision, EngineError>> {
+  return resultOf(async () => {
+    assertUuidV7(notebookId, "Notebook ID");
+    const notebook = requiredNotebook(context, notebookId);
+    if (!notebook.cells.some((existing) => existing.id === cell.id)) {
+      throw new EngineFault({
+        code: "NOT_FOUND",
+        message: `Cell not found: ${cell.id}`,
+      });
+    }
+    const prospective = {
+      ...notebook,
+      cells: notebook.cells.map((existing) =>
+        existing.id === cell.id ? cell : existing),
+    };
+    validateCellFields(context, prospective, cell);
+    assertCellSlugFree(context, notebookId, cell);
+    assertCellSlotFree(context, notebookId, cell);
+    const mutation = await context.store.semantic(
+      {
+        operation: "update_cell",
+        details: { notebookId, cellId: cell.id },
+        writeSet: [`notebook:${notebookId}`, `cell:${notebookId}:${cell.id}`],
+      },
+      () => {
+        upsertNotebookCell(context, notebookId, cell);
+        repairCellSlots(context, notebookId, cell.id);
+      },
+    );
+    return ok(revisionFor(context, mutation.revision), mutation.revision);
+  });
+}
+
+async function moveNotebookCell(
+  context: EngineContext,
+  notebookId: string,
+  cellId: string,
+  slot: NotebookCell["slot"],
+): Promise<Result<Revision, EngineError>> {
+  return resultOf(async () => {
+    assertUuidV7(notebookId, "Notebook ID");
+    assertUuidV7(cellId, "Cell ID");
+    const notebook = requiredNotebook(context, notebookId);
+    const existing = notebook.cells.find((cell) => cell.id === cellId);
+    if (!existing) {
+      throw new EngineFault({
+        code: "NOT_FOUND",
+        message: `Cell not found: ${cellId}`,
+      });
+    }
+    return updateNotebookCell(context, notebookId, { ...existing, slot });
+  });
+}
+
+async function removeNotebookCell(
+  context: EngineContext,
+  notebookId: string,
+  cellId: string,
+): Promise<Result<Revision, EngineError>> {
+  return resultOf(async () => {
+    assertUuidV7(notebookId, "Notebook ID");
+    assertUuidV7(cellId, "Cell ID");
+    requiredNotebook(context, notebookId);
+    const found = context.store.db
+      .prepare(
+        "SELECT 1 AS present FROM cells WHERE notebook_id=? AND cell_id=?",
+      )
+      .get(notebookId, cellId);
+    if (!found) {
+      throw new EngineFault({
+        code: "NOT_FOUND",
+        message: `Cell not found: ${cellId}`,
+      });
+    }
+    const mutation = await context.store.semantic(
+      {
+        operation: "remove_cell",
+        details: { notebookId, cellId },
+        writeSet: [`notebook:${notebookId}`, `cell:${notebookId}:${cellId}`],
+      },
+      () => {
+        context.store.db
+          .prepare("DELETE FROM cells WHERE notebook_id=? AND cell_id=?")
+          .run(notebookId, cellId);
+        repairCellSlots(context, notebookId);
+      },
+    );
+    return ok(revisionFor(context, mutation.revision), mutation.revision);
+  });
+}
+
+function assertCellSlugFree(
+  context: EngineContext,
+  notebookId: string,
+  cell: NotebookCell,
+): void {
+  const found = context.store.db
+    .prepare(
+      `SELECT cell_id FROM cells
+       WHERE notebook_id=? AND slug=? AND cell_id<>?`,
+    )
+    .get(notebookId, cell.slug, cell.id) as unknown as
+    | { cell_id: string }
+    | undefined;
+  if (found) {
+    throw new Error(`Duplicate cell slug: ${cell.slug}`);
+  }
+}
+
+function assertCellSlotFree(
+  context: EngineContext,
+  notebookId: string,
+  cell: NotebookCell,
+): void {
+  const found = context.store.db
+    .prepare(
+      `SELECT cell_id FROM cells
+       WHERE notebook_id=? AND grid_row=? AND grid_column=? AND cell_id<>?`,
+    )
+    .get(notebookId, cell.slot.row, cell.slot.column, cell.id) as unknown as
+    | { cell_id: string }
+    | undefined;
+  if (found) {
+    throw new Error(
+      `Cell slot is occupied: ${cell.slot.row}:${cell.slot.column}`,
+    );
+  }
+}
+
+/**
+ * Repairs grid-slot collisions left behind by a merge (the schema no longer
+ * enforces slot uniqueness so two forks can land cells on the same slot).
+ * Within each colliding slot the protected cell wins when present, otherwise
+ * the lowest cell id; losers keep their column and move to fresh rows below
+ * the current grid, in cell-id order.
+ */
+function repairCellSlots(
+  context: EngineContext,
+  notebookId: string,
+  protectedCellId?: string,
+): void {
+  const rows = context.store.db
+    .prepare(
+      `SELECT cell_id, grid_row, grid_column FROM cells
+       WHERE notebook_id=?
+       ORDER BY grid_row, grid_column, cell_id`,
+    )
+    .all(notebookId) as unknown as Array<{
+      cell_id: string;
+      grid_row: number;
+      grid_column: number;
+    }>;
+  const slots = new Map<string, Array<{ cell_id: string; grid_column: number }>>();
+  let maxRow = -1;
+  for (const row of rows) {
+    maxRow = Math.max(maxRow, row.grid_row);
+    const key = `${row.grid_row}:${row.grid_column}`;
+    const group = slots.get(key) ?? [];
+    group.push({ cell_id: row.cell_id, grid_column: row.grid_column });
+    slots.set(key, group);
+  }
+  let nextRow = maxRow + 1;
+  const move = context.store.db.prepare(
+    "UPDATE cells SET grid_row=? WHERE notebook_id=? AND cell_id=?",
+  );
+  for (const group of slots.values()) {
+    if (group.length < 2) continue;
+    const winner = protectedCellId
+      && group.some((row) => row.cell_id === protectedCellId)
+      ? protectedCellId
+      : group[0]!.cell_id;
+    for (const row of group) {
+      if (row.cell_id === winner) continue;
+      move.run(nextRow, notebookId, row.cell_id);
+      nextRow += 1;
+    }
+  }
+}
+
+function upsertNotebookCell(
+  context: EngineContext,
+  notebookId: string,
+  cell: NotebookCell,
+): void {
+  const normalized = normalizeCellForWrite(cell);
+  context.store.db
+    .prepare(
+      `INSERT INTO cells(
+        notebook_id, cell_id, type, slug, grid_row, grid_column,
+        output_entity_id, prompt, provider, model, operation, tool,
+        inputs_json, output_artifact_id
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      ON CONFLICT(notebook_id, cell_id) DO UPDATE SET
+        type=excluded.type,
+        slug=excluded.slug,
+        grid_row=excluded.grid_row,
+        grid_column=excluded.grid_column,
+        output_entity_id=excluded.output_entity_id,
+        prompt=excluded.prompt,
+        provider=excluded.provider,
+        model=excluded.model,
+        operation=excluded.operation,
+        tool=excluded.tool,
+        inputs_json=excluded.inputs_json,
+        output_artifact_id=excluded.output_artifact_id`,
+    )
+    .run(
+      notebookId,
+      normalized.id,
+      normalized.type,
+      requiredText(normalized.slug, "Cell slug"),
+      normalized.slot.row,
+      normalized.slot.column,
+      normalized.outputEntityId ?? null,
+      normalized.prompt ?? null,
+      normalized.provider ?? null,
+      normalized.model ?? null,
+      normalized.operation ?? null,
+      normalized.tool ?? null,
+      canonicalJson(normalized.inputs ?? {}),
+      normalized.outputArtifactId ?? null,
+    );
+  synchronizeCellReferences(context, notebookId, normalized);
+  synchronizePinnedResults(context, notebookId, normalized);
+}
+
 async function deleteNotebook(
   context: EngineContext,
   notebookId: string,
@@ -516,40 +797,16 @@ function validateNotebook(
   const cellSlugs = new Set<string>();
   const occupiedSlots = new Set<string>();
   for (const cell of notebook.cells) {
-    assertUuidV7(cell.id, "Cell ID");
     if (cellIds.has(cell.id)) throw new Error(`Duplicate cell ID: ${cell.id}`);
     cellIds.add(cell.id);
-    if (!NOTEBOOK_CELL_TYPE_SET.has(cell.type)) {
-      throw new Error(`Invalid cell type: ${cell.type}`);
+    if (cellSlugs.has(cell.slug)) {
+      throw new Error(`Duplicate cell slug: ${cell.slug}`);
     }
-    const slug = requiredText(cell.slug, "Cell slug");
-    if (slug !== cell.slug || !isValidNotebookCellSlug(cell.type, slug)) {
-      throw new Error(`Invalid ${cell.type} cell slug: ${cell.slug}`);
-    }
-    if (cellSlugs.has(slug)) throw new Error(`Duplicate cell slug: ${slug}`);
-    cellSlugs.add(slug);
-    if (
-      !Number.isInteger(cell.slot.row)
-      || cell.slot.row < 0
-      || !Number.isInteger(cell.slot.column)
-    ) {
-      throw new Error(
-        `Cell slot row must be nonnegative and column must be an integer: ${cell.id}`,
-      );
-    }
+    cellSlugs.add(cell.slug);
     const slot = `${cell.slot.row}:${cell.slot.column}`;
     if (occupiedSlots.has(slot)) throw new Error(`Duplicate cell slot: ${slot}`);
     occupiedSlots.add(slot);
-    if (cell.outputEntityId) {
-      assertUuidV7(cell.outputEntityId, "Cell output entity ID");
-      requiredEntity(context, cell.outputEntityId);
-    }
-    if (cell.outputArtifactId) {
-      assertUuidV7(cell.outputArtifactId, "Cell output artifact ID");
-      context.artifactRowById(cell.outputArtifactId);
-    }
-    validateCellReferences(context, notebook, cell);
-    validatePinnedResults(context, cell);
+    validateCellFields(context, notebook, cell);
   }
   const edgeIds = new Set<string>();
   const occupiedInputs = new Set<string>();
@@ -571,6 +828,40 @@ function validateNotebook(
   }
 }
 
+function validateCellFields(
+  context: EngineContext,
+  notebook: NotebookDocument,
+  cell: NotebookCell,
+): void {
+  assertUuidV7(cell.id, "Cell ID");
+  if (!NOTEBOOK_CELL_TYPE_SET.has(cell.type)) {
+    throw new Error(`Invalid cell type: ${cell.type}`);
+  }
+  const slug = requiredText(cell.slug, "Cell slug");
+  if (slug !== cell.slug || !isValidNotebookCellSlug(cell.type, slug)) {
+    throw new Error(`Invalid ${cell.type} cell slug: ${cell.slug}`);
+  }
+  if (
+    !Number.isInteger(cell.slot.row)
+    || cell.slot.row < 0
+    || !Number.isInteger(cell.slot.column)
+  ) {
+    throw new Error(
+      `Cell slot row must be nonnegative and column must be an integer: ${cell.id}`,
+    );
+  }
+  if (cell.outputEntityId) {
+    assertUuidV7(cell.outputEntityId, "Cell output entity ID");
+    requiredEntity(context, cell.outputEntityId);
+  }
+  if (cell.outputArtifactId) {
+    assertUuidV7(cell.outputArtifactId, "Cell output artifact ID");
+    context.artifactRowById(cell.outputArtifactId);
+  }
+  validateCellReferences(context, notebook, cell);
+  validatePinnedResults(context, cell);
+}
+
 function synchronizeNotebookChildren(
   context: EngineContext,
   notebook: NotebookDocument,
@@ -589,63 +880,10 @@ function synchronizeNotebookChildren(
     notebook.id,
     notebook.cells.map((cell) => cell.id),
   );
-  const existingMaxRow = context.store.db
-    .prepare(
-      `SELECT COALESCE(MAX(grid_row), -1) AS max_row
-       FROM cells WHERE notebook_id=?`,
-    )
-    .get(notebook.id) as unknown as { max_row: number };
-  const finalMaxRow = notebook.cells.reduce(
-    (maxRow, cell) => Math.max(maxRow, cell.slot.row),
-    -1,
-  );
-  const evacuationOffset = Math.max(existingMaxRow.max_row, finalMaxRow) + 1;
-  context.store.db
-    .prepare("UPDATE cells SET grid_row=grid_row+? WHERE notebook_id=?")
-    .run(evacuationOffset, notebook.id);
-
-  const upsertCell = context.store.db.prepare(
-    `INSERT INTO cells(
-      notebook_id, cell_id, type, slug, grid_row, grid_column,
-      output_entity_id, prompt, provider, model, operation, tool,
-      inputs_json, output_artifact_id
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-    ON CONFLICT(notebook_id, cell_id) DO UPDATE SET
-      type=excluded.type,
-      slug=excluded.slug,
-      grid_row=excluded.grid_row,
-      grid_column=excluded.grid_column,
-      output_entity_id=excluded.output_entity_id,
-      prompt=excluded.prompt,
-      provider=excluded.provider,
-      model=excluded.model,
-      operation=excluded.operation,
-      tool=excluded.tool,
-      inputs_json=excluded.inputs_json,
-      output_artifact_id=excluded.output_artifact_id`,
-  );
   for (const cell of notebook.cells) {
-    const normalized = normalizeCellForWrite(cell);
-    upsertCell.run(
-      notebook.id,
-      normalized.id,
-      normalized.type,
-      requiredText(normalized.slug, "Cell slug"),
-      normalized.slot.row,
-      normalized.slot.column,
-      normalized.outputEntityId ?? null,
-      normalized.prompt ?? null,
-      normalized.provider ?? null,
-      normalized.model ?? null,
-      normalized.operation ?? null,
-      normalized.tool ?? null,
-      canonicalJson(normalized.inputs ?? {}),
-      normalized.outputArtifactId ?? null,
-    );
+    upsertNotebookCell(context, notebook.id, cell);
   }
-  synchronizeCellReferences(context, notebook);
-  synchronizePinnedResults(context, notebook);
-
+  repairCellSlots(context, notebook.id);
   const upsertEdge = context.store.db.prepare(
     `INSERT INTO edges(
       notebook_id, edge_id, source_cell_id, target_cell_id, target_input
@@ -785,66 +1023,114 @@ function validateOrdinal(value: number, label: string): void {
 
 function synchronizeCellReferences(
   context: EngineContext,
-  notebook: NotebookDocument,
+  notebookId: string,
+  cell: NotebookCell,
 ): void {
-  context.store.db
-    .prepare("DELETE FROM cell_references WHERE notebook_id=?")
-    .run(notebook.id);
-  const insert = context.store.db.prepare(
+  const references = cell.references ?? [];
+  deleteMissingChildren(
+    context,
+    "cell_references",
+    "reference_id",
+    notebookId,
+    cell.id,
+    references.map((reference) => reference.id),
+  );
+  const upsert = context.store.db.prepare(
     `INSERT INTO cell_references(
       notebook_id, cell_id, reference_id, kind,
       target_id, snapshot_json, ordinal
-    ) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(notebook_id, cell_id, reference_id) DO UPDATE SET
+      kind=excluded.kind,
+      target_id=excluded.target_id,
+      snapshot_json=excluded.snapshot_json,
+      ordinal=excluded.ordinal`,
   );
-  for (const cell of notebook.cells) {
-    for (const reference of cell.references ?? []) {
-      insert.run(
-        notebook.id,
-        cell.id,
-        reference.id,
-        reference.kind,
-        reference.targetId,
-        canonicalJson(reference.snapshot),
-        reference.ordinal,
-      );
-    }
+  for (const reference of references) {
+    upsert.run(
+      notebookId,
+      cell.id,
+      reference.id,
+      reference.kind,
+      reference.targetId,
+      canonicalJson(reference.snapshot),
+      reference.ordinal,
+    );
   }
 }
 
 function synchronizePinnedResults(
   context: EngineContext,
-  notebook: NotebookDocument,
+  notebookId: string,
+  cell: NotebookCell,
 ): void {
-  context.store.db
-    .prepare("DELETE FROM pinned_search_results WHERE notebook_id=?")
-    .run(notebook.id);
-  const insert = context.store.db.prepare(
+  const pinnedResults = cell.pinnedResults ?? [];
+  deleteMissingChildren(
+    context,
+    "pinned_search_results",
+    "result_id",
+    notebookId,
+    cell.id,
+    pinnedResults.map((result) => result.id),
+  );
+  const upsert = context.store.db.prepare(
     `INSERT INTO pinned_search_results(
       notebook_id, cell_id, result_id, artifact_id, object_hash,
       location_json, representative_json, query_json, signals_json,
       selected_revision, ordinal, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(notebook_id, cell_id, result_id) DO UPDATE SET
+      artifact_id=excluded.artifact_id,
+      object_hash=excluded.object_hash,
+      location_json=excluded.location_json,
+      representative_json=excluded.representative_json,
+      query_json=excluded.query_json,
+      signals_json=excluded.signals_json,
+      selected_revision=excluded.selected_revision,
+      ordinal=excluded.ordinal,
+      created_at=excluded.created_at`,
   );
-  for (const cell of notebook.cells) {
-    for (const result of cell.pinnedResults ?? []) {
-      insert.run(
-        notebook.id,
-        cell.id,
-        result.id,
-        result.artifactId,
-        result.objectHash,
-        canonicalJson(normalizeSearchLocation(result.location)),
-        result.representativeTick === undefined
-          ? null
-          : canonicalJson(result.representativeTick),
-        canonicalJson(result.query),
-        canonicalJson(result.signals),
-        result.selectedRevision,
-        result.ordinal,
-        result.createdAt,
-      );
-    }
+  for (const result of pinnedResults) {
+    upsert.run(
+      notebookId,
+      cell.id,
+      result.id,
+      result.artifactId,
+      result.objectHash,
+      canonicalJson(normalizeSearchLocation(result.location)),
+      result.representativeTick === undefined
+        ? null
+        : canonicalJson(result.representativeTick),
+      canonicalJson(result.query),
+      canonicalJson(result.signals),
+      result.selectedRevision,
+      result.ordinal,
+      result.createdAt,
+    );
   }
+}
+
+function deleteMissingChildren(
+  context: EngineContext,
+  table: "cell_references" | "pinned_search_results",
+  idColumn: "reference_id" | "result_id",
+  notebookId: string,
+  cellId: string,
+  ids: string[],
+): void {
+  if (ids.length === 0) {
+    context.store.db
+      .prepare(`DELETE FROM ${table} WHERE notebook_id=? AND cell_id=?`)
+      .run(notebookId, cellId);
+    return;
+  }
+  const placeholders = ids.map(() => "?").join(", ");
+  context.store.db
+    .prepare(
+      `DELETE FROM ${table}
+       WHERE notebook_id=? AND cell_id=? AND ${idColumn} NOT IN (${placeholders})`,
+    )
+    .run(notebookId, cellId, ...ids);
 }
 
 function rowToCellReference(row: NotebookReferenceRow): NotebookCellReference {

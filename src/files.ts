@@ -14,7 +14,6 @@ interface PreparedFile {
   relativePath: string;
   objectHash: string;
   size: number;
-  mtimeMs: number;
 }
 
 export function createFilesApi(context: EngineContext) {
@@ -110,7 +109,6 @@ async function writeFile(
       ...relativePath.split("/"),
     );
     await context.objects.materialize(object.hash, destination);
-    const mtimeMs = Date.now();
     const mutation = await context.store.semantic(
       {
         operation: "write_file",
@@ -133,7 +131,6 @@ async function writeFile(
             relativePath,
             objectHash: object.hash,
             size: object.size,
-            mtimeMs,
           },
           now,
         );
@@ -181,7 +178,6 @@ async function writeFromPath(
             relativePath,
             objectHash: object.hash,
             size: object.size,
-            mtimeMs: now,
           },
           now,
         );
@@ -271,15 +267,14 @@ async function renameFile(
           `file:${artifact.artifact_id}:${newRelative}`,
         ],
       },
-      (_operationId, now) => {
+      () => {
         context.store.db
           .prepare(
-            `UPDATE artifact_files SET path=?, mtime_ms=?
+            `UPDATE artifact_files SET path=?
              WHERE artifact_id=? AND path=?`,
           )
           .run(
             newRelative,
-            now,
             artifact.artifact_id,
             oldRelative,
           );
@@ -323,17 +318,15 @@ async function copyFile(
         context.store.db
           .prepare(
             `INSERT INTO artifact_files(
-              artifact_id, path, object_hash, mtime_ms, created_at
-            ) VALUES (?, ?, ?, ?, ?)
+              artifact_id, path, object_hash, created_at
+            ) VALUES (?, ?, ?, ?)
             ON CONFLICT(artifact_id, path) DO UPDATE SET
-              object_hash=excluded.object_hash,
-              mtime_ms=excluded.mtime_ms`,
+              object_hash=excluded.object_hash`,
           )
           .run(
             destination.artifact_id,
             destinationPath,
             row.object_hash,
-            now,
             now,
           );
         markWorkspaceReady(context, destination.artifact_id, now);
@@ -429,13 +422,11 @@ async function ingestWorkspace(
     const prepared: PreparedFile[] = [];
     for (const relativePath of expandedPaths) {
       const source = path.join(workspace, ...relativePath.split("/"));
-      const sourceStat = await stat(source);
       const object = await context.objects.import(source);
       prepared.push({
         relativePath,
         objectHash: object.hash,
         size: object.size,
-        mtimeMs: sourceStat.mtimeMs,
       });
     }
     const mutation = await context.store.semantic(
@@ -581,17 +572,15 @@ function linkObject(
   context.store.db
     .prepare(
       `INSERT INTO artifact_files(
-        artifact_id, path, object_hash, mtime_ms, created_at
-      ) VALUES (?, ?, ?, ?, ?)
+        artifact_id, path, object_hash, created_at
+      ) VALUES (?, ?, ?, ?)
       ON CONFLICT(artifact_id, path) DO UPDATE SET
-        object_hash=excluded.object_hash,
-        mtime_ms=excluded.mtime_ms`,
+        object_hash=excluded.object_hash`,
     )
     .run(
       artifactId,
       file.relativePath,
       file.objectHash,
-      file.mtimeMs,
       now,
     );
 }
@@ -642,7 +631,7 @@ function requiredFile(
   const row = context.store.db
     .prepare(
       `SELECT f.artifact_id, f.path, f.object_hash, o.size_bytes,
-              f.mtime_ms, f.created_at
+              f.created_at
        FROM artifact_files f
        JOIN objects o ON o.object_hash=f.object_hash
        WHERE f.artifact_id=? AND f.path=?`,
@@ -664,7 +653,7 @@ function filesForArtifact(context: EngineContext, artifactId: string): FileRow[]
   return context.store.db
     .prepare(
       `SELECT f.artifact_id, f.path, f.object_hash, o.size_bytes,
-              f.mtime_ms, f.created_at
+              f.created_at
        FROM artifact_files f
        JOIN objects o ON o.object_hash=f.object_hash
        WHERE f.artifact_id=? ORDER BY f.path`,
@@ -678,7 +667,6 @@ function rowToManifestFile(row: FileRow): ArtifactManifestFile {
     name: row.path,
     sizeBytes: row.size_bytes,
     extension: path.extname(row.path) || null,
-    mtimeMs: row.mtime_ms,
     ...(mimeType ? { mimeType } : {}),
     objectHash: row.object_hash,
   };

@@ -481,7 +481,15 @@ must reproduce a render.
 - Preserve loose references only in audit/lineage records that must outlive the
   target.
 - Keep order as an integer plus stable ID tie-breaker, or use a documented
-  fractional ordering key if frequent insertion warrants it.
+  fractional ordering key if frequent insertion warrants it. Schema v15 uses
+  fractional/lexicographic order keys (base-62, `"a0"`-style midpoint keys,
+  see `src/order-keys.ts`) for engine-maintained orderings — timeline slots,
+  timeline audio, and sequence tracks — with the row UUID as tie-breaker, so
+  inserting or moving one row never renumbers its neighbors. Notebook cells
+  keep their explicit integer `(grid_row, grid_column)` slot as the ordering
+  key with the cell UUID as tie-breaker; slot uniqueness is no longer
+  enforced by the schema and collisions left by a merge are repaired on the
+  next write instead.
 - Put user intent and accepted edit decisions in Dolt. Put playhead position,
   selections, UI panels, decode caches, thumbnails, temporary renders, active
   jobs, locks, and presence in ignored runtime tables.
@@ -499,6 +507,7 @@ must reproduce a render.
 | Concern | Implementation |
 | --- | --- |
 | DDL, table allowlists, indexes | [`src/schema.ts`](../src/schema.ts) |
+| Fractional order keys and minimal rekeying | [`src/order-keys.ts`](../src/order-keys.ts) |
 | SQL transactions, Dolt staging, commits, outbox recovery | [`src/store.ts`](../src/store.ts) |
 | Engine paths and row projections | [`src/context.ts`](../src/context.ts) |
 | Immutable object layout and remote keys | [`src/cas.ts`](../src/cas.ts) |

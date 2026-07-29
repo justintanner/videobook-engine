@@ -33,7 +33,6 @@ export interface FileRow {
   path: string;
   object_hash: string;
   size_bytes: number;
-  mtime_ms: number;
   created_at: number;
 }
 

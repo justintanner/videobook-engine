@@ -1066,7 +1066,7 @@ class LocalSimilarityApi implements SimilarityApi {
     const rows = this.context.store.db
       .prepare(
         `SELECT f.artifact_id, f.path, f.object_hash, o.size_bytes,
-                f.mtime_ms, f.created_at
+                f.created_at
          FROM artifact_files f
          JOIN objects o ON o.object_hash=f.object_hash
          WHERE f.artifact_id=?

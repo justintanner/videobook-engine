@@ -14,6 +14,7 @@ import type {
   OperationInput,
   SemanticCommitBoundary,
 } from "./engine-types.js";
+import { initialOrderKeys } from "./order-keys.js";
 import {
   RUNTIME_SCHEMA_SQL,
   RUNTIME_TABLES,
@@ -350,18 +351,24 @@ export class DoltStore {
       .run(sequenceId, bookId, canonicalJson([0, 0, 0, 1]), now);
     const insertTrack = this.db.prepare(
       `INSERT INTO sequence_tracks(
-        track_id, sequence_id, kind, ordinal, name,
+        track_id, sequence_id, kind, order_key, name,
         enabled, locked, muted, solo, blend_mode
       ) VALUES (?, ?, ?, ?, ?, 1, 0, ?, ?, ?)`,
     );
-    insertTrack.run(uuidv7(), sequenceId, "video", 0, "Video 1", null, null, "normal");
-    insertTrack.run(uuidv7(), sequenceId, "video", 1, "Video 2", null, null, "normal");
+    const videoKeys = initialOrderKeys(2);
+    insertTrack.run(
+      uuidv7(), sequenceId, "video", videoKeys[0], "Video 1", null, null, "normal",
+    );
+    insertTrack.run(
+      uuidv7(), sequenceId, "video", videoKeys[1], "Video 2", null, null, "normal",
+    );
+    const audioKeys = initialOrderKeys(4);
     for (let ordinal = 0; ordinal < 4; ordinal += 1) {
       insertTrack.run(
         uuidv7(),
         sequenceId,
         "audio",
-        ordinal,
+        audioKeys[ordinal],
         `Audio ${ordinal + 1}`,
         0,
         0,
@@ -372,7 +379,7 @@ export class DoltStore {
       uuidv7(),
       sequenceId,
       "caption",
-      0,
+      initialOrderKeys(1)[0],
       "Captions",
       null,
       null,

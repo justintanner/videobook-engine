@@ -95,7 +95,7 @@ const MERGE_SCHEMA_SQL = `
   CREATE TABLE timeline_slots (
     slot_id TEXT PRIMARY KEY,
     artifact_id TEXT NOT NULL,
-    ordinal INTEGER NOT NULL,
+    order_key TEXT NOT NULL,
     volume REAL,
     audio_fade_in REAL,
     audio_fade_out REAL
@@ -230,9 +230,9 @@ describe("single-book Dolt engine", () => {
     suppliedAgain.close();
   });
 
-  it("creates the exact normalized v14 semantic and runtime schema", async () => {
+  it("creates the exact normalized v15 semantic and runtime schema", async () => {
     const { engine, dataDir } = await setup();
-    expect(SCHEMA_VERSION).toBe(14);
+    expect(SCHEMA_VERSION).toBe(15);
     engine.close();
 
     const db = new DatabaseSync(path.join(dataDir, "videobook.db"));
@@ -268,7 +268,6 @@ describe("single-book Dolt engine", () => {
       "artifact_id",
       "path",
       "object_hash",
-      "mtime_ms",
       "created_at",
     ]);
     expect(columns("notebooks")).toEqual([
@@ -294,6 +293,17 @@ describe("single-book Dolt engine", () => {
       "output_artifact_id",
     ]);
     expect(columns("artifact_streams")).toContain("time_base_numerator");
+    expect(columns("sequence_tracks")).toContain("order_key");
+    expect(columns("sequence_tracks")).not.toContain("ordinal");
+    expect(columns("timeline_slots")).toEqual([
+      "slot_id",
+      "artifact_id",
+      "order_key",
+      "volume",
+      "audio_fade_in",
+      "audio_fade_out",
+    ]);
+    expect(columns("timeline_audio")).toContain("order_key");
     expect(columns("transcripts")).toContain("object_hash");
     expect(columns("sequences")).toContain("frame_rate_numerator");
     expect(columns("sequence_clips")).toContain("source_duration_ticks");
@@ -306,7 +316,7 @@ describe("single-book Dolt engine", () => {
       (db
         .prepare("SELECT version FROM engine_schema WHERE singleton=1")
         .get() as { version: number }).version,
-    ).toBe(14);
+    ).toBe(15);
     expect(
       db
         .prepare(
@@ -649,8 +659,8 @@ describe("single-book Dolt engine", () => {
       ) VALUES (?, 'merge', 'left', '{}', 1)`,
     ).run(leftPrompt);
     db.prepare(
-      `INSERT INTO timeline_slots(slot_id, artifact_id, ordinal)
-       VALUES (?, ?, 0)`,
+      `INSERT INTO timeline_slots(slot_id, artifact_id, order_key)
+       VALUES (?, ?, 'a1')`,
     ).run(leftSlot, leftArtifact);
     commitTables(
       db,
@@ -662,14 +672,16 @@ describe("single-book Dolt engine", () => {
     db.doltReset("--hard");
     db.doltBranch("fork-right");
     db.doltCheckout("fork-right");
-    db.doltReset("--hard");
     db.prepare("UPDATE entities SET name='Right fork' WHERE entity_id=?")
       .run(rightEntity);
+    // Both forks append at the same grid slot and the same timeline order
+    // key: positions are no longer unique, so the merge must keep both rows
+    // and order them deterministically by the row UUID tie-break.
     db.prepare(
       `INSERT INTO cells(
         notebook_id, cell_id, type, slug, grid_row, grid_column,
         output_entity_id, inputs_json
-      ) VALUES (?, ?, 'scene', 'scene-right', 1, 1, ?, '{}')`,
+      ) VALUES (?, ?, 'scene', 'scene-right', 0, 0, ?, '{}')`,
     ).run(notebookId, rightCell, rightEntity);
     db.prepare(
       `INSERT INTO prompt_entries(
@@ -677,8 +689,8 @@ describe("single-book Dolt engine", () => {
       ) VALUES (?, 'merge', 'right', '{}', 2)`,
     ).run(rightPrompt);
     db.prepare(
-      `INSERT INTO timeline_slots(slot_id, artifact_id, ordinal)
-       VALUES (?, ?, 0)`,
+      `INSERT INTO timeline_slots(slot_id, artifact_id, order_key)
+       VALUES (?, ?, 'a1')`,
     ).run(rightSlot, rightArtifact);
     commitTables(
       db,
@@ -700,6 +712,16 @@ describe("single-book Dolt engine", () => {
         count: number;
       }).count,
     ).toBe(2);
+    expect(
+      (db
+        .prepare("SELECT cell_id FROM cells ORDER BY grid_row, grid_column, cell_id")
+        .all() as Array<{ cell_id: string }>).map((row) => row.cell_id),
+    ).toEqual([leftCell, rightCell].sort());
+    expect(
+      (db
+        .prepare("SELECT slot_id FROM timeline_slots ORDER BY order_key, slot_id")
+        .all() as Array<{ slot_id: string }>).map((row) => row.slot_id),
+    ).toEqual([leftSlot, rightSlot].sort());
     expect(
       (
         db
@@ -732,6 +754,112 @@ describe("single-book Dolt engine", () => {
     db.doltReset("--hard");
     expect(db.doltMerge("same-cell-left").conflicts).toBe(0);
     expect(() => db.doltMerge("same-cell-right")).toThrow("Merge conflict");
+    db.close();
+  });
+
+  it("merges same-position rows from independent forks without losing rows", async () => {
+    // Minimal fixture: doltlite's merge guard misfires on working roots with
+    // many tables, so the order-key merge behavior gets its own small db.
+    const root = await mkdtemp(path.join(tmpdir(), "videobook-merge-keys-"));
+    roots.push(root);
+    const db = new DatabaseSync(path.join(root, "merge-keys.db"));
+    db.exec(`
+      CREATE TABLE engine_schema (
+        singleton INTEGER PRIMARY KEY,
+        version INTEGER NOT NULL,
+        created_at INTEGER NOT NULL
+      );
+      CREATE TABLE cells (
+        notebook_id TEXT NOT NULL,
+        cell_id TEXT NOT NULL,
+        type TEXT NOT NULL,
+        slug TEXT NOT NULL,
+        grid_row INTEGER NOT NULL,
+        grid_column INTEGER NOT NULL,
+        inputs_json TEXT NOT NULL,
+        PRIMARY KEY(notebook_id, cell_id)
+      );
+      CREATE TABLE timeline_slots (
+        slot_id TEXT PRIMARY KEY,
+        artifact_id TEXT NOT NULL,
+        order_key TEXT NOT NULL
+      );
+      CREATE TABLE sequence_tracks (
+        track_id TEXT PRIMARY KEY,
+        sequence_id TEXT NOT NULL,
+        kind TEXT NOT NULL,
+        order_key TEXT NOT NULL,
+        name TEXT NOT NULL
+      );
+    `);
+    const tables = [
+      "engine_schema",
+      "cells",
+      "timeline_slots",
+      "sequence_tracks",
+    ];
+    db.prepare(
+      "INSERT INTO engine_schema(singleton, version, created_at) VALUES (1, 15, 0)",
+    ).run();
+    commitTables(db, tables, "initial");
+    const notebookId = uuidv7();
+    const leftCell = uuidv7();
+    const rightCell = uuidv7();
+    const leftSlot = uuidv7();
+    const rightSlot = uuidv7();
+    const leftTrack = uuidv7();
+    const rightTrack = uuidv7();
+
+    // Both forks append at the same grid slot and mint the same fractional
+    // order keys. Positions and order keys are not unique, so the merge must
+    // keep both rows and order them by the stable UUID tie-break.
+    for (const [branch, cell, slot, track] of [
+      ["fork-left", leftCell, leftSlot, leftTrack],
+      ["fork-right", rightCell, rightSlot, rightTrack],
+    ] as const) {
+      db.doltBranch(branch);
+      db.doltCheckout(branch);
+      db.prepare(
+        `INSERT INTO cells(
+          notebook_id, cell_id, type, slug, grid_row, grid_column, inputs_json
+        ) VALUES (?, ?, 'scene', ?, 0, 0, '{}')`,
+      ).run(notebookId, cell, `scene-${branch}`);
+      db.prepare(
+        "INSERT INTO timeline_slots(slot_id, artifact_id, order_key) VALUES (?, ?, 'a1')",
+      ).run(slot, uuidv7());
+      db.prepare(
+        `INSERT INTO sequence_tracks(
+          track_id, sequence_id, kind, order_key, name
+        ) VALUES (?, 'merge-sequence', 'video', 'a1', ?)`,
+      ).run(track, `Track ${branch}`);
+      commitTables(db, ["cells", "timeline_slots", "sequence_tracks"], branch);
+      db.doltCheckout("main");
+      db.doltReset("--hard");
+    }
+
+    expect(db.doltMerge("fork-left").conflicts).toBe(0);
+    expect(db.doltMerge("fork-right").conflicts).toBe(0);
+    expect(
+      (db
+        .prepare(
+          `SELECT cell_id FROM cells
+           ORDER BY grid_row, grid_column, cell_id`,
+        )
+        .all() as Array<{ cell_id: string }>).map((row) => row.cell_id),
+    ).toEqual([leftCell, rightCell].sort());
+    expect(
+      (db
+        .prepare("SELECT slot_id FROM timeline_slots ORDER BY order_key, slot_id")
+        .all() as Array<{ slot_id: string }>).map((row) => row.slot_id),
+    ).toEqual([leftSlot, rightSlot].sort());
+    expect(
+      (db
+        .prepare(
+          `SELECT track_id FROM sequence_tracks
+           ORDER BY order_key, track_id`,
+        )
+        .all() as Array<{ track_id: string }>).map((row) => row.track_id),
+    ).toEqual([leftTrack, rightTrack].sort());
     db.close();
   });
 

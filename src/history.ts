@@ -99,7 +99,7 @@ interface TimelineSnapshotRow {
 interface TimelineSlotSnapshotRow {
   slot_id: string;
   artifact_id: string;
-  ordinal: number;
+  order_key: string;
   volume: number | null;
   audio_fade_in: number | null;
   audio_fade_out: number | null;
@@ -108,7 +108,7 @@ interface TimelineSlotSnapshotRow {
 interface TimelineAudioSnapshotRow {
   audio_id: string;
   artifact_id: string;
-  ordinal: number;
+  order_key: string;
   start_frame: number;
   duration_frames: number;
   volume: number | null;
@@ -135,7 +135,6 @@ interface ArtifactFileSnapshotRow {
   artifact_id: string;
   path: string;
   object_hash: string;
-  mtime_ms: number;
   created_at: number;
 }
 
@@ -490,7 +489,7 @@ async function restoreBook(
     const targetFiles = rowsForArtifactIds<ArtifactFileSnapshotRow>(
       context,
       "artifact_files",
-      "artifact_id, path, object_hash, mtime_ms, created_at",
+      "artifact_id, path, object_hash, created_at",
       revision.hash,
       targetIds,
     );
@@ -558,14 +557,14 @@ async function restoreBook(
       .get(revision.hash) as unknown as TimelineSnapshotRow | undefined;
     const timelineSlots = context.store.db
       .prepare(
-        `SELECT slot_id, artifact_id, ordinal, volume,
+        `SELECT slot_id, artifact_id, order_key, volume,
                 audio_fade_in, audio_fade_out
          FROM dolt_at_timeline_slots(?)`,
       )
       .all(revision.hash) as unknown as TimelineSlotSnapshotRow[];
     const timelineAudio = context.store.db
       .prepare(
-        `SELECT audio_id, artifact_id, ordinal, start_frame, duration_frames,
+        `SELECT audio_id, artifact_id, order_key, start_frame, duration_frames,
                 volume, fade_in, fade_out
          FROM dolt_at_timeline_audio(?)`,
       )
@@ -688,14 +687,14 @@ async function restoreBook(
           .run(timeline?.render ?? "landscape", targetBook.book_id);
         const insertSlot = context.store.db.prepare(
           `INSERT INTO timeline_slots(
-            slot_id, artifact_id, ordinal, volume, audio_fade_in, audio_fade_out
+            slot_id, artifact_id, order_key, volume, audio_fade_in, audio_fade_out
           ) VALUES (?, ?, ?, ?, ?, ?)`,
         );
         for (const row of timelineSlots) {
           insertSlot.run(
             row.slot_id,
             row.artifact_id,
-            row.ordinal,
+            row.order_key,
             row.volume,
             row.audio_fade_in,
             row.audio_fade_out,
@@ -703,7 +702,7 @@ async function restoreBook(
         }
         const insertAudio = context.store.db.prepare(
           `INSERT INTO timeline_audio(
-            audio_id, artifact_id, ordinal, start_frame, duration_frames,
+            audio_id, artifact_id, order_key, start_frame, duration_frames,
             volume, fade_in, fade_out
           ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
         );
@@ -711,7 +710,7 @@ async function restoreBook(
           insertAudio.run(
             row.audio_id,
             row.artifact_id,
-            row.ordinal,
+            row.order_key,
             row.start_frame,
             row.duration_frames,
             row.volume,
@@ -906,7 +905,7 @@ function filesAt(
 ): ArtifactFileSnapshotRow[] {
   return context.store.db
     .prepare(
-      `SELECT artifact_id, path, object_hash, mtime_ms, created_at
+      `SELECT artifact_id, path, object_hash, created_at
        FROM dolt_at_artifact_files(?) WHERE artifact_id=? ORDER BY path`,
     )
     .all(revision, artifactId) as unknown as ArtifactFileSnapshotRow[];
@@ -952,15 +951,14 @@ function insertFiles(
 ): void {
   const insert = context.store.db.prepare(
     `INSERT INTO artifact_files(
-      artifact_id, path, object_hash, mtime_ms, created_at
-    ) VALUES (?, ?, ?, ?, ?)`,
+      artifact_id, path, object_hash, created_at
+    ) VALUES (?, ?, ?, ?)`,
   );
   for (const row of files) {
     insert.run(
       row.artifact_id,
       row.path,
       row.object_hash,
-      row.mtime_ms,
       row.created_at,
     );
   }

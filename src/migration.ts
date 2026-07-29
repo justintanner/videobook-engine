@@ -8,6 +8,7 @@ import { v7 as uuidv7 } from "uuid";
 
 import { ObjectStore } from "./cas.js";
 import { createEngine } from "./engine.js";
+import { initialOrderKeys } from "./order-keys.js";
 import type {
   EngineError,
   Result,
@@ -45,7 +46,7 @@ interface ObjectRow {
 interface TimelineSlotRow {
   slot_id: string;
   artifact_id: string;
-  ordinal: number;
+  order_key: string;
   kind: string;
   source_path: string | null;
   object_hash: string | null;
@@ -64,8 +65,6 @@ const COPY_TABLES = [
   "entities",
   "notebooks",
   "timeline",
-  "timeline_slots",
-  "timeline_audio",
   "audio_waveforms",
   "prompt_entries",
   "messages",
@@ -232,6 +231,8 @@ export async function migrateV4(
         copyTable(sourceDatabase, destinationDatabase, table);
       }
     }
+    copyLegacyTimelineRows(sourceDatabase, destinationDatabase, "timeline_slots");
+    copyLegacyTimelineRows(sourceDatabase, destinationDatabase, "timeline_audio");
     destinationDatabase
       .prepare("UPDATE engine_schema SET version=? WHERE singleton=1")
       .run(MVP_SCHEMA_VERSION);
@@ -444,6 +445,39 @@ function copyTable(
   }
 }
 
+/**
+ * Legacy dense integer ordinals become fractional order keys, assigned in
+ * legacy (ordinal, id) order so the migrated ordering matches the source.
+ */
+function copyLegacyTimelineRows(
+  source: DatabaseSync,
+  destination: DatabaseSync,
+  table: "timeline_slots" | "timeline_audio",
+): void {
+  const idColumn = table === "timeline_slots" ? "slot_id" : "audio_id";
+  const sourceColumns = columns(source, table);
+  const destinationColumns = new Set(columns(destination, table));
+  const shared = sourceColumns.filter(
+    (column) => column !== "ordinal" && destinationColumns.has(column),
+  );
+  if (shared.length === 0) return;
+  const rows = source
+    .prepare(
+      `SELECT ${shared.join(", ")} FROM ${table} ORDER BY ordinal, ${idColumn}`,
+    )
+    .all() as unknown as SqlRow[];
+  if (rows.length === 0) return;
+  const keys = initialOrderKeys(rows.length);
+  const placeholders = shared.map(() => "?").join(", ");
+  const insert = destination.prepare(
+    `INSERT INTO ${table}(${shared.join(", ")}, order_key)
+     VALUES (${placeholders}, ?)`,
+  );
+  rows.forEach((row, index) => {
+    insert.run(...shared.map((column) => row[column] ?? null), keys[index]);
+  });
+}
+
 function copyLegacyNotebooks(
   source: DatabaseSync,
   destination: DatabaseSync,
@@ -508,25 +542,29 @@ function initializePrimarySequence(
   ).run(sequenceId, bookId, width, height, "[0,0,0,1]", now);
   const insert = database.prepare(
     `INSERT INTO sequence_tracks(
-      track_id, sequence_id, kind, ordinal, name,
+      track_id, sequence_id, kind, order_key, name,
       enabled, locked, muted, solo, blend_mode
     ) VALUES (?, ?, ?, ?, ?, 1, 0, ?, ?, ?)`,
   );
-  insert.run(uuidv7(), sequenceId, "video", 0, "Video 1", null, null, "normal");
-  insert.run(uuidv7(), sequenceId, "video", 1, "Video 2", null, null, "normal");
+  const videoKeys = initialOrderKeys(2);
+  insert.run(uuidv7(), sequenceId, "video", videoKeys[0], "Video 1", null, null, "normal");
+  insert.run(uuidv7(), sequenceId, "video", videoKeys[1], "Video 2", null, null, "normal");
+  const audioKeys = initialOrderKeys(4);
   for (let ordinal = 0; ordinal < 4; ordinal += 1) {
     insert.run(
       uuidv7(),
       sequenceId,
       "audio",
-      ordinal,
+      audioKeys[ordinal],
       `Audio ${ordinal + 1}`,
       0,
       0,
       null,
     );
   }
-  insert.run(uuidv7(), sequenceId, "caption", 0, "Captions", null, null, null);
+  insert.run(
+    uuidv7(), sequenceId, "caption", initialOrderKeys(1)[0], "Captions", null, null, null,
+  );
 }
 
 function convertStillTimelineSlots(database: DatabaseSync): void {
@@ -536,18 +574,19 @@ function convertStillTimelineSlots(database: DatabaseSync): void {
   const track = database
     .prepare(
       `SELECT track_id FROM sequence_tracks
-       WHERE sequence_id=? AND kind='video' AND ordinal=0`,
+       WHERE sequence_id=? AND kind='video'
+       ORDER BY order_key, track_id LIMIT 1`,
     )
     .get(sequence.sequence_id) as unknown as { track_id: string };
   const rows = database
     .prepare(
-      `SELECT s.slot_id, s.artifact_id, s.ordinal, a.kind,
+      `SELECT s.slot_id, s.artifact_id, s.order_key, a.kind,
               f.path AS source_path, f.object_hash
        FROM timeline_slots s
        JOIN artifacts a ON a.artifact_id=s.artifact_id
        LEFT JOIN artifact_files f ON f.artifact_id=a.artifact_id
        WHERE a.kind='image'
-       ORDER BY s.ordinal, s.slot_id, f.path`,
+       ORDER BY s.order_key, s.slot_id, f.path`,
     )
     .all() as unknown as TimelineSlotRow[];
   const seen = new Set<string>();

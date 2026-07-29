@@ -1180,40 +1180,68 @@ function persistSequenceProjection(
     });
   }
   const placeholders = trackIds.map(() => "?").join(",");
-  context.store.db
-    .prepare(`DELETE FROM caption_cues WHERE track_id IN (${placeholders})`)
-    .run(...trackIds);
-  context.store.db
-    .prepare(`DELETE FROM transitions WHERE track_id IN (${placeholders})`)
-    .run(...trackIds);
-  context.store.db
-    .prepare(
-      `DELETE FROM clip_transforms
-       WHERE clip_id IN (
-         SELECT clip_id FROM sequence_clips
+  const clipIds = sequence.clips.map((clip) => clip.clipId);
+  if (clipIds.length === 0) {
+    context.store.db
+      .prepare(
+        `DELETE FROM sequence_clips WHERE track_id IN (${placeholders})`,
+      )
+      .run(...trackIds);
+  } else {
+    const clipPlaceholders = clipIds.map(() => "?").join(",");
+    context.store.db
+      .prepare(
+        `DELETE FROM sequence_clips
          WHERE track_id IN (${placeholders})
-       )`,
-    )
-    .run(...trackIds);
-  context.store.db
-    .prepare(
-      `DELETE FROM clip_links
-       WHERE clip_id IN (
-         SELECT clip_id FROM sequence_clips
-         WHERE track_id IN (${placeholders})
-       )`,
-    )
-    .run(...trackIds);
-  context.store.db
-    .prepare(`DELETE FROM sequence_clips WHERE track_id IN (${placeholders})`)
-    .run(...trackIds);
-  insertClips(context, sequence.clips);
-  insertTransitions(context, sequence.transitions);
-  insertCaptions(context, sequence.captions);
+           AND clip_id NOT IN (${clipPlaceholders})`,
+      )
+      .run(...trackIds, ...clipIds);
+  }
+  upsertClips(context, sequence.clips);
+  deleteMissingForTracks(
+    context,
+    "transitions",
+    "transition_id",
+    trackIds,
+    sequence.transitions.map((transition) => transition.transitionId),
+  );
+  upsertTransitions(context, sequence.transitions);
+  deleteMissingForTracks(
+    context,
+    "caption_cues",
+    "cue_id",
+    trackIds,
+    sequence.captions.map((cue) => cue.cueId),
+  );
+  upsertCaptions(context, sequence.captions);
 }
 
-function insertClips(context: EngineContext, clips: SequenceClip[]): void {
-  const insertClip = context.store.db.prepare(
+function deleteMissingForTracks(
+  context: EngineContext,
+  table: "transitions" | "caption_cues",
+  idColumn: "transition_id" | "cue_id",
+  trackIds: string[],
+  ids: string[],
+): void {
+  const trackPlaceholders = trackIds.map(() => "?").join(",");
+  if (ids.length === 0) {
+    context.store.db
+      .prepare(`DELETE FROM ${table} WHERE track_id IN (${trackPlaceholders})`)
+      .run(...trackIds);
+    return;
+  }
+  const idPlaceholders = ids.map(() => "?").join(",");
+  context.store.db
+    .prepare(
+      `DELETE FROM ${table}
+       WHERE track_id IN (${trackPlaceholders})
+         AND ${idColumn} NOT IN (${idPlaceholders})`,
+    )
+    .run(...trackIds, ...ids);
+}
+
+function upsertClips(context: EngineContext, clips: SequenceClip[]): void {
+  const upsertClip = context.store.db.prepare(
     `INSERT INTO sequence_clips(
       clip_id, track_id, source_kind, artifact_id, source_path,
       stream_id, object_hash, source_start_tick, source_duration_ticks,
@@ -1221,11 +1249,39 @@ function insertClips(context: EngineContext, clips: SequenceClip[]): void {
       timeline_start_frame, duration_frames, speed_numerator,
       speed_denominator, reverse, audio_policy, gain_db, audio_muted,
       fade_in_frames, fade_out_frames, enabled
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(clip_id) DO UPDATE SET
+      track_id=excluded.track_id,
+      source_kind=excluded.source_kind,
+      artifact_id=excluded.artifact_id,
+      source_path=excluded.source_path,
+      stream_id=excluded.stream_id,
+      object_hash=excluded.object_hash,
+      source_start_tick=excluded.source_start_tick,
+      source_duration_ticks=excluded.source_duration_ticks,
+      time_base_numerator=excluded.time_base_numerator,
+      time_base_denominator=excluded.time_base_denominator,
+      timeline_start_frame=excluded.timeline_start_frame,
+      duration_frames=excluded.duration_frames,
+      speed_numerator=excluded.speed_numerator,
+      speed_denominator=excluded.speed_denominator,
+      reverse=excluded.reverse,
+      audio_policy=excluded.audio_policy,
+      gain_db=excluded.gain_db,
+      audio_muted=excluded.audio_muted,
+      fade_in_frames=excluded.fade_in_frames,
+      fade_out_frames=excluded.fade_out_frames,
+      enabled=excluded.enabled`,
+  );
+  const deleteLink = context.store.db.prepare(
+    "DELETE FROM clip_links WHERE clip_id=?",
   );
   const insertLink = context.store.db.prepare(
     `INSERT INTO clip_links(link_group_id, clip_id, role)
      VALUES (?, ?, 'linked')`,
+  );
+  const deleteTransform = context.store.db.prepare(
+    "DELETE FROM clip_transforms WHERE clip_id=?",
   );
   const insertTransform = context.store.db.prepare(
     `INSERT INTO clip_transforms(
@@ -1238,7 +1294,7 @@ function insertClips(context: EngineContext, clips: SequenceClip[]): void {
     const timed = clip.source.kind === "timed"
       ? (clip as TimedSequenceClip)
       : undefined;
-    insertClip.run(
+    upsertClip.run(
       clip.clipId,
       clip.trackId,
       clip.source.kind,
@@ -1264,7 +1320,9 @@ function insertClips(context: EngineContext, clips: SequenceClip[]): void {
       clip.audio?.fadeOutFrames ?? null,
       clip.enabled ? 1 : 0,
     );
+    deleteLink.run(clip.clipId);
     if (clip.linkGroupId) insertLink.run(clip.linkGroupId, clip.clipId);
+    deleteTransform.run(clip.clipId);
     if (clip.transform) {
       const transform = clip.transform;
       insertTransform.run(
@@ -1288,18 +1346,25 @@ function insertClips(context: EngineContext, clips: SequenceClip[]): void {
   }
 }
 
-function insertTransitions(
+function upsertTransitions(
   context: EngineContext,
   transitions: SequenceTransition[],
 ): void {
-  const insert = context.store.db.prepare(
+  const upsert = context.store.db.prepare(
     `INSERT INTO transitions(
       transition_id, track_id, outgoing_clip_id, incoming_clip_id,
       kind, duration_frames, alignment, parameters_json
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, '{}')`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, '{}')
+    ON CONFLICT(transition_id) DO UPDATE SET
+      track_id=excluded.track_id,
+      outgoing_clip_id=excluded.outgoing_clip_id,
+      incoming_clip_id=excluded.incoming_clip_id,
+      kind=excluded.kind,
+      duration_frames=excluded.duration_frames,
+      alignment=excluded.alignment`,
   );
   for (const transition of transitions) {
-    insert.run(
+    upsert.run(
       transition.transitionId,
       transition.trackId,
       transition.outgoingClipId,
@@ -1311,16 +1376,28 @@ function insertTransitions(
   }
 }
 
-function insertCaptions(context: EngineContext, captions: CaptionCue[]): void {
-  const insert = context.store.db.prepare(
+function upsertCaptions(context: EngineContext, captions: CaptionCue[]): void {
+  const upsert = context.store.db.prepare(
     `INSERT INTO caption_cues(
       cue_id, track_id, timeline_start_frame, duration_frames,
       text, speaker, style_id, transcript_id, transcript_revision,
       start_word_id, end_word_id, source_range_json
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT(cue_id) DO UPDATE SET
+      track_id=excluded.track_id,
+      timeline_start_frame=excluded.timeline_start_frame,
+      duration_frames=excluded.duration_frames,
+      text=excluded.text,
+      speaker=excluded.speaker,
+      style_id=excluded.style_id,
+      transcript_id=excluded.transcript_id,
+      transcript_revision=excluded.transcript_revision,
+      start_word_id=excluded.start_word_id,
+      end_word_id=excluded.end_word_id,
+      source_range_json=excluded.source_range_json`,
   );
   for (const cue of captions) {
-    insert.run(
+    upsert.run(
       cue.cueId,
       cue.trackId,
       cue.timelineStartFrame,

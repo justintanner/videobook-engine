@@ -26,6 +26,11 @@ import {
 } from "./context.js";
 import { assertUuidV7, newUuidV7 } from "./ids.js";
 import {
+  initialOrderKeys,
+  orderKeyAfter,
+  orderKeyBetween,
+} from "./order-keys.js";
+import {
   normalizeRational,
   normalizeSourceRange,
 } from "./mvp-time.js";
@@ -52,7 +57,7 @@ interface TrackRow {
   track_id: string;
   sequence_id: string;
   kind: "video" | "audio" | "caption";
-  ordinal: number;
+  order_key: string;
   name: string;
   enabled: number;
   locked: number;
@@ -159,6 +164,11 @@ export function createSequencesApi(context: EngineContext) {
       input: CreateSequenceTrackInput,
     ): Promise<Result<Sequence, EngineError>> =>
       addTrack(context, sequenceId, input),
+    moveTrack: (
+      trackId: string,
+      toOrdinal: number,
+    ): Promise<Result<Sequence, EngineError>> =>
+      moveTrack(context, trackId, toOrdinal),
     removeTrack: (
       trackId: string,
     ): Promise<Result<Sequence, EngineError>> =>
@@ -178,14 +188,18 @@ async function addTrack(
   return resultOf(async () => {
     assertUuidV7(sequenceId, "Sequence ID");
     requiredSequenceRow(context, sequenceId);
-    const ordinalRow = context.store.db
+    const siblings = context.store.db
       .prepare(
-        `SELECT COALESCE(MAX(ordinal), -1) + 1 AS ordinal
-         FROM sequence_tracks WHERE sequence_id=? AND kind=?`,
+        `SELECT order_key FROM sequence_tracks
+         WHERE sequence_id=? AND kind=?
+         ORDER BY order_key, track_id`,
       )
-      .get(sequenceId, input.kind) as { ordinal: number };
+      .all(sequenceId, input.kind) as unknown as Array<{ order_key: string }>;
     const trackId = newUuidV7();
-    const ordinal = ordinalRow.ordinal;
+    const ordinal = siblings.length;
+    const orderKey = orderKeyAfter(
+      siblings.length > 0 ? siblings[siblings.length - 1]!.order_key : null,
+    );
     const name = input.name === undefined
       ? input.kind === "caption"
         ? `Captions ${ordinal + 1}`
@@ -210,10 +224,70 @@ async function addTrack(
         details: { sequenceId, trackId, kind: input.kind, ordinal },
         writeSet: [`sequence:${sequenceId}`, `track:${trackId}`],
       },
-      () => insertTracks(context, [track]),
+      () => insertTracks(context, [{ track, orderKey }]),
     );
     return ok(
       requiredSequence(context, sequenceId, mutation.revision),
+      mutation.revision,
+    );
+  });
+}
+
+async function moveTrack(
+  context: EngineContext,
+  trackId: string,
+  toOrdinal: number,
+): Promise<Result<Sequence, EngineError>> {
+  return resultOf(async () => {
+    assertUuidV7(trackId, "Track ID");
+    if (!Number.isInteger(toOrdinal)) {
+      throw new Error("Track ordinal must be an integer");
+    }
+    const row = requiredTrackRow(context, trackId);
+    const siblings = context.store.db
+      .prepare(
+        `SELECT track_id, order_key FROM sequence_tracks
+         WHERE sequence_id=? AND kind=?
+         ORDER BY order_key, track_id`,
+      )
+      .all(row.sequence_id, row.kind) as unknown as Array<{
+        track_id: string;
+        order_key: string;
+      }>;
+    const currentOrdinal = siblings.findIndex(
+      (candidate) => candidate.track_id === trackId,
+    );
+    const others = siblings.filter((candidate) => candidate.track_id !== trackId);
+    const target = Math.max(0, Math.min(toOrdinal, others.length));
+    if (target === currentOrdinal) {
+      return requiredSequence(context, row.sequence_id);
+    }
+    const orderKey = target === others.length
+      ? orderKeyAfter(others.length > 0 ? others[others.length - 1]!.order_key : null)
+      : orderKeyBetween(
+        target > 0 ? others[target - 1]!.order_key : null,
+        others[target]!.order_key,
+      );
+    const mutation = await context.store.semantic(
+      {
+        operation: "move_sequence_track",
+        details: {
+          sequenceId: row.sequence_id,
+          trackId,
+          kind: row.kind,
+          fromOrdinal: currentOrdinal,
+          toOrdinal: target,
+        },
+        writeSet: [`sequence:${row.sequence_id}`, `track:${trackId}`],
+      },
+      () => {
+        context.store.db
+          .prepare("UPDATE sequence_tracks SET order_key=? WHERE track_id=?")
+          .run(orderKey, trackId);
+      },
+    );
+    return ok(
+      requiredSequence(context, row.sequence_id, mutation.revision),
       mutation.revision,
     );
   });
@@ -224,20 +298,7 @@ async function removeTrack(
   trackId: string,
 ): Promise<Result<Sequence, EngineError>> {
   return resultOf(async () => {
-    assertUuidV7(trackId, "Track ID");
-    const row = context.store.db
-      .prepare(
-        `SELECT track_id, sequence_id, kind, ordinal, name,
-                enabled, locked, muted, solo, blend_mode
-         FROM sequence_tracks WHERE track_id=?`,
-      )
-      .get(trackId) as unknown as TrackRow | undefined;
-    if (!row) {
-      throw new EngineFault({
-        code: "NOT_FOUND",
-        message: `Sequence track not found: ${trackId}`,
-      });
-    }
+    const row = requiredTrackRow(context, trackId);
     const clipCount = context.store.db
       .prepare("SELECT COUNT(*) AS count FROM sequence_clips WHERE track_id=?")
       .get(trackId) as { count: number };
@@ -263,16 +324,7 @@ async function removeTrack(
         ownerId: trackId,
       });
     }
-    const later = context.store.db
-      .prepare(
-        `SELECT track_id, ordinal FROM sequence_tracks
-         WHERE sequence_id=? AND kind=? AND ordinal>?
-         ORDER BY ordinal`,
-      )
-      .all(row.sequence_id, row.kind, row.ordinal) as Array<{
-        track_id: string;
-        ordinal: number;
-      }>;
+    const ordinal = trackOrdinal(context, row);
     const mutation = await context.store.semantic(
       {
         operation: "remove_sequence_track",
@@ -280,7 +332,7 @@ async function removeTrack(
           sequenceId: row.sequence_id,
           trackId,
           kind: row.kind,
-          ordinal: row.ordinal,
+          ordinal,
         },
         writeSet: [`sequence:${row.sequence_id}`, `track:${trackId}`],
       },
@@ -288,11 +340,6 @@ async function removeTrack(
         context.store.db
           .prepare("DELETE FROM sequence_tracks WHERE track_id=?")
           .run(trackId);
-        const update = context.store.db
-          .prepare("UPDATE sequence_tracks SET ordinal=? WHERE track_id=?");
-        for (const candidate of later) {
-          update.run(candidate.ordinal - 1, candidate.track_id);
-        }
       },
     );
     return ok(
@@ -308,20 +355,7 @@ async function updateTrack(
   input: UpdateSequenceTrackInput,
 ): Promise<Result<Sequence, EngineError>> {
   return resultOf(async () => {
-    assertUuidV7(trackId, "Track ID");
-    const row = context.store.db
-      .prepare(
-        `SELECT track_id, sequence_id, kind, ordinal, name,
-                enabled, locked, muted, solo, blend_mode
-         FROM sequence_tracks WHERE track_id=?`,
-      )
-      .get(trackId) as unknown as TrackRow | undefined;
-    if (!row) {
-      throw new EngineFault({
-        code: "NOT_FOUND",
-        message: `Sequence track not found: ${trackId}`,
-      });
-    }
+    const row = requiredTrackRow(context, trackId);
     if (row.kind !== "audio" && (input.muted !== undefined || input.solo !== undefined)) {
       throw new EngineFault({
         code: "INVALID_INPUT",
@@ -393,14 +427,13 @@ async function createSequence(
         },
         writeSet: [
           `sequence:${sequenceId}`,
-          ...tracks.map((track) => `track:${track.trackId}`),
+          ...tracks.map(({ track }) => `track:${track.trackId}`),
         ],
       },
       (_operationId, now) => {
         insertSequence(context, sequenceId, bookId, normalized, now);
         insertTracks(context, tracks);
-      },
-    );
+      },    );
     return ok(
       requiredSequence(context, sequenceId, mutation.revision),
       mutation.revision,
@@ -543,13 +576,19 @@ function sequenceFromRow(
   row: SequenceRow,
   revision?: string,
 ): Sequence {
-  const tracks = queryRows<TrackRow>(
+  const trackRows = queryRows<TrackRow>(
     context,
     `${TRACK_SELECT} FROM ${semanticSource("sequence_tracks", revision)}
-     WHERE sequence_id=? ORDER BY kind, ordinal, track_id`,
+     WHERE sequence_id=? ORDER BY kind, order_key, track_id`,
     revision,
     row.sequence_id,
-  ).map(trackFromRow);
+  );
+  const ordinalsByKind = new Map<string, number>();
+  const tracks = trackRows.map((trackRow) => {
+    const ordinal = ordinalsByKind.get(trackRow.kind) ?? 0;
+    ordinalsByKind.set(trackRow.kind, ordinal + 1);
+    return trackFromRow(trackRow, ordinal);
+  });
   const trackIds = tracks.map((track) => track.trackId);
   const clips = trackIds.length === 0
     ? []
@@ -838,11 +877,11 @@ function captionTranscriptSelection(
   };
 }
 
-function trackFromRow(row: TrackRow): SequenceTrack {
+function trackFromRow(row: TrackRow, ordinal: number): SequenceTrack {
   const common = {
     trackId: row.track_id,
     sequenceId: row.sequence_id,
-    ordinal: row.ordinal,
+    ordinal,
     name: row.name,
     enabled: row.enabled === 1,
     locked: row.locked === 1,
@@ -944,60 +983,75 @@ function defaultTracks(
   videoCount: number,
   audioCount: number,
   captionCount: number,
-): SequenceTrack[] {
-  const tracks: SequenceTrack[] = [];
+): Array<{ track: SequenceTrack; orderKey: string }> {
+  const tracks: Array<{ track: SequenceTrack; orderKey: string }> = [];
+  const videoKeys = initialOrderKeys(videoCount);
   for (let ordinal = 0; ordinal < videoCount; ordinal += 1) {
     tracks.push({
-      trackId: newUuidV7(),
-      sequenceId,
-      kind: "video",
-      ordinal,
-      name: `Video ${ordinal + 1}`,
-      enabled: true,
-      locked: false,
-      blendMode: "normal",
+      orderKey: videoKeys[ordinal]!,
+      track: {
+        trackId: newUuidV7(),
+        sequenceId,
+        kind: "video",
+        ordinal,
+        name: `Video ${ordinal + 1}`,
+        enabled: true,
+        locked: false,
+        blendMode: "normal",
+      },
     });
   }
+  const audioKeys = initialOrderKeys(audioCount);
   for (let ordinal = 0; ordinal < audioCount; ordinal += 1) {
     tracks.push({
-      trackId: newUuidV7(),
-      sequenceId,
-      kind: "audio",
-      ordinal,
-      name: `Audio ${ordinal + 1}`,
-      enabled: true,
-      locked: false,
-      muted: false,
-      solo: false,
+      orderKey: audioKeys[ordinal]!,
+      track: {
+        trackId: newUuidV7(),
+        sequenceId,
+        kind: "audio",
+        ordinal,
+        name: `Audio ${ordinal + 1}`,
+        enabled: true,
+        locked: false,
+        muted: false,
+        solo: false,
+      },
     });
   }
+  const captionKeys = initialOrderKeys(captionCount);
   for (let ordinal = 0; ordinal < captionCount; ordinal += 1) {
     tracks.push({
-      trackId: newUuidV7(),
-      sequenceId,
-      kind: "caption",
-      ordinal,
-      name: captionCount === 1 ? "Captions" : `Captions ${ordinal + 1}`,
-      enabled: true,
-      locked: false,
+      orderKey: captionKeys[ordinal]!,
+      track: {
+        trackId: newUuidV7(),
+        sequenceId,
+        kind: "caption",
+        ordinal,
+        name: captionCount === 1 ? "Captions" : `Captions ${ordinal + 1}`,
+        enabled: true,
+        locked: false,
+      },
     });
   }
   return tracks;
 }
 
-function insertTracks(context: EngineContext, tracks: SequenceTrack[]): void {
+function insertTracks(
+  context: EngineContext,
+  tracks: Array<{ track: SequenceTrack; orderKey: string }>,
+): void {
   const insert = context.store.db.prepare(
     `INSERT INTO sequence_tracks(
-      track_id, sequence_id, kind, ordinal, name,
+      track_id, sequence_id, kind, order_key, name,
       enabled, locked, muted, solo, blend_mode
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
-  for (const track of tracks) {
+  for (const { track, orderKey } of tracks) {
     insert.run(
       track.trackId,
       track.sequenceId,
       track.kind,
-      track.ordinal,
+      orderKey,
       track.name,
       track.enabled ? 1 : 0,
       track.locked ? 1 : 0,
@@ -1017,6 +1071,32 @@ function queryRows<T>(
   return context.store.db
     .prepare(sql)
     .all(...(revision ? [revision, ...params] : params)) as unknown as T[];
+}
+
+function requiredTrackRow(context: EngineContext, trackId: string): TrackRow {
+  assertUuidV7(trackId, "Track ID");
+  const row = context.store.db
+    .prepare(`${TRACK_SELECT} FROM sequence_tracks WHERE track_id=?`)
+    .get(trackId) as unknown as TrackRow | undefined;
+  if (!row) {
+    throw new EngineFault({
+      code: "NOT_FOUND",
+      message: `Sequence track not found: ${trackId}`,
+    });
+  }
+  return row;
+}
+
+/** Current rank of a track within its sequence and kind. */
+function trackOrdinal(context: EngineContext, row: TrackRow): number {
+  const siblings = context.store.db
+    .prepare(
+      `SELECT track_id FROM sequence_tracks
+       WHERE sequence_id=? AND kind=?
+       ORDER BY order_key, track_id`,
+    )
+    .all(row.sequence_id, row.kind) as unknown as Array<{ track_id: string }>;
+  return siblings.findIndex((candidate) => candidate.track_id === row.track_id);
 }
 
 function semanticSource(table: string, revision?: string): string {
@@ -1066,7 +1146,7 @@ const SEQUENCE_SELECT = `
          background_rgba_json, created_at`;
 
 const TRACK_SELECT = `
-  SELECT track_id, sequence_id, kind, ordinal, name,
+  SELECT track_id, sequence_id, kind, order_key, name,
          enabled, locked, muted, solo, blend_mode`;
 
 const CLIP_SELECT = `

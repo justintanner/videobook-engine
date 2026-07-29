@@ -327,7 +327,6 @@ export interface ArtifactManifestFile {
   name: string;
   sizeBytes: number;
   extension: string | null;
-  mtimeMs: number;
   mimeType?: string;
   objectHash: string;
 }
@@ -719,6 +718,40 @@ export interface TimelineInput {
   render: TimelineRender;
   slots?: TimelineSlotInput[];
   audio?: TimelineAudioInput[];
+}
+
+/**
+ * Position for a row-level timeline insertion or move. `afterId` places the
+ * row immediately after that row, `beforeId` immediately before it; when both
+ * are given the row lands between them. With neither, the row is appended.
+ */
+export interface TimelinePosition {
+  beforeId?: string;
+  afterId?: string;
+}
+
+export interface TimelineSlotPatch {
+  /** Artifact UUID or slug. */
+  artifact?: string;
+  /** Alias for artifact when the caller already has a stable UUID. */
+  artifactId?: string;
+  /** New value; null clears the optional field. */
+  volume?: number | null;
+  audioFadeIn?: number | null;
+  audioFadeOut?: number | null;
+}
+
+export interface TimelineAudioPatch {
+  /** Artifact UUID or slug. */
+  artifact?: string;
+  /** Alias for artifact when the caller already has a stable UUID. */
+  artifactId?: string;
+  startFrame?: number;
+  durationFrames?: number;
+  /** New value; null clears the optional field. */
+  volume?: number | null;
+  fadeIn?: number | null;
+  fadeOut?: number | null;
 }
 
 export interface ChatLogEntry {

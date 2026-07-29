@@ -79,7 +79,7 @@ describe("centered notebook grid schema v13", () => {
       "inputs_json",
       "output_artifact_id",
     ]);
-    expect(SCHEMA_VERSION).toBe(14);
+    expect(SCHEMA_VERSION).toBe(15);
   });
 
   it("round-trips every cell type at arbitrary signed columns", async () => {
@@ -280,7 +280,7 @@ describe("centered notebook grid schema v13", () => {
     database.close();
 
     expect(() => createEngine({ rootDir: root }))
-      .toThrow(`Database schema ${version} is not supported by engine schema 14`);
+      .toThrow(`Database schema ${version} is not supported by engine schema 15`);
   });
 
   it("rejects duplicate, negative-row, and fractional slots without horizontal edges", async () => {
@@ -469,7 +469,7 @@ describe("centered notebook grid schema v13", () => {
     database.close();
 
     expect(() => createEngine({ rootDir: root })).toThrow(
-      "Database schema 10 is not supported by engine schema 14",
+      "Database schema 10 is not supported by engine schema 15",
     );
   });
 });
