@@ -79,7 +79,7 @@ describe("centered notebook grid schema v13", () => {
       "inputs_json",
       "output_artifact_id",
     ]);
-    expect(SCHEMA_VERSION).toBe(17);
+    expect(SCHEMA_VERSION).toBe(18);
   });
 
   it("round-trips every cell type at arbitrary signed columns", async () => {
@@ -268,6 +268,141 @@ describe("centered notebook grid schema v13", () => {
     engine.close();
   });
 
+  it("round-trips notebook workflow state through normalized tables", async () => {
+    const { root, engine } = await setup();
+    const notebook = value(await engine.notebooks.create("Workflow state"));
+    const cell = engine.notebooks.createCell({
+      type: "analyze",
+      slug: "analyze-source",
+      slot: { row: 0, column: 0 },
+    });
+    value(await engine.notebooks.write({
+      ...notebook,
+      description: "Catalog-owned workflow",
+      lifecycleState: "running",
+      workflowVersion: 3,
+      analysisRevision: "rev-analysis",
+      audioSpine: {
+        artifactId: "artifact-audio",
+        streamId: "stream-audio",
+        objectHash: "sha256:audio",
+        sourcePath: "audio.wav",
+        sequenceId: "sequence-main",
+        sequenceRevision: "rev-sequence",
+        trackId: "track-audio",
+        clipId: "clip-audio",
+      },
+      currentSelection: {
+        transcriptId: "transcript-current",
+        startWordId: "word-a",
+        endWordId: "word-b",
+      },
+      fixture: { version: 1, owner: "integration" },
+      execution: {
+        [cell.id]: {
+          fingerprint: "fingerprint-1",
+          status: "completed",
+          runId: "run-1",
+          stale: true,
+          fixtureBaseline: true,
+        },
+      },
+      generationPlans: [{
+        planId: "generation-plan-1",
+        cellId: cell.id,
+        status: "approved",
+        plan: { provider: "kie" },
+        createdAt: "2026-07-29T00:00:00.000Z",
+        updatedAt: "2026-07-29T00:01:00.000Z",
+      }],
+      notebookRunPlans: [{
+        planId: "run-plan-1",
+        status: "approved",
+        plan: { order: [cell.id] },
+        paidCellIds: [cell.id],
+        cellDefinitionFingerprints: { [cell.id]: "fingerprint-1" },
+        knownCostUsd: 1.25,
+        unknownCostCount: 0,
+        createdAt: "2026-07-29T00:00:00.000Z",
+        updatedAt: "2026-07-29T00:01:00.000Z",
+      }],
+      transcriptEdits: [{
+        actionId: "edit-1",
+        kind: "remove_words",
+        startWordId: "word-a",
+        endWordId: "word-b",
+      }],
+      transcriptAttachments: [{
+        id: "attachment-1",
+        transcriptId: "transcript-current",
+      }],
+      cells: [cell],
+      edges: [],
+    }));
+
+    const reloaded = value(engine.notebooks.read(notebook.id));
+    expect(reloaded).toMatchObject({
+      description: "Catalog-owned workflow",
+      lifecycleState: "running",
+      workflowVersion: 3,
+      analysisRevision: "rev-analysis",
+      audioSpine: { artifactId: "artifact-audio" },
+      currentSelection: { transcriptId: "transcript-current" },
+      fixture: { version: 1, owner: "integration" },
+      execution: {
+        [cell.id]: {
+          fingerprint: "fingerprint-1",
+          stale: true,
+          fixtureBaseline: true,
+        },
+      },
+      generationPlans: [{ planId: "generation-plan-1", cellId: cell.id }],
+      notebookRunPlans: [{ planId: "run-plan-1", knownCostUsd: 1.25 }],
+      transcriptEdits: [{ actionId: "edit-1", kind: "remove_words" }],
+      transcriptAttachments: [{ id: "attachment-1" }],
+    });
+
+    value(await engine.notebooks.write({
+      ...reloaded,
+      description: undefined,
+      lifecycleState: undefined,
+      workflowVersion: undefined,
+      analysisRevision: undefined,
+      audioSpine: undefined,
+      currentSelection: undefined,
+      fixture: undefined,
+      execution: {},
+      generationPlans: [],
+      notebookRunPlans: [],
+      transcriptEdits: [],
+      transcriptAttachments: [],
+    }));
+    const cleared = value(engine.notebooks.read(notebook.id));
+    expect(cleared).not.toHaveProperty("description");
+    expect(cleared).not.toHaveProperty("audioSpine");
+    expect(cleared.execution).toEqual({});
+    expect(cleared.generationPlans).toEqual([]);
+    expect(cleared.notebookRunPlans).toEqual([]);
+    expect(cleared.transcriptEdits).toEqual([]);
+    expect(cleared.transcriptAttachments).toEqual([]);
+    engine.close();
+
+    const database = new DatabaseSync(path.join(root, "data", "videobook.db"));
+    for (const table of [
+      "notebook_fields",
+      "notebook_cell_executions",
+      "notebook_generation_plans",
+      "notebook_run_plans",
+      "notebook_transcript_edits",
+      "notebook_transcript_attachments",
+    ]) {
+      expect(
+        database.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get(),
+      ).toEqual({ count: 0 });
+    }
+    database.close();
+  });
+
   it.each([11, 12])("rejects schema-v%s catalogs without migration", async (version) => {
     const { root, engine } = await setup();
     engine.close();
@@ -280,7 +415,7 @@ describe("centered notebook grid schema v13", () => {
     database.close();
 
     expect(() => createEngine({ rootDir: root }))
-      .toThrow(`Database schema ${version} is not supported by engine schema 17`);
+      .toThrow(`Database schema ${version} is not supported by engine schema 18`);
   });
 
   it("rejects duplicate, negative-row, and fractional slots without horizontal edges", async () => {
@@ -469,7 +604,7 @@ describe("centered notebook grid schema v13", () => {
     database.close();
 
     expect(() => createEngine({ rootDir: root })).toThrow(
-      "Database schema 10 is not supported by engine schema 17",
+      "Database schema 10 is not supported by engine schema 18",
     );
   });
 });

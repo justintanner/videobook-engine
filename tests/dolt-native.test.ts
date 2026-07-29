@@ -62,7 +62,6 @@ const MERGE_SCHEMA_SQL = `
   CREATE TABLE notebooks (
     notebook_id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
-    properties_json TEXT NOT NULL,
     created_at INTEGER NOT NULL
   );
   CREATE TABLE cells (
@@ -219,9 +218,9 @@ describe("single-book Dolt engine", () => {
     suppliedAgain.close();
   });
 
-  it("creates the exact normalized v17 semantic and runtime schema", async () => {
+  it("creates the exact normalized v18 semantic and runtime schema", async () => {
     const { engine, dataDir } = await setup();
-    expect(SCHEMA_VERSION).toBe(17);
+    expect(SCHEMA_VERSION).toBe(18);
     engine.close();
 
     const db = new DatabaseSync(path.join(dataDir, "videobook.db"));
@@ -239,7 +238,7 @@ describe("single-book Dolt engine", () => {
     expect(tables).toEqual(
       [...SEMANTIC_TABLES, ...RUNTIME_TABLES].sort(),
     );
-    expect(tables).toHaveLength(51);
+    expect(tables).toHaveLength(57);
 
     const columns = (table: string) =>
       (
@@ -262,9 +261,20 @@ describe("single-book Dolt engine", () => {
     expect(columns("notebooks")).toEqual([
       "notebook_id",
       "name",
-      "properties_json",
       "created_at",
     ]);
+    expect(columns("notebook_fields")).toEqual([
+      "notebook_id",
+      "field",
+      "value_json",
+    ]);
+    expect(columns("notebook_cell_executions")).toContain("cell_id");
+    expect(columns("notebook_generation_plans")).toContain("plan_id");
+    expect(columns("notebook_run_plans")).toContain("plan_id");
+    expect(columns("notebook_transcript_edits")).toContain("action_id");
+    expect(columns("notebook_transcript_attachments")).toContain(
+      "attachment_id",
+    );
     expect(columns("cells")).toEqual([
       "notebook_id",
       "cell_id",
@@ -299,7 +309,7 @@ describe("single-book Dolt engine", () => {
       (db
         .prepare("SELECT version FROM engine_schema WHERE singleton=1")
         .get() as { version: number }).version,
-    ).toBe(17);
+    ).toBe(18);
     expect(
       db
         .prepare(
@@ -541,10 +551,10 @@ describe("single-book Dolt engine", () => {
     ).run(leftEntity, rightEntity);
     db.prepare(
       `INSERT INTO notebooks(
-        notebook_id, name, properties_json, created_at
+        notebook_id, name, created_at
       ) VALUES (
         ?, 'Merge graph',
-        '{}', 0
+        0
       )`,
     ).run(notebookId);
     commitTables(db, [...MERGE_TABLES], "initial merge fixture");

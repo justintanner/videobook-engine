@@ -65,10 +65,95 @@ export interface NotebookEdge {
   targetInput: string;
 }
 
+export interface NotebookCellExecution {
+  fingerprint?: string;
+  status?: string;
+  outputArtifactId?: string;
+  providerArtifactId?: string;
+  runId?: string;
+  completedAt?: string;
+  startedAt?: string;
+  updatedAt?: string;
+  tool?: string;
+  error?: string;
+  stale?: boolean;
+  fixtureBaseline?: boolean;
+}
+
+export interface NotebookGenerationPlan {
+  planId: string;
+  cellId: string;
+  status: string;
+  plan: Record<string, unknown>;
+  outputArtifactId?: string;
+  error?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface NotebookRunPlan {
+  planId: string;
+  status: string;
+  plan: Record<string, unknown>;
+  paidCellIds: string[];
+  cellDefinitionFingerprints: Record<string, string>;
+  knownCostUsd: number;
+  unknownCostCount: number;
+  createdAt: string;
+  updatedAt: string;
+  runId?: string;
+  outputs?: Record<string, string>;
+  error?: string;
+}
+
+export interface NotebookAudioSpine {
+  artifactId: string;
+  streamId: string;
+  objectHash: string;
+  sourcePath: string;
+  sequenceId: string;
+  sequenceRevision: string;
+  trackId: string;
+  clipId: string;
+}
+
+export interface NotebookCurrentSelection extends Record<string, unknown> {
+  transcriptId?: string;
+  transcriptRevision?: string;
+  startWordId?: string;
+  endWordId?: string;
+}
+
+export interface NotebookTranscriptEdit extends Record<string, unknown> {
+  actionId: string;
+  kind: string;
+  restored?: boolean;
+}
+
+export interface NotebookTranscriptAttachment extends Record<string, unknown> {
+  id: string;
+}
+
+export interface NotebookFixtureState extends Record<string, unknown> {
+  version?: number;
+  owner?: string;
+}
+
 export interface NotebookDocument {
   id: string;
   name: string;
-  properties?: Record<string, unknown>;
+  description?: string;
+  lifecycleState?: string;
+  workflowVersion?: number;
+  analysisRevision?: string;
+  audioSpine?: NotebookAudioSpine;
+  currentSelection?: NotebookCurrentSelection;
+  fixture?: NotebookFixtureState;
+  execution?: Record<string, NotebookCellExecution>;
+  generationPlans?: NotebookGenerationPlan[];
+  notebookRunPlans?: NotebookRunPlan[];
+  transcriptEdits?: NotebookTranscriptEdit[];
+  transcriptAttachments?: NotebookTranscriptAttachment[];
   cells: NotebookCell[];
   edges: NotebookEdge[];
   createdAt: string;

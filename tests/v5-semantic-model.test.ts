@@ -45,6 +45,14 @@ describe("v5 semantic media model", () => {
     expect(primary.tracks.filter((track) => track.kind === "video")).toHaveLength(2);
     expect(primary.tracks.filter((track) => track.kind === "audio")).toHaveLength(4);
     expect(primary.tracks.filter((track) => track.kind === "caption")).toHaveLength(1);
+    const square = value(
+      await engine.sequences.updateCanvas(primary.sequenceId, {
+        width: 1080,
+        height: 1080,
+      }),
+    );
+    expect(square.width).toBe(1080);
+    expect(square.height).toBe(1080);
 
     const selects = value(
       await engine.sequences.create({

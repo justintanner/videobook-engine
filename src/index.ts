@@ -70,14 +70,22 @@ export {
 export type {
   EntityDocument,
   EntityType,
+  NotebookAudioSpine,
   NotebookCell,
+  NotebookCellExecution,
   NotebookCellReference,
   NotebookCellType,
+  NotebookCurrentSelection,
   NotebookDocument,
   NotebookEdge,
+  NotebookFixtureState,
+  NotebookGenerationPlan,
   NotebookGridSlot,
   NotebookReferenceKind,
   NotebookRun,
+  NotebookRunPlan,
+  NotebookTranscriptAttachment,
+  NotebookTranscriptEdit,
   PinnedSearchResult,
 } from "./notebook/types.js";
 
@@ -101,6 +109,12 @@ export {
 
 export { artifactSlug, normalizeKind } from "./artifacts.js";
 export {
+  artifactKindPrefix,
+  artifactNameSlug,
+  humanizeArtifactSlug,
+  isArtifactNameStopWord,
+} from "./artifact-names.js";
+export {
   isValidBookSlug,
   normalizeBookSlug,
 } from "./context.js";
@@ -117,7 +131,6 @@ export {
 } from "./fork.js";
 export type { StoredObject } from "./cas.js";
 export {
-  CELLS_TABLE_COLUMNS,
   isValidNotebookCellSlug,
   NOTEBOOK_CELL_SLUG_PREFIXES,
   NOTEBOOK_CELL_TYPES,
@@ -125,3 +138,13 @@ export {
   SCHEMA_VERSION,
   SEMANTIC_TABLES,
 } from "./schema.js";
+export {
+  CELLS_TABLE_COLUMNS,
+  CELLS_TABLE_SCHEMA,
+  notebookCellTableRows,
+  type CellTableColumn,
+  type CellTableColumnType,
+  type CellTableRow,
+  type CellTableValue,
+} from "./catalog-metadata.js";
+export { isDestructiveEditOperation } from "./edit-policy.js";

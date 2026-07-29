@@ -16,6 +16,7 @@ import type {
   SequenceTrack,
   SequenceTransition,
   TranscriptSelection,
+  UpdateSequenceCanvasInput,
   UpdateSequenceTrackInput,
   VideoTrack,
 } from "./mvp-contracts.js";
@@ -154,6 +155,11 @@ export function createSequencesApi(context: EngineContext) {
       name: string,
     ): Promise<Result<Sequence, EngineError>> =>
       renameSequence(context, sequenceId, name),
+    updateCanvas: (
+      sequenceId: string,
+      input: UpdateSequenceCanvasInput,
+    ): Promise<Result<Sequence, EngineError>> =>
+      updateSequenceCanvas(context, sequenceId, input),
     updateTrack: (
       trackId: string,
       input: UpdateSequenceTrackInput,
@@ -460,6 +466,43 @@ async function renameSequence(
         context.store.db
           .prepare("UPDATE sequences SET name=? WHERE sequence_id=?")
           .run(name, sequenceId);
+      },
+    );
+    return ok(
+      requiredSequence(context, sequenceId, mutation.revision),
+      mutation.revision,
+    );
+  });
+}
+
+async function updateSequenceCanvas(
+  context: EngineContext,
+  sequenceId: string,
+  input: UpdateSequenceCanvasInput,
+): Promise<Result<Sequence, EngineError>> {
+  return resultOf(async () => {
+    const current = requiredSequence(context, sequenceId);
+    safeIntegerAtLeast(input.width, 1, "Sequence width");
+    safeIntegerAtLeast(input.height, 1, "Sequence height");
+    if (input.width === current.width && input.height === current.height) {
+      return current;
+    }
+    const mutation = await context.store.semantic(
+      {
+        operation: "update_sequence_canvas",
+        details: {
+          sequenceId,
+          oldWidth: current.width,
+          oldHeight: current.height,
+          width: input.width,
+          height: input.height,
+        },
+        writeSet: [`sequence:${sequenceId}`],
+      },
+      () => {
+        context.store.db
+          .prepare("UPDATE sequences SET width=?, height=? WHERE sequence_id=?")
+          .run(input.width, input.height, sequenceId);
       },
     );
     return ok(

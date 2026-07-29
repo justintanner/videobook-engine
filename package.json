@@ -8,6 +8,19 @@
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"
     },
+    "./artifact-names": {
+      "import": "./dist/artifact-names.js",
+      "types": "./dist/artifact-names.d.ts"
+    },
+    "./catalog-metadata": {
+      "import": "./dist/catalog-metadata.js",
+      "types": "./dist/catalog-metadata.d.ts"
+    },
+    "./edit-policy": {
+      "import": "./dist/edit-policy.js",
+      "types": "./dist/edit-policy.d.ts"
+    },
+    "./package.json": "./package.json",
     "./fixtures/v5": "./fixtures/v5/contract-fixtures.json"
   },
   "main": "./dist/index.js",

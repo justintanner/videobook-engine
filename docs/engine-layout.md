@@ -2,7 +2,7 @@
 
 This document is the column-by-column layout of the engine-owned data model.
 It describes the original schema version 4 layout, notes where later schema
-versions changed the picture (currently v17), and identifies the additional
+versions changed the picture (currently v18), and identifies the additional
 structures needed for a full non-linear video editor.
 
 The executable source of truth remains
@@ -95,7 +95,7 @@ Notation used below:
 - `→` names the referenced column.
 - Defaults and checks are shown inline.
 
-There are 28 allowlisted semantic tables.
+There are 34 allowlisted semantic tables.
 
 ### Catalog, artifacts, and content
 
@@ -114,8 +114,14 @@ There are 28 allowlisted semantic tables.
 | Table | Columns | Keys, constraints, and purpose |
 | --- | --- | --- |
 | `entities` | `entity_id TEXT`<br>`type TEXT`<br>`name TEXT`<br>`description TEXT?`<br>`prompt TEXT?`<br>`data_json TEXT DEFAULT '{}'`<br>`created_at INTEGER` | `entity_id PK`; `type CHECK IN (prompt, character, scene)`. Normalized reusable creative concepts. |
-| `notebooks` | `notebook_id TEXT`<br>`name TEXT`<br>`properties_json TEXT DEFAULT '{}'`<br>`created_at INTEGER` | `notebook_id PK`. Owns a generation/authoring graph. |
-| `cells` | `notebook_id TEXT`<br>`cell_id TEXT`<br>`type TEXT`<br>`title TEXT`<br>`position_x REAL`<br>`position_y REAL`<br>`entity_id TEXT?`<br>`prompt TEXT?`<br>`model TEXT?`<br>`inputs_json TEXT DEFAULT '{}'`<br>`output_artifact_id TEXT?` | `(notebook_id, cell_id) PK`; notebook `FK → notebooks ON DELETE CASCADE`; entity `FK → entities ON DELETE RESTRICT`; output `FK → artifacts ON DELETE RESTRICT`; `type CHECK IN (prompt, character, scene, asset, image, video)`. |
+| `notebooks` | `notebook_id TEXT`<br>`name TEXT`<br>`created_at INTEGER` | `notebook_id PK`. Owns a generation/authoring graph. Schema v18 removed the monolithic `properties_json` cell. |
+| `notebook_fields` | `notebook_id TEXT`<br>`field TEXT`<br>`value_json TEXT` | `(notebook_id, field) PK`; notebook `FK → notebooks ON DELETE CASCADE`; `field` is restricted to the typed public notebook fields. Stores optional notebook-level workflow values independently. |
+| `cells` | `notebook_id TEXT`<br>`cell_id TEXT`<br>`type TEXT`<br>`slug TEXT`<br>`grid_row INTEGER`<br>`grid_column INTEGER`<br>`output_entity_id TEXT?`<br>`prompt TEXT?`<br>`provider TEXT?`<br>`model TEXT?`<br>`operation TEXT?`<br>`tool TEXT?`<br>`inputs_json TEXT DEFAULT '{}'`<br>`output_artifact_id TEXT?` | `(notebook_id, cell_id) PK`; `(notebook_id, slug) UQ`; notebook `FK → notebooks ON DELETE CASCADE`; entity and output artifacts use `ON DELETE RESTRICT`. Cell types and kind-specific slug prefixes are checked by the schema. |
+| `notebook_cell_executions` | `notebook_id TEXT`<br>`cell_id TEXT`<br>fingerprint/status/output/provider/run/timestamp/tool/error fields<br>`stale INTEGER`<br>`fixture_baseline INTEGER` | `(notebook_id, cell_id) PK` and composite cell FK with cascade. Gives each cell's execution and staleness state its own merge boundary. |
+| `notebook_generation_plans` | `notebook_id TEXT`<br>`plan_id TEXT`<br>`cell_id TEXT`<br>`status TEXT`<br>`plan_json TEXT`<br>output/error/timestamp fields | `(notebook_id, plan_id) PK`; composite cell FK with cascade. |
+| `notebook_run_plans` | `notebook_id TEXT`<br>`plan_id TEXT`<br>`status TEXT`<br>plan/cost/fingerprint/output fields<br>timestamps | `(notebook_id, plan_id) PK`. Stores approval and execution plans as independently mergeable rows. |
+| `notebook_transcript_edits` | `notebook_id TEXT`<br>`action_id TEXT`<br>`kind TEXT`<br>`restored INTEGER`<br>`payload_json TEXT` | `(notebook_id, action_id) PK`; notebook FK with cascade. |
+| `notebook_transcript_attachments` | `notebook_id TEXT`<br>`attachment_id TEXT`<br>`payload_json TEXT` | `(notebook_id, attachment_id) PK`; notebook FK with cascade. |
 | `edges` | `notebook_id TEXT`<br>`edge_id TEXT`<br>`source_cell_id TEXT`<br>`target_cell_id TEXT`<br>`target_input TEXT` | `(notebook_id, edge_id) PK`; notebook `FK → notebooks ON DELETE CASCADE`; composite source and target FKs reference cells in the same notebook and cascade on cell deletion. |
 | `runs` | `run_id TEXT`<br>`notebook_id TEXT`<br>`status TEXT`<br>`started_at INTEGER`<br>`completed_at INTEGER`<br>`cell_order_json TEXT`<br>`outputs_json TEXT`<br>`error TEXT?` | `run_id PK`; notebook `FK → notebooks ON DELETE CASCADE`; `status CHECK IN (completed, failed, aborted)`. Terminal, versioned notebook execution records. |
 

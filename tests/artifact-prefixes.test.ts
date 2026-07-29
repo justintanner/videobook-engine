@@ -5,9 +5,12 @@ import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
+  artifactNameSlug,
   artifactSlug,
   computeArtifactStatus,
   createEngine,
+  humanizeArtifactSlug,
+  isArtifactNameStopWord,
   normalizeKind,
   type Engine,
 } from "../src/index.js";
@@ -44,6 +47,18 @@ describe("artifact slug prefixes", () => {
   ] as const)("uses the canonical %s prefix", (kind, name, expected) => {
     expect(artifactSlug(kind, name)).toBe(expected);
     expect(artifactSlug(kind, expected)).toBe(expected);
+  });
+
+  it("exports the shared display-name slug policy", () => {
+    expect(artifactNameSlug("video", "The NBP NBP Opening Shot")).toBe(
+      "vid-nbp-opening-shot",
+    );
+    expect(artifactNameSlug("image", "This is only the")).toBe("img-untitled");
+    expect(humanizeArtifactSlug("vid-nbp-opening-shot")).toBe(
+      "Nbp Opening Shot",
+    );
+    expect(isArtifactNameStopWord("THE")).toBe(true);
+    expect(isArtifactNameStopWord("nbp")).toBe(false);
   });
 
   it.each([

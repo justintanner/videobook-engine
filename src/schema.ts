@@ -1,4 +1,5 @@
-export const SCHEMA_VERSION = 17;
+export { SCHEMA_VERSION } from "./catalog-metadata.js";
+import { SCHEMA_VERSION } from "./catalog-metadata.js";
 
 export const NOTEBOOK_CELL_TYPES = [
   "audio",
@@ -46,23 +47,6 @@ export function isValidNotebookCellSlug(
     && slug.startsWith(`${NOTEBOOK_CELL_SLUG_PREFIXES[type]}-`);
 }
 
-export const CELLS_TABLE_COLUMNS = [
-  "notebook_id",
-  "cell_id",
-  "type",
-  "slug",
-  "grid_row",
-  "grid_column",
-  "output_entity_id",
-  "prompt",
-  "provider",
-  "model",
-  "operation",
-  "tool",
-  "inputs_json",
-  "output_artifact_id",
-] as const;
-
 // The staging allowlist is also the restore table list: history.restore
 // reloads every table below from its dolt_at_* projection, deleting in
 // reverse order and inserting in forward order. Keep the list ordered
@@ -78,7 +62,13 @@ export const SEMANTIC_TABLES = [
   "artifact_metadata",
   "entities",
   "notebooks",
+  "notebook_fields",
   "cells",
+  "notebook_cell_executions",
+  "notebook_generation_plans",
+  "notebook_run_plans",
+  "notebook_transcript_edits",
+  "notebook_transcript_attachments",
   "edges",
   "runs",
   "cell_references",
@@ -210,8 +200,19 @@ export const SEMANTIC_SCHEMA_SQL = `
   CREATE TABLE IF NOT EXISTS notebooks (
     notebook_id TEXT PRIMARY KEY,
     name TEXT NOT NULL,
-    properties_json TEXT NOT NULL DEFAULT '{}',
     created_at INTEGER NOT NULL
+  );
+  CREATE TABLE IF NOT EXISTS notebook_fields (
+    notebook_id TEXT NOT NULL
+      REFERENCES notebooks(notebook_id) ON DELETE CASCADE,
+    field TEXT NOT NULL CHECK (
+      field IN (
+        'description','lifecycle_state','workflow_version',
+        'analysis_revision','audio_spine','current_selection','fixture'
+      )
+    ),
+    value_json TEXT NOT NULL,
+    PRIMARY KEY(notebook_id, field)
   );
   CREATE TABLE IF NOT EXISTS cells (
     notebook_id TEXT NOT NULL
@@ -263,6 +264,74 @@ export const SEMANTIC_SCHEMA_SQL = `
       OR (type = 'concat' AND slug LIKE 'concat-%')
       OR (type = 'splice' AND slug LIKE 'splice-%')
     )
+  );
+  CREATE TABLE IF NOT EXISTS notebook_cell_executions (
+    notebook_id TEXT NOT NULL,
+    cell_id TEXT NOT NULL,
+    fingerprint TEXT,
+    status TEXT,
+    output_artifact_id TEXT,
+    provider_artifact_id TEXT,
+    run_id TEXT,
+    completed_at TEXT,
+    started_at TEXT,
+    updated_at TEXT,
+    tool TEXT,
+    error TEXT,
+    stale INTEGER NOT NULL DEFAULT 0 CHECK (stale IN (0, 1)),
+    fixture_baseline INTEGER NOT NULL DEFAULT 0
+      CHECK (fixture_baseline IN (0, 1)),
+    PRIMARY KEY(notebook_id, cell_id),
+    FOREIGN KEY(notebook_id, cell_id)
+      REFERENCES cells(notebook_id, cell_id) ON DELETE CASCADE
+  );
+  CREATE TABLE IF NOT EXISTS notebook_generation_plans (
+    notebook_id TEXT NOT NULL
+      REFERENCES notebooks(notebook_id) ON DELETE CASCADE,
+    plan_id TEXT NOT NULL,
+    cell_id TEXT NOT NULL,
+    status TEXT NOT NULL,
+    plan_json TEXT NOT NULL,
+    output_artifact_id TEXT,
+    error TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY(notebook_id, plan_id),
+    FOREIGN KEY(notebook_id, cell_id)
+      REFERENCES cells(notebook_id, cell_id) ON DELETE CASCADE
+  );
+  CREATE TABLE IF NOT EXISTS notebook_run_plans (
+    notebook_id TEXT NOT NULL
+      REFERENCES notebooks(notebook_id) ON DELETE CASCADE,
+    plan_id TEXT NOT NULL,
+    status TEXT NOT NULL,
+    plan_json TEXT NOT NULL,
+    paid_cell_ids_json TEXT NOT NULL,
+    cell_fingerprints_json TEXT NOT NULL,
+    known_cost_usd REAL NOT NULL CHECK (known_cost_usd >= 0),
+    unknown_cost_count INTEGER NOT NULL CHECK (unknown_cost_count >= 0),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    run_id TEXT,
+    outputs_json TEXT,
+    error TEXT,
+    PRIMARY KEY(notebook_id, plan_id)
+  );
+  CREATE TABLE IF NOT EXISTS notebook_transcript_edits (
+    notebook_id TEXT NOT NULL
+      REFERENCES notebooks(notebook_id) ON DELETE CASCADE,
+    action_id TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    restored INTEGER NOT NULL DEFAULT 0 CHECK (restored IN (0, 1)),
+    payload_json TEXT NOT NULL,
+    PRIMARY KEY(notebook_id, action_id)
+  );
+  CREATE TABLE IF NOT EXISTS notebook_transcript_attachments (
+    notebook_id TEXT NOT NULL
+      REFERENCES notebooks(notebook_id) ON DELETE CASCADE,
+    attachment_id TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    PRIMARY KEY(notebook_id, attachment_id)
   );
   CREATE TABLE IF NOT EXISTS edges (
     notebook_id TEXT NOT NULL
@@ -594,6 +663,10 @@ export const SEMANTIC_SCHEMA_SQL = `
     ON notebooks(created_at, notebook_id);
   CREATE INDEX IF NOT EXISTS cells_output_entity
     ON cells(output_entity_id);
+  CREATE INDEX IF NOT EXISTS notebook_generation_plans_cell
+    ON notebook_generation_plans(notebook_id, cell_id, updated_at, plan_id);
+  CREATE INDEX IF NOT EXISTS notebook_run_plans_updated
+    ON notebook_run_plans(notebook_id, updated_at, plan_id);
   CREATE INDEX IF NOT EXISTS cells_grid
     ON cells(notebook_id, grid_row, grid_column, cell_id);
   CREATE INDEX IF NOT EXISTS cells_output_artifact

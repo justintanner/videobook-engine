@@ -43,11 +43,11 @@ engine.close();
 later opens it is optional and never changes the stored book. Rename the book
 explicitly with `await engine.book.rename("new-name")`.
 
-## MVP v5 contracts
+## MVP contracts
 
-Contract version 1 defines the schema-v5 media-time, stream, transcript,
-sequence, temporal-search, edit-intent, job, and copy-forward migration
-boundary before the schema implementation lands:
+Contract version 1, introduced with schema v5 and carried by the current
+schema v18 catalog, defines the media-time, stream, transcript, sequence,
+temporal-search, edit-intent, job, and copy-forward migration boundary:
 
 ```ts
 import {
@@ -87,26 +87,33 @@ versioned `runtime_%` ignore policy, and are never staged. Semantic surrogate
 identities are UUIDv7 values. Artifact slugs are human-facing names and can be
 reused after hard deletion; immutable CAS objects remain available to history.
 
-The current catalog format is schema version 17. It intentionally rejects
+The current catalog format is schema version 18. It intentionally rejects
 older catalogs rather than migrating them; create a fresh engine root.
 
-The 28 versioned semantic tables are `engine_schema`, `book`, `artifacts`,
+The 34 versioned semantic tables are `engine_schema`, `book`, `artifacts`,
 `objects`, `artifact_files`, `artifact_streams`, `book_metadata`,
-`artifact_metadata`, `entities`, `notebooks`, `cells`, `edges`, `runs`,
-`cell_references`, `pinned_search_results`, `transcripts`,
-`transcript_segments`, `transcript_words`, `sequences`, `sequence_tracks`,
-`sequence_clips`, `clip_links`, `clip_transforms`, `transitions`,
-`caption_cues`, `audio_waveforms`, `prompt_entries`, and `messages`. Dolt's
-versioned `dolt_ignore` configuration table carries the local-table policy.
-Provenance is the commit log itself: every semantic commit carries its
-operation, parameters, and write set in a structured commit message, authored
-by the configured engine identity.
+`artifact_metadata`, `entities`, `notebooks`, `notebook_fields`, `cells`,
+`notebook_cell_executions`, `notebook_generation_plans`,
+`notebook_run_plans`, `notebook_transcript_edits`,
+`notebook_transcript_attachments`, `edges`, `runs`, `cell_references`,
+`pinned_search_results`, `transcripts`, `transcript_segments`,
+`transcript_words`, `sequences`, `sequence_tracks`, `sequence_clips`,
+`clip_links`, `clip_transforms`, `transitions`, `caption_cues`,
+`audio_waveforms`, `prompt_entries`, and `messages`. Dolt's versioned
+`dolt_ignore` configuration table carries the local-table policy. Provenance
+is the commit log itself: every semantic commit carries its operation,
+parameters, and write set in a structured commit message, authored by the
+configured engine identity.
 
-The 14 local-only tables are `runtime_meta`, `runtime_jobs`,
+The 23 local-only tables are `runtime_meta`, `runtime_jobs`, `job_runs`,
 `runtime_resource_leases`, `runtime_object_publications`,
 `runtime_workspace_entries`, `runtime_artifact_views`,
 `runtime_pending_tasks`, `runtime_generation_errors`, `runtime_settings`,
-`runtime_logs`, `runtime_commit_outbox`, `runtime_similarity_embeddings`,
+`runtime_logs`, `runtime_commit_outbox`, `runtime_index_manifests`,
+`runtime_index_generations`, `runtime_index_coverage`,
+`runtime_media_segments`, `runtime_segment_text`,
+`runtime_segment_embeddings`, `runtime_segment_fingerprints`,
+`runtime_index_batches`, `runtime_similarity_embeddings`,
 `runtime_text_similarity_documents`, and `runtime_text_similarity_chunks`.
 
 See [the complete engine layout](docs/engine-layout.md) for every schema
@@ -186,8 +193,9 @@ aborted during a restore.
 
 ## Future forks
 
-Schema v17 prepares stable row identities and normalized merge boundaries for
-DoltHub-native forks. A fork is a separate catalog copy in another namespace,
+Schema v18 adds independently mergeable notebook workflow rows while retaining
+the stable identities and normalized boundaries introduced in v17. A fork is a
+separate catalog copy in another namespace,
 keeps the same `bookId`, and can open a pull request against the upstream
 `main` branch. User, origin, fork, and pull-request APIs are intentionally not
 part of this release; an open engine still accepts only its local `main`

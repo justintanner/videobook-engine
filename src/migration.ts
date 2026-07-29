@@ -468,14 +468,13 @@ function copyLegacyNotebooks(
     }>;
   const insert = destination.prepare(
     `INSERT INTO notebooks(
-      notebook_id, name, properties_json, created_at
-    ) VALUES (?, ?, ?, ?)`,
+      notebook_id, name, created_at
+    ) VALUES (?, ?, ?)`,
   );
   for (const row of rows) {
     insert.run(
       row.notebook_id,
       row.name,
-      "{}",
       row.created_at,
     );
   }

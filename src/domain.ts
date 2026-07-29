@@ -2,11 +2,16 @@ import type {
   EntityDocument,
   EntityType,
   NotebookCell,
+  NotebookCellExecution,
   NotebookCellReference,
   NotebookDocument,
   NotebookEdge,
+  NotebookGenerationPlan,
   NotebookReferenceKind,
   NotebookRun,
+  NotebookRunPlan,
+  NotebookTranscriptAttachment,
+  NotebookTranscriptEdit,
   PinnedSearchResult,
 } from "./notebook/types.js";
 import type { EngineError, Result, Revision } from "./engine-types.js";
@@ -43,8 +48,73 @@ interface EntityRow {
 interface NotebookRow {
   notebook_id: string;
   name: string;
-  properties_json: string;
   created_at: number;
+}
+
+interface NotebookFieldRow {
+  field:
+    | "description"
+    | "lifecycle_state"
+    | "workflow_version"
+    | "analysis_revision"
+    | "audio_spine"
+    | "current_selection"
+    | "fixture";
+  value_json: string;
+}
+
+interface NotebookCellExecutionRow {
+  cell_id: string;
+  fingerprint: string | null;
+  status: string | null;
+  output_artifact_id: string | null;
+  provider_artifact_id: string | null;
+  run_id: string | null;
+  completed_at: string | null;
+  started_at: string | null;
+  updated_at: string | null;
+  tool: string | null;
+  error: string | null;
+  stale: number;
+  fixture_baseline: number;
+}
+
+interface NotebookGenerationPlanRow {
+  plan_id: string;
+  cell_id: string;
+  status: string;
+  plan_json: string;
+  output_artifact_id: string | null;
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+interface NotebookRunPlanRow {
+  plan_id: string;
+  status: string;
+  plan_json: string;
+  paid_cell_ids_json: string;
+  cell_fingerprints_json: string;
+  known_cost_usd: number;
+  unknown_cost_count: number;
+  created_at: string;
+  updated_at: string;
+  run_id: string | null;
+  outputs_json: string | null;
+  error: string | null;
+}
+
+interface NotebookTranscriptEditRow {
+  action_id: string;
+  kind: string;
+  restored: number;
+  payload_json: string;
+}
+
+interface NotebookTranscriptAttachmentRow {
+  attachment_id: string;
+  payload_json: string;
 }
 
 interface NotebookCellRow {
@@ -318,8 +388,8 @@ async function createNotebook(
         context.store.db
           .prepare(
             `INSERT INTO notebooks(
-              notebook_id, name, properties_json, created_at
-            ) VALUES (?, ?, '{}', ?)`,
+              notebook_id, name, created_at
+            ) VALUES (?, ?, ?)`,
           )
           .run(
             notebookId,
@@ -360,15 +430,14 @@ async function writeNotebook(
       () => {
         context.store.db
           .prepare(
-            `UPDATE notebooks SET name=?, properties_json=?
-             WHERE notebook_id=?`,
+            `UPDATE notebooks SET name=? WHERE notebook_id=?`,
           )
           .run(
             requiredText(notebook.name, "Notebook name"),
-            canonicalJson(notebook.properties ?? {}),
             notebook.id,
           );
         synchronizeNotebookChildren(context, notebook);
+        synchronizeNotebookState(context, notebook);
       },
     );
     return ok(revisionFor(context, mutation.revision), mutation.revision);
@@ -740,6 +809,13 @@ function notebookFromRows(
   context: EngineContext,
   row: NotebookRow,
 ): NotebookDocument {
+  const fields = context.store.db
+    .prepare(
+      `SELECT field, value_json
+       FROM notebook_fields WHERE notebook_id=?
+       ORDER BY field`,
+    )
+    .all(row.notebook_id) as unknown as NotebookFieldRow[];
   const cells = context.store.db
     .prepare(
       `SELECT cell_id, type, slug, grid_row, grid_column, output_entity_id,
@@ -773,10 +849,90 @@ function notebookFromRows(
        ORDER BY cell_id, ordinal, result_id`,
     )
     .all(row.notebook_id) as unknown as PinnedSearchResultRow[];
+  const executions = context.store.db
+    .prepare(
+      `SELECT cell_id, fingerprint, status, output_artifact_id,
+              provider_artifact_id, run_id, completed_at, started_at,
+              updated_at, tool, error, stale, fixture_baseline
+       FROM notebook_cell_executions
+       WHERE notebook_id=? ORDER BY cell_id`,
+    )
+    .all(row.notebook_id) as unknown as NotebookCellExecutionRow[];
+  const generationPlans = context.store.db
+    .prepare(
+      `SELECT plan_id, cell_id, status, plan_json, output_artifact_id,
+              error, created_at, updated_at
+       FROM notebook_generation_plans
+       WHERE notebook_id=? ORDER BY created_at, plan_id`,
+    )
+    .all(row.notebook_id) as unknown as NotebookGenerationPlanRow[];
+  const runPlans = context.store.db
+    .prepare(
+      `SELECT plan_id, status, plan_json, paid_cell_ids_json,
+              cell_fingerprints_json, known_cost_usd, unknown_cost_count,
+              created_at, updated_at, run_id, outputs_json, error
+       FROM notebook_run_plans
+       WHERE notebook_id=? ORDER BY created_at, plan_id`,
+    )
+    .all(row.notebook_id) as unknown as NotebookRunPlanRow[];
+  const transcriptEdits = context.store.db
+    .prepare(
+      `SELECT action_id, kind, restored, payload_json
+       FROM notebook_transcript_edits
+       WHERE notebook_id=? ORDER BY action_id`,
+    )
+    .all(row.notebook_id) as unknown as NotebookTranscriptEditRow[];
+  const transcriptAttachments = context.store.db
+    .prepare(
+      `SELECT attachment_id, payload_json
+       FROM notebook_transcript_attachments
+       WHERE notebook_id=? ORDER BY attachment_id`,
+    )
+    .all(row.notebook_id) as unknown as NotebookTranscriptAttachmentRow[];
+  const field = new Map(
+    fields.map((item) => [
+      item.field,
+      parseJson<unknown>(item.value_json, null),
+    ]),
+  );
   return {
     id: row.notebook_id,
     name: row.name,
-    properties: parseJson<Record<string, unknown>>(row.properties_json, {}),
+    ...(typeof field.get("description") === "string"
+      ? { description: field.get("description") as string }
+      : {}),
+    ...(typeof field.get("lifecycle_state") === "string"
+      ? { lifecycleState: field.get("lifecycle_state") as string }
+      : {}),
+    ...(typeof field.get("workflow_version") === "number"
+      ? { workflowVersion: field.get("workflow_version") as number }
+      : {}),
+    ...(typeof field.get("analysis_revision") === "string"
+      ? { analysisRevision: field.get("analysis_revision") as string }
+      : {}),
+    ...(isRecord(field.get("audio_spine"))
+      ? { audioSpine: field.get("audio_spine") as NotebookDocument["audioSpine"] }
+      : {}),
+    ...(isRecord(field.get("current_selection"))
+      ? {
+          currentSelection:
+            field.get("current_selection") as NotebookDocument["currentSelection"],
+        }
+      : {}),
+    ...(isRecord(field.get("fixture"))
+      ? { fixture: field.get("fixture") as NotebookDocument["fixture"] }
+      : {}),
+    execution: Object.fromEntries(
+      executions.map((execution) => [
+        execution.cell_id,
+        executionFromRow(execution),
+      ]),
+    ),
+    generationPlans: generationPlans.map(generationPlanFromRow),
+    notebookRunPlans: runPlans.map(runPlanFromRow),
+    transcriptEdits: transcriptEdits.map(transcriptEditFromRow),
+    transcriptAttachments:
+      transcriptAttachments.map(transcriptAttachmentFromRow),
     cells: cells.map((cell) =>
       rowToCell(
         cell,
@@ -902,6 +1058,317 @@ function synchronizeNotebookChildren(
       edge.targetInput,
     );
   }
+}
+
+function synchronizeNotebookState(
+  context: EngineContext,
+  notebook: NotebookDocument,
+): void {
+  synchronizeNotebookFields(context, notebook);
+  synchronizeCellExecutions(context, notebook);
+  synchronizeGenerationPlans(context, notebook);
+  synchronizeRunPlans(context, notebook);
+  synchronizeTranscriptEdits(context, notebook);
+  synchronizeTranscriptAttachments(context, notebook);
+}
+
+function synchronizeNotebookFields(
+  context: EngineContext,
+  notebook: NotebookDocument,
+): void {
+  const values = new Map<string, unknown>();
+  if (notebook.description !== undefined) {
+    values.set("description", notebook.description);
+  }
+  if (notebook.lifecycleState !== undefined) {
+    values.set("lifecycle_state", notebook.lifecycleState);
+  }
+  if (notebook.workflowVersion !== undefined) {
+    if (!Number.isSafeInteger(notebook.workflowVersion)) {
+      throw new Error("Notebook workflow version must be an integer");
+    }
+    values.set("workflow_version", notebook.workflowVersion);
+  }
+  if (notebook.analysisRevision !== undefined) {
+    values.set("analysis_revision", notebook.analysisRevision);
+  }
+  if (notebook.audioSpine !== undefined) {
+    values.set("audio_spine", notebook.audioSpine);
+  }
+  if (notebook.currentSelection !== undefined) {
+    values.set("current_selection", notebook.currentSelection);
+  }
+  if (notebook.fixture !== undefined) {
+    values.set("fixture", notebook.fixture);
+  }
+  deleteMissingNotebookRows(
+    context,
+    "notebook_fields",
+    "field",
+    notebook.id,
+    [...values.keys()],
+  );
+  const upsert = context.store.db.prepare(
+    `INSERT INTO notebook_fields(notebook_id, field, value_json)
+     VALUES (?, ?, ?)
+     ON CONFLICT(notebook_id, field) DO UPDATE SET
+       value_json=excluded.value_json`,
+  );
+  for (const [field, value] of values) {
+    upsert.run(notebook.id, field, canonicalJson(value));
+  }
+}
+
+function synchronizeCellExecutions(
+  context: EngineContext,
+  notebook: NotebookDocument,
+): void {
+  const entries = Object.entries(notebook.execution ?? {});
+  const cellIds = new Set(notebook.cells.map((cell) => cell.id));
+  for (const [cellId] of entries) {
+    if (!cellIds.has(cellId)) {
+      throw new Error(`Notebook execution references missing cell: ${cellId}`);
+    }
+  }
+  deleteMissingNotebookRows(
+    context,
+    "notebook_cell_executions",
+    "cell_id",
+    notebook.id,
+    entries.map(([cellId]) => cellId),
+  );
+  const upsert = context.store.db.prepare(
+    `INSERT INTO notebook_cell_executions(
+       notebook_id, cell_id, fingerprint, status, output_artifact_id,
+       provider_artifact_id, run_id, completed_at, started_at, updated_at,
+       tool, error, stale, fixture_baseline
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(notebook_id, cell_id) DO UPDATE SET
+       fingerprint=excluded.fingerprint,
+       status=excluded.status,
+       output_artifact_id=excluded.output_artifact_id,
+       provider_artifact_id=excluded.provider_artifact_id,
+       run_id=excluded.run_id,
+       completed_at=excluded.completed_at,
+       started_at=excluded.started_at,
+       updated_at=excluded.updated_at,
+       tool=excluded.tool,
+       error=excluded.error,
+       stale=excluded.stale,
+       fixture_baseline=excluded.fixture_baseline`,
+  );
+  for (const [cellId, execution] of entries) {
+    upsert.run(
+      notebook.id,
+      cellId,
+      execution.fingerprint ?? null,
+      execution.status ?? null,
+      execution.outputArtifactId ?? null,
+      execution.providerArtifactId ?? null,
+      execution.runId ?? null,
+      execution.completedAt ?? null,
+      execution.startedAt ?? null,
+      execution.updatedAt ?? null,
+      execution.tool ?? null,
+      execution.error ?? null,
+      execution.stale === true ? 1 : 0,
+      execution.fixtureBaseline === true ? 1 : 0,
+    );
+  }
+}
+
+function synchronizeGenerationPlans(
+  context: EngineContext,
+  notebook: NotebookDocument,
+): void {
+  const plans = notebook.generationPlans ?? [];
+  assertUnique(plans.map((plan) => plan.planId), "generation plan ID");
+  deleteMissingNotebookRows(
+    context,
+    "notebook_generation_plans",
+    "plan_id",
+    notebook.id,
+    plans.map((plan) => plan.planId),
+  );
+  const upsert = context.store.db.prepare(
+    `INSERT INTO notebook_generation_plans(
+       notebook_id, plan_id, cell_id, status, plan_json,
+       output_artifact_id, error, created_at, updated_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(notebook_id, plan_id) DO UPDATE SET
+       cell_id=excluded.cell_id,
+       status=excluded.status,
+       plan_json=excluded.plan_json,
+       output_artifact_id=excluded.output_artifact_id,
+       error=excluded.error,
+       created_at=excluded.created_at,
+       updated_at=excluded.updated_at`,
+  );
+  for (const plan of plans) {
+    upsert.run(
+      notebook.id,
+      requiredText(plan.planId, "Generation plan ID"),
+      requiredText(plan.cellId, "Generation plan cell ID"),
+      requiredText(plan.status, "Generation plan status"),
+      canonicalJson(plan.plan),
+      plan.outputArtifactId ?? null,
+      plan.error ?? null,
+      requiredText(plan.createdAt, "Generation plan created time"),
+      requiredText(plan.updatedAt, "Generation plan updated time"),
+    );
+  }
+}
+
+function synchronizeRunPlans(
+  context: EngineContext,
+  notebook: NotebookDocument,
+): void {
+  const plans = notebook.notebookRunPlans ?? [];
+  assertUnique(plans.map((plan) => plan.planId), "notebook run plan ID");
+  deleteMissingNotebookRows(
+    context,
+    "notebook_run_plans",
+    "plan_id",
+    notebook.id,
+    plans.map((plan) => plan.planId),
+  );
+  const upsert = context.store.db.prepare(
+    `INSERT INTO notebook_run_plans(
+       notebook_id, plan_id, status, plan_json, paid_cell_ids_json,
+       cell_fingerprints_json, known_cost_usd, unknown_cost_count,
+       created_at, updated_at, run_id, outputs_json, error
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(notebook_id, plan_id) DO UPDATE SET
+       status=excluded.status,
+       plan_json=excluded.plan_json,
+       paid_cell_ids_json=excluded.paid_cell_ids_json,
+       cell_fingerprints_json=excluded.cell_fingerprints_json,
+       known_cost_usd=excluded.known_cost_usd,
+       unknown_cost_count=excluded.unknown_cost_count,
+       created_at=excluded.created_at,
+       updated_at=excluded.updated_at,
+       run_id=excluded.run_id,
+       outputs_json=excluded.outputs_json,
+       error=excluded.error`,
+  );
+  for (const plan of plans) {
+    upsert.run(
+      notebook.id,
+      requiredText(plan.planId, "Notebook run plan ID"),
+      requiredText(plan.status, "Notebook run plan status"),
+      canonicalJson(plan.plan),
+      canonicalJson(plan.paidCellIds),
+      canonicalJson(plan.cellDefinitionFingerprints),
+      nonNegativeFinite(plan.knownCostUsd, "Notebook run plan known cost"),
+      nonNegativeInteger(
+        plan.unknownCostCount,
+        "Notebook run plan unknown cost count",
+      ),
+      requiredText(plan.createdAt, "Notebook run plan created time"),
+      requiredText(plan.updatedAt, "Notebook run plan updated time"),
+      plan.runId ?? null,
+      plan.outputs === undefined ? null : canonicalJson(plan.outputs),
+      plan.error ?? null,
+    );
+  }
+}
+
+function synchronizeTranscriptEdits(
+  context: EngineContext,
+  notebook: NotebookDocument,
+): void {
+  const edits = notebook.transcriptEdits ?? [];
+  assertUnique(edits.map((edit) => edit.actionId), "transcript edit action ID");
+  deleteMissingNotebookRows(
+    context,
+    "notebook_transcript_edits",
+    "action_id",
+    notebook.id,
+    edits.map((edit) => edit.actionId),
+  );
+  const upsert = context.store.db.prepare(
+    `INSERT INTO notebook_transcript_edits(
+       notebook_id, action_id, kind, restored, payload_json
+     ) VALUES (?, ?, ?, ?, ?)
+     ON CONFLICT(notebook_id, action_id) DO UPDATE SET
+       kind=excluded.kind,
+       restored=excluded.restored,
+       payload_json=excluded.payload_json`,
+  );
+  for (const edit of edits) {
+    upsert.run(
+      notebook.id,
+      requiredText(edit.actionId, "Transcript edit action ID"),
+      requiredText(edit.kind, "Transcript edit kind"),
+      edit.restored === true ? 1 : 0,
+      canonicalJson(edit),
+    );
+  }
+}
+
+function synchronizeTranscriptAttachments(
+  context: EngineContext,
+  notebook: NotebookDocument,
+): void {
+  const attachments = notebook.transcriptAttachments ?? [];
+  assertUnique(
+    attachments.map((attachment) => attachment.id),
+    "transcript attachment ID",
+  );
+  deleteMissingNotebookRows(
+    context,
+    "notebook_transcript_attachments",
+    "attachment_id",
+    notebook.id,
+    attachments.map((attachment) => attachment.id),
+  );
+  const upsert = context.store.db.prepare(
+    `INSERT INTO notebook_transcript_attachments(
+       notebook_id, attachment_id, payload_json
+     ) VALUES (?, ?, ?)
+     ON CONFLICT(notebook_id, attachment_id) DO UPDATE SET
+       payload_json=excluded.payload_json`,
+  );
+  for (const attachment of attachments) {
+    upsert.run(
+      notebook.id,
+      requiredText(attachment.id, "Transcript attachment ID"),
+      canonicalJson(attachment),
+    );
+  }
+}
+
+function deleteMissingNotebookRows(
+  context: EngineContext,
+  table:
+    | "notebook_fields"
+    | "notebook_cell_executions"
+    | "notebook_generation_plans"
+    | "notebook_run_plans"
+    | "notebook_transcript_edits"
+    | "notebook_transcript_attachments",
+  idColumn:
+    | "field"
+    | "cell_id"
+    | "plan_id"
+    | "action_id"
+    | "attachment_id",
+  notebookId: string,
+  ids: string[],
+): void {
+  if (ids.length === 0) {
+    context.store.db
+      .prepare(`DELETE FROM ${table} WHERE notebook_id=?`)
+      .run(notebookId);
+    return;
+  }
+  const placeholders = ids.map(() => "?").join(", ");
+  context.store.db
+    .prepare(
+      `DELETE FROM ${table}
+       WHERE notebook_id=? AND ${idColumn} NOT IN (${placeholders})`,
+    )
+    .run(notebookId, ...ids);
 }
 
 function deleteMissing(
@@ -1288,6 +1755,120 @@ function validateRunStatus(
   }
 }
 
+function executionFromRow(
+  row: NotebookCellExecutionRow,
+): NotebookCellExecution {
+  return {
+    ...(row.fingerprint ? { fingerprint: row.fingerprint } : {}),
+    ...(row.status ? { status: row.status } : {}),
+    ...(row.output_artifact_id
+      ? { outputArtifactId: row.output_artifact_id }
+      : {}),
+    ...(row.provider_artifact_id
+      ? { providerArtifactId: row.provider_artifact_id }
+      : {}),
+    ...(row.run_id ? { runId: row.run_id } : {}),
+    ...(row.completed_at ? { completedAt: row.completed_at } : {}),
+    ...(row.started_at ? { startedAt: row.started_at } : {}),
+    ...(row.updated_at ? { updatedAt: row.updated_at } : {}),
+    ...(row.tool ? { tool: row.tool } : {}),
+    ...(row.error ? { error: row.error } : {}),
+    ...(row.stale === 1 ? { stale: true } : {}),
+    ...(row.fixture_baseline === 1 ? { fixtureBaseline: true } : {}),
+  };
+}
+
+function generationPlanFromRow(
+  row: NotebookGenerationPlanRow,
+): NotebookGenerationPlan {
+  return {
+    planId: row.plan_id,
+    cellId: row.cell_id,
+    status: row.status,
+    plan: parseJson<Record<string, unknown>>(row.plan_json, {}),
+    ...(row.output_artifact_id
+      ? { outputArtifactId: row.output_artifact_id }
+      : {}),
+    ...(row.error ? { error: row.error } : {}),
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  };
+}
+
+function runPlanFromRow(row: NotebookRunPlanRow): NotebookRunPlan {
+  return {
+    planId: row.plan_id,
+    status: row.status,
+    plan: parseJson<Record<string, unknown>>(row.plan_json, {}),
+    paidCellIds: parseJson<string[]>(row.paid_cell_ids_json, []),
+    cellDefinitionFingerprints: parseJson<Record<string, string>>(
+      row.cell_fingerprints_json,
+      {},
+    ),
+    knownCostUsd: row.known_cost_usd,
+    unknownCostCount: row.unknown_cost_count,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    ...(row.run_id ? { runId: row.run_id } : {}),
+    ...(row.outputs_json
+      ? {
+          outputs: parseJson<Record<string, string>>(
+            row.outputs_json,
+            {},
+          ),
+        }
+      : {}),
+    ...(row.error ? { error: row.error } : {}),
+  };
+}
+
+function transcriptEditFromRow(
+  row: NotebookTranscriptEditRow,
+): NotebookTranscriptEdit {
+  const payload = parseJson<Record<string, unknown>>(row.payload_json, {});
+  return {
+    ...payload,
+    actionId: row.action_id,
+    kind: row.kind,
+    ...(row.restored === 1 ? { restored: true } : {}),
+  };
+}
+
+function transcriptAttachmentFromRow(
+  row: NotebookTranscriptAttachmentRow,
+): NotebookTranscriptAttachment {
+  const payload = parseJson<Record<string, unknown>>(row.payload_json, {});
+  return {
+    ...payload,
+    id: row.attachment_id,
+  };
+}
+
+function assertUnique(values: string[], label: string): void {
+  const unique = new Set(values);
+  if (unique.size !== values.length) {
+    throw new Error(`Duplicate ${label}`);
+  }
+}
+
+function nonNegativeFinite(value: number, label: string): number {
+  if (!Number.isFinite(value) || value < 0) {
+    throw new Error(`${label} must be a non-negative finite number`);
+  }
+  return value;
+}
+
+function nonNegativeInteger(value: number, label: string): number {
+  if (!Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`${label} must be a non-negative integer`);
+  }
+  return value;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function callerOrNewId(id: string | undefined, label: string): string {
   const resolved = id ?? newUuidV7();
   assertUuidV7(resolved, label);
@@ -1300,6 +1881,6 @@ const ENTITY_SELECT = `
 `;
 
 const NOTEBOOK_SELECT = `
-  SELECT notebook_id, name, properties_json, created_at
+  SELECT notebook_id, name, created_at
   FROM notebooks
 `;

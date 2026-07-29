@@ -1,5 +1,9 @@
 # videobook-engine MVP Requirements
 
+> Historical design baseline: this document proposed the 3.x/schema-v5
+> transition. The implemented package is 4.0.0 with catalog schema v18; current
+> API and layout documentation take precedence.
+
 ## Temporal media retrieval and a reversible edit engine
 
 | Field | Value |

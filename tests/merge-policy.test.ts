@@ -134,30 +134,30 @@ describe("merge policy preconditions", () => {
   it("refuses a merge across different engine_schema versions", async () => {
     const db = await mergeDb(["engine_schema"]);
     db.prepare(
-      "INSERT INTO engine_schema(singleton, version, created_at) VALUES (1, 17, 0)",
+      "INSERT INTO engine_schema(singleton, version, created_at) VALUES (1, 18, 0)",
     ).run();
-    commitTables(db, ["engine_schema"], "base v17");
-    fork(db, "v18", ["engine_schema"], () => {
-      db.prepare("UPDATE engine_schema SET version=18 WHERE singleton=1").run();
+    commitTables(db, ["engine_schema"], "base v18");
+    fork(db, "v19", ["engine_schema"], () => {
+      db.prepare("UPDATE engine_schema SET version=19 WHERE singleton=1").run();
     });
 
     const direct = expectFault(() =>
-      assertSameSchemaVersion(db, "HEAD", "v18"),
+      assertSameSchemaVersion(db, "HEAD", "v19"),
     );
     expect(direct.code).toBe("SCHEMA_INCOMPATIBLE");
-    const error = expectFault(() => mergeWithPolicy(db, "v18"));
+    const error = expectFault(() => mergeWithPolicy(db, "v19"));
     expect(error.code).toBe("SCHEMA_INCOMPATIBLE");
-    expect(error.message).toContain("18");
+    expect(error.message).toContain("19");
     expect(error.details).toMatchObject({
-      oursVersion: 17,
-      theirsVersion: 18,
+      oursVersion: 18,
+      theirsVersion: 19,
     });
     // The refusal happens before any merge is attempted.
     expect(
       (db.prepare("SELECT version FROM engine_schema").get() as {
         version: number;
       }).version,
-    ).toBe(17);
+    ).toBe(18);
     db.close();
   });
 });
@@ -169,7 +169,7 @@ describe("merge policy for unique artifact slugs", () => {
     const leftArtifact = uuidv7();
     const rightArtifact = uuidv7();
     db.prepare(
-      "INSERT INTO engine_schema(singleton, version, created_at) VALUES (1, 17, 0)",
+      "INSERT INTO engine_schema(singleton, version, created_at) VALUES (1, 18, 0)",
     ).run();
     db.prepare(
       "INSERT INTO artifacts(artifact_id, slug, kind, created_at) VALUES (?, 'vid-base', 'video', 0)",
@@ -221,7 +221,7 @@ describe("merge policy for unique artifact slugs", () => {
     const db = await mergeDb(["engine_schema", "artifacts"]);
     const artifactId = uuidv7();
     db.prepare(
-      "INSERT INTO engine_schema(singleton, version, created_at) VALUES (1, 17, 0)",
+      "INSERT INTO engine_schema(singleton, version, created_at) VALUES (1, 18, 0)",
     ).run();
     db.prepare(
       "INSERT INTO artifacts(artifact_id, slug, kind, created_at) VALUES (?, 'vid-base', 'video', 0)",
@@ -274,7 +274,7 @@ describe("merge policy for RESTRICT foreign keys", () => {
     const notebookId = uuidv7();
     const cellId = uuidv7();
     db.prepare(
-      "INSERT INTO engine_schema(singleton, version, created_at) VALUES (1, 17, 0)",
+      "INSERT INTO engine_schema(singleton, version, created_at) VALUES (1, 18, 0)",
     ).run();
     db.prepare(
       "INSERT INTO artifacts(artifact_id, slug, kind, created_at) VALUES (?, 'vid-doomed', 'video', 0)",
@@ -283,7 +283,7 @@ describe("merge policy for RESTRICT foreign keys", () => {
       "INSERT INTO objects(object_hash, size_bytes, created_at) VALUES ('o-doomed', 1, 0)",
     ).run();
     db.prepare(
-      "INSERT INTO notebooks(notebook_id, name, properties_json, created_at) VALUES (?, 'Graph', '{}', 0)",
+      "INSERT INTO notebooks(notebook_id, name, created_at) VALUES (?, 'Graph', 0)",
     ).run(notebookId);
     db.prepare(
       `INSERT INTO cells(
@@ -350,7 +350,7 @@ describe("merge policy for derived singleton flags", () => {
     const artifactId = uuidv7();
     const streamId = uuidv7();
     db.prepare(
-      "INSERT INTO engine_schema(singleton, version, created_at) VALUES (1, 17, 0)",
+      "INSERT INTO engine_schema(singleton, version, created_at) VALUES (1, 18, 0)",
     ).run();
     db.prepare(
       "INSERT INTO artifacts(artifact_id, slug, kind, created_at) VALUES (?, 'vid-talk', 'video', 0)",
@@ -477,7 +477,7 @@ describe("merge policy for derived singleton flags", () => {
     const bookId = uuidv7();
     const primaryId = uuidv7();
     db.prepare(
-      "INSERT INTO engine_schema(singleton, version, created_at) VALUES (1, 17, 0)",
+      "INSERT INTO engine_schema(singleton, version, created_at) VALUES (1, 18, 0)",
     ).run();
     db.prepare(
       "INSERT INTO book(book_id, slug, created_at) VALUES (?, 'merge-book', 0)",
