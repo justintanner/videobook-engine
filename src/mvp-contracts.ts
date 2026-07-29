@@ -63,11 +63,7 @@ export type RegisterArtifactStreamInput = Omit<ArtifactStream, "streamId"> & {
 };
 
 export type MediaProfileState =
-  | "complete"
-  | "partial"
-  | "stale"
-  | "failed"
-  | "unsupported";
+  "complete" | "partial" | "stale" | "failed" | "unsupported";
 
 export interface MediaProfile {
   artifactId: string;
@@ -82,11 +78,7 @@ export interface MediaProfile {
 }
 
 export type TranscriptSegmentKind =
-  | "speech"
-  | "music"
-  | "sound"
-  | "silence"
-  | "other";
+  "speech" | "music" | "sound" | "silence" | "other";
 
 export interface TranscriptWord {
   wordId: string;
@@ -122,6 +114,13 @@ export interface Transcript {
    * deleted surface OBJECT_UNAVAILABLE.
    */
   payloadHash: string;
+  /**
+   * False when the payload object was forgotten (deleted from CAS): the
+   * transcript keeps its structure (IDs, ticks, speaker, kind) but every
+   * segment and word text is empty. `transcripts.list` degrades this way;
+   * `transcripts.get` still surfaces OBJECT_UNAVAILABLE.
+   */
+  payloadAvailable: boolean;
   language: string;
   provider?: string;
   model?: string;
@@ -322,9 +321,7 @@ export interface CreateSequenceTrackInput {
 export type SourceSurface = "ui" | "slash" | "chat" | "system";
 
 export type ConfirmationPolicy =
-  | "always"
-  | "risk-based"
-  | "reversible-single-step";
+  "always" | "risk-based" | "reversible-single-step";
 
 export interface ClipPlacement {
   trackId: string;
@@ -572,12 +569,7 @@ export interface EditRestoreCommit {
 }
 
 export type SearchModality =
-  | "auto"
-  | "visual"
-  | "speech"
-  | "ocr"
-  | "audio"
-  | "metadata";
+  "auto" | "visual" | "speech" | "ocr" | "audio" | "metadata";
 
 export type SearchReference =
   | { kind: "image"; artifact: string }
@@ -635,13 +627,7 @@ export interface SearchQuery {
 }
 
 export type SearchSignalKind =
-  | "visual"
-  | "speech"
-  | "ocr"
-  | "audio"
-  | "metadata"
-  | "exact"
-  | "near";
+  "visual" | "speech" | "ocr" | "audio" | "metadata" | "exact" | "near";
 
 export interface SearchSignal {
   kind: SearchSignalKind;
@@ -663,12 +649,7 @@ export interface SearchHit {
 }
 
 export type SearchCoverageState =
-  | "not-indexed"
-  | "partial"
-  | "ready"
-  | "stale"
-  | "failed"
-  | "unsupported";
+  "not-indexed" | "partial" | "ready" | "stale" | "failed" | "unsupported";
 
 export type LanguageCoverage = "measured" | "best-effort" | "unsupported";
 

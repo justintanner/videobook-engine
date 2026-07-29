@@ -46,10 +46,7 @@ export class EngineContext {
       config.rootDir !== undefined
         ? {
             dataDir: path.join(path.resolve(config.rootDir), "data"),
-            workspaceDir: path.join(
-              path.resolve(config.rootDir),
-              "workspaces",
-            ),
+            workspaceDir: path.join(path.resolve(config.rootDir), "workspaces"),
           }
         : {
             dataDir: path.resolve(config.dataDir),
@@ -84,6 +81,7 @@ export class EngineContext {
         })()
       : undefined;
 
+    if (config.identity) assertValidIdentity(config.identity);
     this.store = new DoltStore({
       dataDir: this.config.dataDir,
       workspaceDir: this.config.workspaceDir,
@@ -92,15 +90,28 @@ export class EngineContext {
       ...(config.identity
         ? { author: `${config.identity.name} <${config.identity.email}>` }
         : {}),
-      ...(config.catalogBackup
-        ? { catalogBackup: config.catalogBackup }
-        : {}),
+      ...(config.catalogBackup ? { catalogBackup: config.catalogBackup } : {}),
     });
     this.objects = new ObjectStore(
       this.store.objectsDir,
       config.remoteObjects,
       config.objectPrefix,
+      (hash) => this.isForgottenObject(hash),
     );
+  }
+
+  /**
+   * Whether the object row carries a forget tombstone. Forgotten bytes must
+   * never be resurrected — not even from a configured remote store — so
+   * ObjectStore consults this before any read or lazy download.
+   */
+  isForgottenObject(hash: string): boolean {
+    const row = this.store.db
+      .prepare(
+        "SELECT 1 AS present FROM objects WHERE object_hash=? AND forgotten_at IS NOT NULL",
+      )
+      .get(hash);
+    return row !== undefined;
   }
 
   bookRow(): BookRow {
@@ -134,8 +145,7 @@ export class EngineContext {
          LIMIT 1`,
       )
       .get(reference, reference, reference) as unknown as
-      | ArtifactRow
-      | undefined;
+      ArtifactRow | undefined;
     if (!row) {
       throw new EngineFault({
         code: "NOT_FOUND",
@@ -184,6 +194,24 @@ export class EngineContext {
 
   close(): void {
     this.store.close();
+  }
+}
+
+function assertValidIdentity(identity: { name: string; email: string }): void {
+  const name = identity.name.trim();
+  const email = identity.email.trim();
+  if (!name || /[<>\u0000-\u001f\u007f]/u.test(name)) {
+    throw new EngineFault({
+      code: "INVALID_INPUT",
+      message:
+        "identity.name must be non-empty and free of angle brackets and control characters",
+    });
+  }
+  if (!/^[^\s<>@]+@[^\s<>@]+$/.test(email)) {
+    throw new EngineFault({
+      code: "INVALID_INPUT",
+      message: "identity.email must be a plausible address (name@host)",
+    });
   }
 }
 
@@ -249,11 +277,7 @@ export async function resultOf<T>(
 ): Promise<Result<T, EngineError>> {
   try {
     const value = await work();
-    if (
-      typeof value === "object" &&
-      value !== null &&
-      "ok" in value
-    ) {
+    if (typeof value === "object" && value !== null && "ok" in value) {
       return value as Result<T, EngineError>;
     }
     return { ok: true, value: value as T };

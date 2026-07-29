@@ -30,8 +30,11 @@ interface SchemaRow {
 
 interface OutboxRow {
   operation_id: string;
+  tables_json: string;
   message: string;
 }
+
+const OUTBOX_ALLOW_EMPTY_FLAG = "allow-empty";
 
 interface CommitRow {
   hash: string;
@@ -135,7 +138,7 @@ export class DoltStore {
           )
           .run(
             operationId,
-            "[]",
+            canonicalJson(input.allowEmpty ? [OUTBOX_ALLOW_EMPTY_FLAG] : []),
             commitMessage(input, operationId),
             now,
           );
@@ -171,9 +174,7 @@ export class DoltStore {
 
   push(remoteName: string): void {
     this.assertRuntimeUnstaged();
-    this.db
-      .prepare("SELECT dolt_push(?, 'main') AS result")
-      .get(remoteName);
+    this.db.prepare("SELECT dolt_push(?, 'main') AS result").get(remoteName);
   }
 
   /**
@@ -248,29 +249,24 @@ export class DoltStore {
         )
         .run(SCHEMA_VERSION, now);
       this.db
-        .prepare(
-          "INSERT INTO book(book_id, slug, created_at) VALUES (?, ?, ?)",
-        )
+        .prepare("INSERT INTO book(book_id, slug, created_at) VALUES (?, ?, ?)")
         .run(initialBook.bookId, initialBook.slug, now);
       this.initializePrimarySequence(initialBook.bookId, now);
       this.stageTables(SEMANTIC_TABLES);
-      this.db
-        .prepare("SELECT dolt_add('dolt_ignore') AS result")
-        .get();
+      this.db.prepare("SELECT dolt_add('dolt_ignore') AS result").get();
       this.assertOnlyVersionedStaged();
       this.sqlCommit("Initialize Videobook book");
     } else {
       const row = this.db
-        .prepare(
-          "SELECT version FROM engine_schema WHERE singleton = 1",
-        )
+        .prepare("SELECT version FROM engine_schema WHERE singleton = 1")
         .get() as unknown as SchemaRow | undefined;
       if (!row) {
         this.db.close();
         throw new EngineFault({
           code: "SCHEMA_INCOMPATIBLE",
-          message: "Database schema unknown is not supported by engine schema "
-            + `${SCHEMA_VERSION}`,
+          message:
+            "Database schema unknown is not supported by engine schema " +
+            `${SCHEMA_VERSION}`,
         });
       }
       if (row.version !== SCHEMA_VERSION) {
@@ -365,10 +361,24 @@ export class DoltStore {
     );
     const videoKeys = initialOrderKeys(2);
     insertTrack.run(
-      uuidv7(), sequenceId, "video", videoKeys[0], "Video 1", null, null, "normal",
+      uuidv7(),
+      sequenceId,
+      "video",
+      videoKeys[0],
+      "Video 1",
+      null,
+      null,
+      "normal",
     );
     insertTrack.run(
-      uuidv7(), sequenceId, "video", videoKeys[1], "Video 2", null, null, "normal",
+      uuidv7(),
+      sequenceId,
+      "video",
+      videoKeys[1],
+      "Video 2",
+      null,
+      null,
+      "normal",
     );
     const audioKeys = initialOrderKeys(4);
     for (let ordinal = 0; ordinal < 4; ordinal += 1) {
@@ -398,7 +408,7 @@ export class DoltStore {
   private recoverOutbox(): void {
     const rows = this.db
       .prepare(
-        `SELECT operation_id, message
+        `SELECT operation_id, tables_json, message
          FROM runtime_commit_outbox
          ORDER BY created_at, operation_id`,
       )
@@ -411,45 +421,50 @@ export class DoltStore {
   private commitOutbox(operationId: string): string {
     const row = this.db
       .prepare(
-        `SELECT operation_id, message
+        `SELECT operation_id, tables_json, message
          FROM runtime_commit_outbox
          WHERE operation_id = ?`,
       )
       .get(operationId) as unknown as OutboxRow | undefined;
     if (!row) return this.head;
+    const allowEmpty = parseJson<string[]>(row.tables_json, []).includes(
+      OUTBOX_ALLOW_EMPTY_FLAG,
+    );
     const dirty = this.dirtySemanticTables();
-    if (dirty.length === 0) {
+    if (dirty.length === 0 && !allowEmpty) {
       // Either the mutation only touched ignored runtime tables (bookkeeping
       // mints no commit), or this is recovery after a crash that followed the
       // dolt commit. Either way only the outbox row is left to clear.
-      this.runtime(() => {
-        this.db
-          .prepare(
-            "DELETE FROM runtime_commit_outbox WHERE operation_id = ?",
-          )
-          .run(operationId);
-      });
+      this.clearOutboxRow(operationId);
       return this.head;
     }
     this.stageTables(dirty);
     this.stageIgnoreFenceIfDirty();
     this.assertOnlyVersionedStaged();
-    const revision = this.sqlCommit(row.message);
+    const revision = this.sqlCommit(row.message, dirty.length === 0);
     this.semanticCommitBoundary?.("after-dolt-commit", operationId);
-    this.assertCleanSemanticWorktree();
-    this.runtime(() => {
-      this.db
-        .prepare(
-          "DELETE FROM runtime_commit_outbox WHERE operation_id = ?",
-        )
-        .run(operationId);
-    });
+    // The commit is durable at this point: clear the outbox row before
+    // asserting, so a failed assertion can neither strand the row nor
+    // re-attribute this operation's rows to a later commit at recovery.
+    this.clearOutboxRow(operationId);
+    this.assertCleanSemanticWorktree(revision);
     return revision;
   }
 
-  private sqlCommit(message: string): string {
+  private clearOutboxRow(operationId: string): void {
+    this.runtime(() => {
+      this.db
+        .prepare("DELETE FROM runtime_commit_outbox WHERE operation_id = ?")
+        .run(operationId);
+    });
+  }
+
+  private sqlCommit(message: string, allowEmpty = false): string {
+    const statement = allowEmpty
+      ? "SELECT dolt_commit('--allow-empty', '-m', ?, '--author', ?) AS hash"
+      : "SELECT dolt_commit('-m', ?, '--author', ?) AS hash";
     const row = this.db
-      .prepare("SELECT dolt_commit('-m', ?, '--author', ?) AS hash")
+      .prepare(statement)
       .get(message, this.author) as unknown as CommitRow | undefined;
     const hash = row?.hash;
     if (!hash) {
@@ -465,9 +480,7 @@ export class DoltStore {
   private stageTables(tables: readonly SemanticTable[]): void {
     const unique = uniqueSemanticTables(tables);
     for (const table of unique) {
-      this.db
-        .prepare("SELECT dolt_add(?) AS result")
-        .get(table);
+      this.db.prepare("SELECT dolt_add(?) AS result").get(table);
     }
   }
 
@@ -496,13 +509,13 @@ export class DoltStore {
     return dirty;
   }
 
-  private assertCleanSemanticWorktree(): void {
+  private assertCleanSemanticWorktree(committedRevision: string): void {
     const dirty = this.dirtySemanticTables();
     if (dirty.length > 0) {
       throw new EngineFault({
         code: "STORAGE_ERROR",
-        message:
-          "Semantic worktree is dirty after commit: " + dirty.join(", "),
+        message: "Semantic worktree is dirty after commit: " + dirty.join(", "),
+        details: { committedRevision, dirtyTables: dirty },
       });
     }
   }
@@ -526,9 +539,7 @@ export class DoltStore {
     const runtime = new Set<string>(RUNTIME_TABLES);
     const staged = this.db
       .doltStatus()
-      .find(
-        (entry) => entry.staged === 1 && runtime.has(entry.table_name),
-      );
+      .find((entry) => entry.staged === 1 && runtime.has(entry.table_name));
     if (staged) {
       throw new EngineFault({
         code: "STORAGE_ERROR",
@@ -644,16 +655,34 @@ function commitMessage(input: OperationInput, operationId: string): string {
   return minimal;
 }
 
+// Trailer values are single-line by construction: canonicalJson escapes
+// newlines inside JSON, and every scalar value (operation, artifact ID,
+// base revision, actor) is rejected if it carries a control character —
+// otherwise a crafted actor could inject forged trailer lines.
+function assertSafeTrailerValue(value: string, label: string): void {
+  if (/[\u0000-\u001f\u007f]/u.test(value)) {
+    throw new EngineFault({
+      code: "INVALID_INPUT",
+      message: `${label} must not contain control characters`,
+    });
+  }
+}
+
 function buildCommitMessage(
   input: OperationInput,
   operationId: string,
   includeDetails: boolean,
   includeWriteSet: boolean,
 ): string {
+  assertSafeTrailerValue(input.operation, "Operation name");
+  if (input.artifactId) assertSafeTrailerValue(input.artifactId, "Artifact ID");
+  if (input.baseRevision) {
+    assertSafeTrailerValue(input.baseRevision, "Base revision");
+  }
+  if (input.author) assertSafeTrailerValue(input.author, "Actor");
   const target = input.artifactId ? ` artifact:${input.artifactId}` : "";
   const trailers = [`op-id: ${operationId}`];
   if (input.baseRevision) trailers.push(`base-revision: ${input.baseRevision}`);
-  if (input.author) trailers.push(`actor: ${input.author}`);
   const writeSetJson = canonicalJson(input.writeSet ?? []);
   if (includeWriteSet && input.writeSet && input.writeSet.length > 0) {
     trailers.push(`write-set: ${writeSetJson}`);
@@ -661,16 +690,40 @@ function buildCommitMessage(
     trailers.push(`write-set-omitted: ${byteLength(writeSetJson)}`);
   }
   const detailsJson = canonicalJson(input.details ?? {});
-  if (includeDetails && input.details && Object.keys(input.details).length > 0) {
+  if (
+    includeDetails &&
+    input.details &&
+    Object.keys(input.details).length > 0
+  ) {
     trailers.push(`details: ${detailsJson}`);
-  } else if (!includeDetails && input.details && Object.keys(input.details).length > 0) {
+  } else if (
+    !includeDetails &&
+    input.details &&
+    Object.keys(input.details).length > 0
+  ) {
     trailers.push(`details-omitted: ${byteLength(detailsJson)}`);
   }
+  // The caller-influenced actor value is emitted last and the parser is
+  // first-occurrence-wins, so even a hostile value that slips past
+  // validation can never override an engine-emitted trailer.
+  if (input.author) trailers.push(`actor: ${input.author}`);
   return `${input.operation}${target}\n\n${trailers.join("\n")}`;
 }
 
 function byteLength(text: string): number {
   return Buffer.byteLength(text, "utf8");
+}
+
+// doltlite reports commit dates as "YYYY-MM-DD HH:MM:SS" in UTC.
+export function commitDateMs(date: string): number {
+  const parsed = Date.parse(`${date.replace(" ", "T")}Z`);
+  return Number.isNaN(parsed) ? 0 : parsed;
+}
+
+/** doltlite commit date normalized to an ISO-8601 UTC timestamp. */
+export function commitDateIso(date: string): string {
+  const parsed = Date.parse(`${date.replace(" ", "T")}Z`);
+  return Number.isNaN(parsed) ? date : new Date(parsed).toISOString();
 }
 
 export function parseCommitMessage(message: string): CommitOperation | null {
@@ -679,7 +732,9 @@ export function parseCommitMessage(message: string): CommitOperation | null {
   const trailers = new Map<string, string>();
   for (const line of lines.slice(1)) {
     const match = /^([a-z-]+): (.*)$/.exec(line);
-    if (match) trailers.set(match[1]!, match[2]!);
+    // First occurrence wins: engine trailers precede the caller-influenced
+    // actor trailer, so injected duplicates can never shadow them.
+    if (match && !trailers.has(match[1]!)) trailers.set(match[1]!, match[2]!);
   }
   const operationId = trailers.get("op-id");
   if (!operationId) return null;

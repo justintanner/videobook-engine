@@ -19,16 +19,14 @@ const roots: string[] = [];
 
 afterEach(async () => {
   await Promise.all(
-    roots.splice(0).map((root) =>
-      rm(root, { recursive: true, force: true, maxRetries: 3 })
-    ),
+    roots
+      .splice(0)
+      .map((root) => rm(root, { recursive: true, force: true, maxRetries: 3 })),
   );
 });
 
 function value<T>(
-  result:
-    | { ok: true; value: T }
-    | { ok: false; error: { message: string } },
+  result: { ok: true; value: T } | { ok: false; error: { message: string } },
 ): T {
   if (!result.ok) throw new Error(result.error.message);
   return result.value;
@@ -99,13 +97,15 @@ describe("centered notebook grid schema v13", () => {
         operation: type === "analyze" ? "analyze_source" : undefined,
         tool: type === "analyze" ? "kie_gemini_analysis" : undefined,
         inputs: { ordinal: index },
-      })
+      }),
     );
-    value(await engine.notebooks.write({
-      ...notebook,
-      cells,
-      edges: [],
-    }));
+    value(
+      await engine.notebooks.write({
+        ...notebook,
+        cells,
+        edges: [],
+      }),
+    );
     const reloaded = value(engine.notebooks.read(notebook.id));
     expect("grid" in reloaded).toBe(false);
     expect(reloaded.cells.map((cell) => cell.type).sort()).toEqual(
@@ -115,11 +115,15 @@ describe("centered notebook grid schema v13", () => {
       slug: "aud-cell",
       slot: { row: 0, column: 0 },
     });
-    expect(reloaded.cells.find((cell) => cell.type === "analyze")?.slot).toEqual({
+    expect(
+      reloaded.cells.find((cell) => cell.type === "analyze")?.slot,
+    ).toEqual({
       row: 49,
       column: -77,
     });
-    expect(reloaded.cells.find((cell) => cell.type === "analyze")).toMatchObject({
+    expect(
+      reloaded.cells.find((cell) => cell.type === "analyze"),
+    ).toMatchObject({
       provider: "kie",
       model: "gemini-3.5-flash",
       operation: "analyze_source",
@@ -128,10 +132,9 @@ describe("centered notebook grid schema v13", () => {
     });
 
     engine.close();
-    const database = new DatabaseSync(
-      path.join(root, "data", "videobook.db"),
-      { readOnly: true },
-    );
+    const database = new DatabaseSync(path.join(root, "data", "videobook.db"), {
+      readOnly: true,
+    });
     const raw = database
       .prepare(
         `SELECT ${CELLS_TABLE_COLUMNS.join(", ")}
@@ -149,15 +152,15 @@ describe("centered notebook grid schema v13", () => {
     const { root, engine } = await setup();
     const notebook = value(await engine.notebooks.create("Constraint"));
     engine.close();
-    const database = new DatabaseSync(
-      path.join(root, "data", "videobook.db"),
-    );
+    const database = new DatabaseSync(path.join(root, "data", "videobook.db"));
     expect(() =>
-      database.prepare(
-        `INSERT INTO cells(
+      database
+        .prepare(
+          `INSERT INTO cells(
           notebook_id, cell_id, type, slug, grid_row, grid_column, inputs_json
         ) VALUES (?, 'removed-split', 'split', 'split-removed', 0, 0, '{}')`,
-      ).run(notebook.id)
+        )
+        .run(notebook.id),
     ).toThrow();
     database.close();
   });
@@ -172,11 +175,13 @@ describe("centered notebook grid schema v13", () => {
       slot: { row: 0, column: 0 },
       outputEntityId: entity.id,
     });
-    value(await engine.notebooks.write({
-      ...notebook,
-      cells: [image],
-      edges: [],
-    }));
+    value(
+      await engine.notebooks.write({
+        ...notebook,
+        cells: [image],
+        edges: [],
+      }),
+    );
     expect(value(engine.notebooks.read(notebook.id)).cells[0]).toMatchObject({
       slug: "img-boat",
       outputEntityId: entity.id,
@@ -210,14 +215,13 @@ describe("centered notebook grid schema v13", () => {
     });
 
     engine.close();
-    const database = new DatabaseSync(
-      path.join(root, "data", "videobook.db"),
-      { readOnly: true },
-    );
+    const database = new DatabaseSync(path.join(root, "data", "videobook.db"), {
+      readOnly: true,
+    });
     expect(
-      database.prepare(
-        "SELECT slug, output_entity_id FROM cells WHERE cell_id=?",
-      ).get(image.id),
+      database
+        .prepare("SELECT slug, output_entity_id FROM cells WHERE cell_id=?")
+        .get(image.id),
     ).toMatchObject({
       slug: "img-boat",
       output_entity_id: entity.id,
@@ -276,69 +280,79 @@ describe("centered notebook grid schema v13", () => {
       slug: "analyze-source",
       slot: { row: 0, column: 0 },
     });
-    value(await engine.notebooks.write({
-      ...notebook,
-      description: "Catalog-owned workflow",
-      lifecycleState: "running",
-      workflowVersion: 3,
-      analysisRevision: "rev-analysis",
-      audioSpine: {
-        artifactId: "artifact-audio",
-        streamId: "stream-audio",
-        objectHash: "sha256:audio",
-        sourcePath: "audio.wav",
-        sequenceId: "sequence-main",
-        sequenceRevision: "rev-sequence",
-        trackId: "track-audio",
-        clipId: "clip-audio",
-      },
-      currentSelection: {
-        transcriptId: "transcript-current",
-        startWordId: "word-a",
-        endWordId: "word-b",
-      },
-      fixture: { version: 1, owner: "integration" },
-      execution: {
-        [cell.id]: {
-          fingerprint: "fingerprint-1",
-          status: "completed",
-          runId: "run-1",
-          stale: true,
-          fixtureBaseline: true,
+    value(
+      await engine.notebooks.write({
+        ...notebook,
+        description: "Catalog-owned workflow",
+        lifecycleState: "running",
+        workflowVersion: 3,
+        analysisRevision: "rev-analysis",
+        audioSpine: {
+          artifactId: "artifact-audio",
+          streamId: "stream-audio",
+          objectHash: "sha256:audio",
+          sourcePath: "audio.wav",
+          sequenceId: "sequence-main",
+          sequenceRevision: "rev-sequence",
+          trackId: "track-audio",
+          clipId: "clip-audio",
         },
-      },
-      generationPlans: [{
-        planId: "generation-plan-1",
-        cellId: cell.id,
-        status: "approved",
-        plan: { provider: "kie" },
-        createdAt: "2026-07-29T00:00:00.000Z",
-        updatedAt: "2026-07-29T00:01:00.000Z",
-      }],
-      notebookRunPlans: [{
-        planId: "run-plan-1",
-        status: "approved",
-        plan: { order: [cell.id] },
-        paidCellIds: [cell.id],
-        cellDefinitionFingerprints: { [cell.id]: "fingerprint-1" },
-        knownCostUsd: 1.25,
-        unknownCostCount: 0,
-        createdAt: "2026-07-29T00:00:00.000Z",
-        updatedAt: "2026-07-29T00:01:00.000Z",
-      }],
-      transcriptEdits: [{
-        actionId: "edit-1",
-        kind: "remove_words",
-        startWordId: "word-a",
-        endWordId: "word-b",
-      }],
-      transcriptAttachments: [{
-        id: "attachment-1",
-        transcriptId: "transcript-current",
-      }],
-      cells: [cell],
-      edges: [],
-    }));
+        currentSelection: {
+          transcriptId: "transcript-current",
+          startWordId: "word-a",
+          endWordId: "word-b",
+        },
+        fixture: { version: 1, owner: "integration" },
+        execution: {
+          [cell.id]: {
+            fingerprint: "fingerprint-1",
+            status: "completed",
+            runId: "run-1",
+            stale: true,
+            fixtureBaseline: true,
+          },
+        },
+        generationPlans: [
+          {
+            planId: "generation-plan-1",
+            cellId: cell.id,
+            status: "approved",
+            plan: { provider: "kie" },
+            createdAt: "2026-07-29T00:00:00.000Z",
+            updatedAt: "2026-07-29T00:01:00.000Z",
+          },
+        ],
+        notebookRunPlans: [
+          {
+            planId: "run-plan-1",
+            status: "approved",
+            plan: { order: [cell.id] },
+            paidCellIds: [cell.id],
+            cellDefinitionFingerprints: { [cell.id]: "fingerprint-1" },
+            knownCostUsd: 1.25,
+            unknownCostCount: 0,
+            createdAt: "2026-07-29T00:00:00.000Z",
+            updatedAt: "2026-07-29T00:01:00.000Z",
+          },
+        ],
+        transcriptEdits: [
+          {
+            actionId: "edit-1",
+            kind: "remove_words",
+            startWordId: "word-a",
+            endWordId: "word-b",
+          },
+        ],
+        transcriptAttachments: [
+          {
+            id: "attachment-1",
+            transcriptId: "transcript-current",
+          },
+        ],
+        cells: [cell],
+        edges: [],
+      }),
+    );
 
     const reloaded = value(engine.notebooks.read(notebook.id));
     expect(reloaded).toMatchObject({
@@ -362,21 +376,23 @@ describe("centered notebook grid schema v13", () => {
       transcriptAttachments: [{ id: "attachment-1" }],
     });
 
-    value(await engine.notebooks.write({
-      ...reloaded,
-      description: undefined,
-      lifecycleState: undefined,
-      workflowVersion: undefined,
-      analysisRevision: undefined,
-      audioSpine: undefined,
-      currentSelection: undefined,
-      fixture: undefined,
-      execution: {},
-      generationPlans: [],
-      notebookRunPlans: [],
-      transcriptEdits: [],
-      transcriptAttachments: [],
-    }));
+    value(
+      await engine.notebooks.write({
+        ...reloaded,
+        description: undefined,
+        lifecycleState: undefined,
+        workflowVersion: undefined,
+        analysisRevision: undefined,
+        audioSpine: undefined,
+        currentSelection: undefined,
+        fixture: undefined,
+        execution: {},
+        generationPlans: [],
+        notebookRunPlans: [],
+        transcriptEdits: [],
+        transcriptAttachments: [],
+      }),
+    );
     const cleared = value(engine.notebooks.read(notebook.id));
     expect(cleared).not.toHaveProperty("description");
     expect(cleared).not.toHaveProperty("audioSpine");
@@ -403,20 +419,24 @@ describe("centered notebook grid schema v13", () => {
     database.close();
   });
 
-  it.each([11, 12])("rejects schema-v%s catalogs without migration", async (version) => {
-    const { root, engine } = await setup();
-    engine.close();
-    const database = new DatabaseSync(
-      path.join(root, "data", "videobook.db"),
-    );
-    database
-      .prepare("UPDATE engine_schema SET version=? WHERE singleton=1")
-      .run(version);
-    database.close();
+  it.each([11, 12])(
+    "rejects schema-v%s catalogs without migration",
+    async (version) => {
+      const { root, engine } = await setup();
+      engine.close();
+      const database = new DatabaseSync(
+        path.join(root, "data", "videobook.db"),
+      );
+      database
+        .prepare("UPDATE engine_schema SET version=? WHERE singleton=1")
+        .run(version);
+      database.close();
 
-    expect(() => createEngine({ rootDir: root }))
-      .toThrow(`Database schema ${version} is not supported by engine schema 18`);
-  });
+      expect(() => createEngine({ rootDir: root })).toThrow(
+        `Database schema ${version} is not supported by engine schema 18`,
+      );
+    },
+  );
 
   it("rejects duplicate, negative-row, and fractional slots without horizontal edges", async () => {
     const { engine } = await setup();
@@ -514,21 +534,26 @@ describe("centered notebook grid schema v13", () => {
       slug: "img-second",
       slot: { row: 0, column: 1 },
     });
-    value(await engine.notebooks.write({
-      ...notebook,
-      cells: [first, second],
-      edges: [],
-    }));
+    value(
+      await engine.notebooks.write({
+        ...notebook,
+        cells: [first, second],
+        edges: [],
+      }),
+    );
     const current = value(engine.notebooks.read(notebook.id));
-    value(await engine.notebooks.write({
-      ...current,
-      cells: current.cells.map((cell) => ({
-        ...cell,
-        slot: cell.id === first.id
-          ? { row: 0, column: 1 }
-          : { row: 0, column: 0 },
-      })),
-    }));
+    value(
+      await engine.notebooks.write({
+        ...current,
+        cells: current.cells.map((cell) => ({
+          ...cell,
+          slot:
+            cell.id === first.id
+              ? { row: 0, column: 1 }
+              : { row: 0, column: 0 },
+        })),
+      }),
+    );
     const swapped = value(engine.notebooks.read(notebook.id));
     expect(swapped.cells.find((cell) => cell.id === first.id)?.slot).toEqual({
       row: 0,
@@ -554,23 +579,27 @@ describe("centered notebook grid schema v13", () => {
       slug: "img-second",
       slot: { row: 1, column: 0 },
     });
-    value(await engine.notebooks.write({
-      ...notebook,
-      cells: [first, second],
-      edges: [],
-    }));
+    value(
+      await engine.notebooks.write({
+        ...notebook,
+        cells: [first, second],
+        edges: [],
+      }),
+    );
 
     const moved = value(engine.notebooks.read(notebook.id));
-    value(await engine.notebooks.write({
-      ...moved,
-      cells: moved.cells.map((cell) => ({
-        ...cell,
-        slot: {
-          row: cell.id === first.id ? 3 : 4,
-          column: 0,
-        },
-      })),
-    }));
+    value(
+      await engine.notebooks.write({
+        ...moved,
+        cells: moved.cells.map((cell) => ({
+          ...cell,
+          slot: {
+            row: cell.id === first.id ? 3 : 4,
+            column: 0,
+          },
+        })),
+      }),
+    );
     expect(value(engine.notebooks.read(notebook.id)).cells).toMatchObject([
       { id: first.id, slot: { row: 3, column: 0 } },
       { id: second.id, slot: { row: 4, column: 0 } },
@@ -606,5 +635,48 @@ describe("centered notebook grid schema v13", () => {
     expect(() => createEngine({ rootDir: root })).toThrow(
       "Database schema 10 is not supported by engine schema 18",
     );
+  });
+
+  it("swaps slugs between surviving cells in one write", async () => {
+    const { engine } = await setup();
+    const notebook = value(await engine.notebooks.create("Swap"));
+    const alpha = engine.notebooks.createCell({
+      type: "audio",
+      slug: "aud-alpha",
+      slot: { row: 0, column: 0 },
+    });
+    const beta = engine.notebooks.createCell({
+      type: "audio",
+      slug: "aud-beta",
+      slot: { row: 1, column: 0 },
+    });
+    value(
+      await engine.notebooks.write({
+        ...notebook,
+        cells: [alpha, beta],
+        edges: [],
+      }),
+    );
+
+    // Swapping two live slugs is a valid document; the write must not trip
+    // the per-notebook slug UNIQUE mid-upsert.
+    value(
+      await engine.notebooks.write({
+        ...notebook,
+        cells: [
+          { ...alpha, slug: "aud-beta" },
+          { ...beta, slug: "aud-alpha" },
+        ],
+        edges: [],
+      }),
+    );
+    const reloaded = value(engine.notebooks.read(notebook.id));
+    expect(reloaded.cells.map((cell) => [cell.id, cell.slug]).sort()).toEqual(
+      [
+        [alpha.id, "aud-beta"],
+        [beta.id, "aud-alpha"],
+      ].sort(),
+    );
+    engine.close();
   });
 });

@@ -63,6 +63,7 @@
     "streamId": "0197-stream-audio",
     "objectHash": "sha256:audio-object",
     "payloadHash": "sha256:transcript-payload",
+    "payloadAvailable": true,
     "language": "en",
     "provider": "fixture",
     "model": "fixture-word-timing-v1",

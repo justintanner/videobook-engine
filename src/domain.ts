@@ -15,23 +15,13 @@ import type {
   PinnedSearchResult,
 } from "./notebook/types.js";
 import type { EngineError, Result, Revision } from "./engine-types.js";
-import type {
-  SearchQuery,
-  SearchSignal,
-} from "./mvp-contracts.js";
+import type { SearchQuery, SearchSignal } from "./mvp-contracts.js";
 import type { SearchLocation } from "./mvp-time.js";
 import { ok } from "./engine-types.js";
 import { normalizeSearchLocation } from "./mvp-time.js";
-import {
-  EngineContext,
-  resultOf,
-  syncResultOf,
-} from "./context.js";
+import { EngineContext, resultOf, syncResultOf } from "./context.js";
 import { assertUuidV7, newUuidV7 } from "./ids.js";
-import {
-  isValidNotebookCellSlug,
-  NOTEBOOK_CELL_TYPES,
-} from "./schema.js";
+import { isValidNotebookCellSlug, NOTEBOOK_CELL_TYPES } from "./schema.js";
 import { canonicalJson, parseJson } from "./store.js";
 import { EngineFault } from "./store.js";
 
@@ -207,7 +197,8 @@ export function createNotebooksApi(context: EngineContext) {
       syncResultOf(() => requiredNotebook(context, notebookId)),
     write: (
       notebook: NotebookDocument,
-    ): Promise<Result<Revision, EngineError>> => writeNotebook(context, notebook),
+    ): Promise<Result<Revision, EngineError>> =>
+      writeNotebook(context, notebook),
     insertCell: (
       notebookId: string,
       cell: NotebookCell,
@@ -276,7 +267,10 @@ async function createEntity(
   });
 }
 
-function listEntities(context: EngineContext, type?: EntityType): EntityDocument[] {
+function listEntities(
+  context: EngineContext,
+  type?: EntityType,
+): EntityDocument[] {
   if (type) validateEntityType(type);
   const rows = type
     ? (context.store.db
@@ -391,11 +385,7 @@ async function createNotebook(
               notebook_id, name, created_at
             ) VALUES (?, ?, ?)`,
           )
-          .run(
-            notebookId,
-            normalizedName,
-            now,
-          );
+          .run(notebookId, normalizedName, now);
       },
     );
     return ok(requiredNotebook(context, notebookId), mutation.revision);
@@ -429,13 +419,8 @@ async function writeNotebook(
       },
       () => {
         context.store.db
-          .prepare(
-            `UPDATE notebooks SET name=? WHERE notebook_id=?`,
-          )
-          .run(
-            requiredText(notebook.name, "Notebook name"),
-            notebook.id,
-          );
+          .prepare(`UPDATE notebooks SET name=? WHERE notebook_id=?`)
+          .run(requiredText(notebook.name, "Notebook name"), notebook.id);
         synchronizeNotebookChildren(context, notebook);
         synchronizeNotebookState(context, notebook);
       },
@@ -491,7 +476,8 @@ async function updateNotebookCell(
     const prospective = {
       ...notebook,
       cells: notebook.cells.map((existing) =>
-        existing.id === cell.id ? cell : existing),
+        existing.id === cell.id ? cell : existing,
+      ),
     };
     validateCellFields(context, prospective, cell);
     assertCellSlugFree(context, notebookId, cell);
@@ -580,8 +566,7 @@ function assertCellSlugFree(
        WHERE notebook_id=? AND slug=? AND cell_id<>?`,
     )
     .get(notebookId, cell.slug, cell.id) as unknown as
-    | { cell_id: string }
-    | undefined;
+    { cell_id: string } | undefined;
   if (found) {
     throw new Error(`Duplicate cell slug: ${cell.slug}`);
   }
@@ -598,8 +583,7 @@ function assertCellSlotFree(
        WHERE notebook_id=? AND grid_row=? AND grid_column=? AND cell_id<>?`,
     )
     .get(notebookId, cell.slot.row, cell.slot.column, cell.id) as unknown as
-    | { cell_id: string }
-    | undefined;
+    { cell_id: string } | undefined;
   if (found) {
     throw new Error(
       `Cell slot is occupied: ${cell.slot.row}:${cell.slot.column}`,
@@ -626,11 +610,14 @@ function repairCellSlots(
        ORDER BY grid_row, grid_column, cell_id`,
     )
     .all(notebookId) as unknown as Array<{
-      cell_id: string;
-      grid_row: number;
-      grid_column: number;
-    }>;
-  const slots = new Map<string, Array<{ cell_id: string; grid_column: number }>>();
+    cell_id: string;
+    grid_row: number;
+    grid_column: number;
+  }>;
+  const slots = new Map<
+    string,
+    Array<{ cell_id: string; grid_column: number }>
+  >();
   let maxRow = -1;
   for (const row of rows) {
     maxRow = Math.max(maxRow, row.grid_row);
@@ -645,15 +632,51 @@ function repairCellSlots(
   );
   for (const group of slots.values()) {
     if (group.length < 2) continue;
-    const winner = protectedCellId
-      && group.some((row) => row.cell_id === protectedCellId)
-      ? protectedCellId
-      : group[0]!.cell_id;
+    const winner =
+      protectedCellId && group.some((row) => row.cell_id === protectedCellId)
+        ? protectedCellId
+        : group[0]!.cell_id;
     for (const row of group) {
       if (row.cell_id === winner) continue;
       move.run(nextRow, notebookId, row.cell_id);
       nextRow += 1;
     }
+  }
+}
+
+/**
+ * `UNIQUE(notebook_id, slug)` is immediate and the upsert loop writes cells
+ * one at a time, so a document that validly swaps or rotates slugs between
+ * surviving cells would collide mid-loop. Every surviving cell whose slug is
+ * about to change is first parked on a unique temporary slug derived from
+ * its current one — same type prefix, so the slug/type CHECK holds — and
+ * the upsert pass then assigns the final slugs.
+ */
+function evacuateChangedCellSlugs(
+  context: EngineContext,
+  notebook: NotebookDocument,
+): void {
+  const existing = context.store.db
+    .prepare("SELECT cell_id, slug FROM cells WHERE notebook_id=?")
+    .all(notebook.id) as unknown as Array<{ cell_id: string; slug: string }>;
+  if (existing.length === 0) return;
+  const incomingSlugs = new Map(
+    notebook.cells.map((cell) => [
+      cell.id,
+      normalizeCellForWrite(cell).slug ?? "",
+    ]),
+  );
+  const evacuate = context.store.db.prepare(
+    "UPDATE cells SET slug=? WHERE notebook_id=? AND cell_id=?",
+  );
+  for (const row of existing) {
+    const nextSlug = incomingSlugs.get(row.cell_id);
+    if (nextSlug === undefined || nextSlug === row.slug) continue;
+    evacuate.run(
+      `${row.slug}-evac-${newUuidV7().replace(/-/g, "")}`,
+      notebook.id,
+      row.cell_id,
+    );
   }
 }
 
@@ -774,7 +797,10 @@ async function recordNotebookRun(
   });
 }
 
-function requiredEntity(context: EngineContext, entityId: string): EntityDocument {
+function requiredEntity(
+  context: EngineContext,
+  entityId: string,
+): EntityDocument {
   const row = context.store.db
     .prepare(`${ENTITY_SELECT} WHERE entity_id=?`)
     .get(entityId) as unknown as EntityRow | undefined;
@@ -911,12 +937,17 @@ function notebookFromRows(
       ? { analysisRevision: field.get("analysis_revision") as string }
       : {}),
     ...(isRecord(field.get("audio_spine"))
-      ? { audioSpine: field.get("audio_spine") as NotebookDocument["audioSpine"] }
+      ? {
+          audioSpine: field.get(
+            "audio_spine",
+          ) as NotebookDocument["audioSpine"],
+        }
       : {}),
     ...(isRecord(field.get("current_selection"))
       ? {
-          currentSelection:
-            field.get("current_selection") as NotebookDocument["currentSelection"],
+          currentSelection: field.get(
+            "current_selection",
+          ) as NotebookDocument["currentSelection"],
         }
       : {}),
     ...(isRecord(field.get("fixture"))
@@ -931,8 +962,9 @@ function notebookFromRows(
     generationPlans: generationPlans.map(generationPlanFromRow),
     notebookRunPlans: runPlans.map(runPlanFromRow),
     transcriptEdits: transcriptEdits.map(transcriptEditFromRow),
-    transcriptAttachments:
-      transcriptAttachments.map(transcriptAttachmentFromRow),
+    transcriptAttachments: transcriptAttachments.map(
+      transcriptAttachmentFromRow,
+    ),
     cells: cells.map((cell) =>
       rowToCell(
         cell,
@@ -960,7 +992,8 @@ function validateNotebook(
     }
     cellSlugs.add(cell.slug);
     const slot = `${cell.slot.row}:${cell.slot.column}`;
-    if (occupiedSlots.has(slot)) throw new Error(`Duplicate cell slot: ${slot}`);
+    if (occupiedSlots.has(slot))
+      throw new Error(`Duplicate cell slot: ${slot}`);
     occupiedSlots.add(slot);
     validateCellFields(context, notebook, cell);
   }
@@ -976,9 +1009,7 @@ function validateNotebook(
     const targetInput = requiredText(edge.targetInput, "Edge targetInput");
     const inputKey = `${edge.target}:${targetInput}`;
     if (occupiedInputs.has(inputKey)) {
-      throw new Error(
-        `Duplicate target input: ${edge.target} ${targetInput}`,
-      );
+      throw new Error(`Duplicate target input: ${edge.target} ${targetInput}`);
     }
     occupiedInputs.add(inputKey);
   }
@@ -998,9 +1029,9 @@ function validateCellFields(
     throw new Error(`Invalid ${cell.type} cell slug: ${cell.slug}`);
   }
   if (
-    !Number.isInteger(cell.slot.row)
-    || cell.slot.row < 0
-    || !Number.isInteger(cell.slot.column)
+    !Number.isInteger(cell.slot.row) ||
+    cell.slot.row < 0 ||
+    !Number.isInteger(cell.slot.column)
   ) {
     throw new Error(
       `Cell slot row must be nonnegative and column must be an integer: ${cell.id}`,
@@ -1036,6 +1067,7 @@ function synchronizeNotebookChildren(
     notebook.id,
     notebook.cells.map((cell) => cell.id),
   );
+  evacuateChangedCellSlugs(context, notebook);
   for (const cell of notebook.cells) {
     upsertNotebookCell(context, notebook.id, cell);
   }
@@ -1101,13 +1133,9 @@ function synchronizeNotebookFields(
   if (notebook.fixture !== undefined) {
     values.set("fixture", notebook.fixture);
   }
-  deleteMissingNotebookRows(
-    context,
-    "notebook_fields",
-    "field",
-    notebook.id,
-    [...values.keys()],
-  );
+  deleteMissingNotebookRows(context, "notebook_fields", "field", notebook.id, [
+    ...values.keys(),
+  ]);
   const upsert = context.store.db.prepare(
     `INSERT INTO notebook_fields(notebook_id, field, value_json)
      VALUES (?, ?, ?)
@@ -1182,7 +1210,10 @@ function synchronizeGenerationPlans(
   notebook: NotebookDocument,
 ): void {
   const plans = notebook.generationPlans ?? [];
-  assertUnique(plans.map((plan) => plan.planId), "generation plan ID");
+  assertUnique(
+    plans.map((plan) => plan.planId),
+    "generation plan ID",
+  );
   deleteMissingNotebookRows(
     context,
     "notebook_generation_plans",
@@ -1224,7 +1255,10 @@ function synchronizeRunPlans(
   notebook: NotebookDocument,
 ): void {
   const plans = notebook.notebookRunPlans ?? [];
-  assertUnique(plans.map((plan) => plan.planId), "notebook run plan ID");
+  assertUnique(
+    plans.map((plan) => plan.planId),
+    "notebook run plan ID",
+  );
   deleteMissingNotebookRows(
     context,
     "notebook_run_plans",
@@ -1278,7 +1312,10 @@ function synchronizeTranscriptEdits(
   notebook: NotebookDocument,
 ): void {
   const edits = notebook.transcriptEdits ?? [];
-  assertUnique(edits.map((edit) => edit.actionId), "transcript edit action ID");
+  assertUnique(
+    edits.map((edit) => edit.actionId),
+    "transcript edit action ID",
+  );
   deleteMissingNotebookRows(
     context,
     "notebook_transcript_edits",
@@ -1347,12 +1384,7 @@ function deleteMissingNotebookRows(
     | "notebook_run_plans"
     | "notebook_transcript_edits"
     | "notebook_transcript_attachments",
-  idColumn:
-    | "field"
-    | "cell_id"
-    | "plan_id"
-    | "action_id"
-    | "attachment_id",
+  idColumn: "field" | "cell_id" | "plan_id" | "action_id" | "attachment_id",
   notebookId: string,
   ids: string[],
 ): void {
@@ -1431,21 +1463,25 @@ function assertReferenceTarget(
     }
     return;
   }
-  const table = reference.kind === "transcript"
-    ? "transcripts"
-    : reference.kind === "sequence"
-      ? "sequences"
-      : "artifact_streams";
-  const column = reference.kind === "transcript"
-    ? "transcript_id"
-    : reference.kind === "sequence"
-      ? "sequence_id"
-      : "stream_id";
+  const table =
+    reference.kind === "transcript"
+      ? "transcripts"
+      : reference.kind === "sequence"
+        ? "sequences"
+        : "artifact_streams";
+  const column =
+    reference.kind === "transcript"
+      ? "transcript_id"
+      : reference.kind === "sequence"
+        ? "sequence_id"
+        : "stream_id";
   const found = context.store.db
     .prepare(`SELECT 1 AS present FROM ${table} WHERE ${column}=?`)
     .get(reference.targetId);
   if (!found) {
-    throw new Error(`${reference.kind} target not found: ${reference.targetId}`);
+    throw new Error(
+      `${reference.kind} target not found: ${reference.targetId}`,
+    );
   }
 }
 
@@ -1463,7 +1499,9 @@ function validatePinnedResults(
     ids.add(result.id);
     validateOrdinal(result.ordinal, "Pinned search result ordinal");
     if (ordinals.has(result.ordinal)) {
-      throw new Error(`Duplicate pinned search result ordinal: ${result.ordinal}`);
+      throw new Error(
+        `Duplicate pinned search result ordinal: ${result.ordinal}`,
+      );
     }
     ordinals.add(result.ordinal);
     context.artifactRowById(result.artifactId);
@@ -1471,13 +1509,17 @@ function validatePinnedResults(
     normalizeSearchLocation(result.location);
     requiredText(result.selectedRevision, "Pinned search result revision");
     if (!Number.isSafeInteger(result.createdAt) || result.createdAt < 0) {
-      throw new Error("Pinned search result createdAt must be a positive integer");
+      throw new Error(
+        "Pinned search result createdAt must be a positive integer",
+      );
     }
     const object = context.store.db
       .prepare("SELECT 1 AS present FROM objects WHERE object_hash=?")
       .get(result.objectHash);
     if (!object) {
-      throw new Error(`Pinned search result object not found: ${result.objectHash}`);
+      throw new Error(
+        `Pinned search result object not found: ${result.objectHash}`,
+      );
     }
   }
 }
@@ -1613,9 +1655,10 @@ function rowToCellReference(row: NotebookReferenceRow): NotebookCellReference {
 function rowToPinnedSearchResult(
   row: PinnedSearchResultRow,
 ): PinnedSearchResult {
-  const representativeTick = row.representative_json === null
-    ? undefined
-    : parseJson<number | undefined>(row.representative_json, undefined);
+  const representativeTick =
+    row.representative_json === null
+      ? undefined
+      : parseJson<number | undefined>(row.representative_json, undefined);
   return {
     id: row.result_id,
     artifactId: row.artifact_id,
@@ -1648,16 +1691,15 @@ function rowToCell(
   const provider = optionalString(row.provider) ?? legacyProvider;
   const operation = optionalString(row.operation) ?? legacyOperation;
   const model = optionalString(row.model);
-  const tool = optionalString(row.tool)
-    ?? (looksLikeGenerationTool(model) ? model : undefined);
+  const tool =
+    optionalString(row.tool) ??
+    (looksLikeGenerationTool(model) ? model : undefined);
   return {
     id: row.cell_id,
     type: notebookCellType(row.type),
     slug: row.slug,
     slot: { row: row.grid_row, column: row.grid_column },
-    ...(row.output_entity_id
-      ? { outputEntityId: row.output_entity_id }
-      : {}),
+    ...(row.output_entity_id ? { outputEntityId: row.output_entity_id } : {}),
     ...(row.prompt ? { prompt: row.prompt } : {}),
     ...(provider ? { provider } : {}),
     ...(model ? { model } : {}),
@@ -1681,13 +1723,14 @@ function notebookCellType(type: string): NotebookCell["type"] {
 
 function normalizeCellForWrite(cell: NotebookCell): NotebookCell {
   const inputs = { ...(cell.inputs ?? {}) };
-  const provider = optionalString(cell.provider)
-    ?? optionalString(inputs.provider);
-  const operation = optionalString(cell.operation)
-    ?? optionalString(inputs.operation);
+  const provider =
+    optionalString(cell.provider) ?? optionalString(inputs.provider);
+  const operation =
+    optionalString(cell.operation) ?? optionalString(inputs.operation);
   const model = optionalString(cell.model);
-  const tool = optionalString(cell.tool)
-    ?? (looksLikeGenerationTool(model) ? model : undefined);
+  const tool =
+    optionalString(cell.tool) ??
+    (looksLikeGenerationTool(model) ? model : undefined);
   return {
     ...cell,
     ...(provider ? { provider } : { provider: undefined }),
@@ -1737,7 +1780,8 @@ function requiredText(value: string, label: string): string {
 
 function requiredDate(value: string, label: string): number {
   const parsed = Date.parse(value);
-  if (!Number.isFinite(parsed)) throw new Error(`${label} must be a valid date`);
+  if (!Number.isFinite(parsed))
+    throw new Error(`${label} must be a valid date`);
   return parsed;
 }
 
@@ -1812,10 +1856,7 @@ function runPlanFromRow(row: NotebookRunPlanRow): NotebookRunPlan {
     ...(row.run_id ? { runId: row.run_id } : {}),
     ...(row.outputs_json
       ? {
-          outputs: parseJson<Record<string, string>>(
-            row.outputs_json,
-            {},
-          ),
+          outputs: parseJson<Record<string, string>>(row.outputs_json, {}),
         }
       : {}),
     ...(row.error ? { error: row.error } : {}),

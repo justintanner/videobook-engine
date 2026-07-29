@@ -80,7 +80,10 @@ function fileContentStore(root: string): ContentStore {
  * `ContentStore` stays the abstraction — the engine cannot tell this from
  * a flat store.
  */
-function overlayContentStore(mine: ContentStore, upstream: ContentStore): ContentStore {
+function overlayContentStore(
+  mine: ContentStore,
+  upstream: ContentStore,
+): ContentStore {
   return {
     async head(key) {
       const own = await mine.head(key);
@@ -135,7 +138,9 @@ async function setupForkedCatalogs(): Promise<ForkFixture> {
   const base = value(
     await upstream.artifacts.create({ kind: "image", slug: "img-base" }),
   );
-  value(await upstream.files.write(base.artifactId, "original.png", "base bytes"));
+  value(
+    await upstream.files.write(base.artifactId, "original.png", "base bytes"),
+  );
   value(await upstream.storage.backup());
   upstream.close();
 
@@ -169,7 +174,10 @@ async function openFork(fixture: ForkFixture): Promise<Engine> {
   const fork = createEngine({
     dataDir: fixture.forkData,
     workspaceDir: path.join(fixture.root, "fork-workspace"),
-    remoteObjects: overlayContentStore(fixture.forkObjects, fixture.upstreamObjects),
+    remoteObjects: overlayContentStore(
+      fixture.forkObjects,
+      fixture.upstreamObjects,
+    ),
     objectPrefix: fixture.prefix,
     catalogBackup: { name: "fork", url: fixture.forkUrl },
   });
@@ -205,7 +213,9 @@ describe("fork bootstrap", () => {
     const mine = value(
       await fork.artifacts.create({ kind: "video", slug: "vid-fork" }),
     );
-    value(await fork.files.write(mine.artifactId, "original.mp4", "fork bytes"));
+    value(
+      await fork.files.write(mine.artifactId, "original.mp4", "fork bytes"),
+    );
     expect(value(await fork.storage.backup()).state).toBe("backed_up");
     fork.close();
   });
@@ -241,9 +251,15 @@ describe("merge-back integration flow", () => {
       await fork.artifacts.create({ kind: "video", slug: "vid-fork" }),
     );
     value(
-      await fork.files.write(forkArtifact.artifactId, "original.mp4", "fork bytes"),
+      await fork.files.write(
+        forkArtifact.artifactId,
+        "original.mp4",
+        "fork bytes",
+      ),
     );
-    const forkManifest = value(await fork.files.manifest(forkArtifact.artifactId));
+    const forkManifest = value(
+      await fork.files.manifest(forkArtifact.artifactId),
+    );
     const forkObjectHash = forkManifest.files[0]?.objectHash;
     if (!forkObjectHash) throw new Error("missing fork object hash");
     value(await fork.storage.backup());
@@ -315,8 +331,14 @@ describe("merge-back integration flow", () => {
     const log = merged.doltLog({ limit: 3 });
     expect(log[0]?.commit_hash).toBe(result.integrationCommit);
     expect(log[0]?.message).toContain("merge_back");
-    expect(log[0]?.message).toContain(`merged-revision: ${result.theirsRevision}`);
+    expect(log[0]?.message).toContain(
+      `merged-revision: ${result.theirsRevision}`,
+    );
     expect(log[0]?.message).toContain(`base-revision: ${result.baseRevision}`);
+    // The integration commit carries a write-set trailer so edit conflict
+    // detection sees integrated changes like locally committed ones.
+    expect(log[0]?.message).toContain("write-set: ");
+    expect(log[0]?.message).toContain(`object:${forkObjectHash}`);
     expect(log[1]?.commit_hash).toBe(upstreamHead);
     const slugs = (
       merged
@@ -344,7 +366,9 @@ describe("merge-back integration flow", () => {
     ).toBe(result.integrationCommit);
     const remoteSlugs = (
       verify
-        .prepare("SELECT slug FROM dolt_at_artifacts('origin/main') ORDER BY slug")
+        .prepare(
+          "SELECT slug FROM dolt_at_artifacts('origin/main') ORDER BY slug",
+        )
         .all() as Array<{ slug: string }>
     ).map((row) => row.slug);
     expect(remoteSlugs).toEqual(["aud-upstream", "img-base", "vid-fork"]);
@@ -363,6 +387,65 @@ describe("merge-back integration flow", () => {
     expect(second.alreadyIntegrated).toBe(true);
     expect(second.integrationCommit).toBe(result.integrationCommit);
     expect(second.uploadedObjects).toEqual([]);
+  });
+
+  it("merges independent takedowns of the same object", async () => {
+    const fixture = await setupForkedCatalogs();
+    const readForgottenAt = (dbPath: string, hash: string): number | null => {
+      const db = new DatabaseSync(dbPath, { readOnly: true });
+      const row = db
+        .prepare("SELECT forgotten_at FROM objects WHERE object_hash=?")
+        .get(hash) as unknown as { forgotten_at: number | null } | undefined;
+      db.close();
+      return row?.forgotten_at ?? null;
+    };
+
+    // The fork applies the takedown first (earlier wall clock)…
+    const fork = await openFork(fixture);
+    const manifest = value(await fork.files.manifest("img-base"));
+    const hash = manifest.files[0]?.objectHash;
+    if (!hash) throw new Error("missing base object hash");
+    value(
+      await fork.storage.deleteObject(hash, { force: true, remote: false }),
+    );
+    value(await fork.storage.backup());
+    fork.close();
+    const forkForgottenAt = readForgottenAt(
+      path.join(fixture.forkData, "videobook.db"),
+      hash,
+    );
+    await new Promise((resolve) => setTimeout(resolve, 10));
+
+    // …then upstream applies the same takedown independently.
+    const upstream = await openUpstream(fixture);
+    value(
+      await upstream.storage.deleteObject(hash, { force: true, remote: false }),
+    );
+    value(await upstream.storage.backup());
+    upstream.close();
+    const upstreamForgottenAt = readForgottenAt(
+      path.join(fixture.upstreamData, "videobook.db"),
+      hash,
+    );
+    expect(forkForgottenAt).not.toBeNull();
+    expect(upstreamForgottenAt).not.toBeNull();
+    expect(forkForgottenAt!).toBeLessThan(upstreamForgottenAt!);
+
+    // Same-cell different-value on objects.forgotten_at must not wedge the
+    // merge: forget wins and the earlier stamp is kept.
+    const result = await mergeBack({
+      upstreamDbPath: path.join(fixture.upstreamData, "videobook.db"),
+      forkRemote: { url: fixture.forkUrl },
+      upstreamObjects: fixture.upstreamObjects,
+      forkObjects: fixture.forkObjects,
+      objectPrefix: fixture.prefix,
+      keepWorkDir: true,
+    });
+    roots.push(result.workDir!);
+    expect(result.alreadyIntegrated).toBe(false);
+    expect(
+      readForgottenAt(path.join(result.workDir!, "videobook.db"), hash),
+    ).toBe(forkForgottenAt);
   });
 
   it("surfaces a cross-fork slug collision as MERGE_CONFLICT", async () => {
@@ -414,11 +497,18 @@ describe("merge-back integration flow", () => {
     await secondMachine.ready;
 
     const upstream = await openUpstream(fixture);
-    value(await upstream.artifacts.create({ kind: "audio", slug: "aud-moved" }));
+    value(
+      await upstream.artifacts.create({ kind: "audio", slug: "aud-moved" }),
+    );
     value(await upstream.storage.backup());
     upstream.close();
 
-    value(await secondMachine.artifacts.create({ kind: "image", slug: "img-local" }));
+    value(
+      await secondMachine.artifacts.create({
+        kind: "image",
+        slug: "img-local",
+      }),
+    );
     const backup = await secondMachine.storage.backup();
     expect(backup.ok).toBe(false);
     if (backup.ok) throw new Error("expected DIVERGED");

@@ -1,3 +1,5 @@
+import { stat } from "node:fs/promises";
+
 import type {
   CollectGarbageOptions,
   CollectGarbageResult,
@@ -18,11 +20,17 @@ interface PendingObjectRow {
   size_bytes: number;
 }
 
+/**
+ * Minimum age before a stray local file (bytes without an `objects` row) is
+ * swept, so an import that has written its bytes but not yet committed its
+ * row cannot lose them to a concurrent GC.
+ */
+const STRAY_GRACE_MS = 600_000;
+
 export function createStorageApi(context: EngineContext) {
   return {
     status: (): StorageStatus => storageStatus(context),
-    backup: (): Promise<Result<StorageStatus, EngineError>> =>
-      backup(context),
+    backup: (): Promise<Result<StorageStatus, EngineError>> => backup(context),
     deleteObject: (
       hash: string,
       options?: DeleteObjectOptions,
@@ -49,14 +57,12 @@ function storageStatus(context: EngineContext): StorageStatus {
     "last_backup_head",
     null,
   );
-  const recordedState = runtimeValue<
-    StorageStatus["state"] | null
-  >(context, "backup_state", null);
-  const lastError = runtimeValue<string | null>(
+  const recordedState = runtimeValue<StorageStatus["state"] | null>(
     context,
-    "backup_error",
+    "backup_state",
     null,
   );
+  const lastError = runtimeValue<string | null>(context, "backup_error", null);
   const state =
     recordedState === "offline" || recordedState === "diverged"
       ? recordedState
@@ -83,10 +89,7 @@ async function backup(
       if (context.config.remoteObjects) {
         const pending = pendingObjects(context);
         for (const object of pending) {
-          await context.objects.publish(
-            object.object_hash,
-            object.size_bytes,
-          );
+          await context.objects.publish(object.object_hash, object.size_bytes);
           context.store.runtime((now) => {
             context.store.db
               .prepare(
@@ -103,16 +106,11 @@ async function backup(
       if (context.config.catalogBackup) {
         context.store.push(context.config.catalogBackup.name);
       }
-      setRuntimeValue(
-        context,
-        "last_backup_head",
-        context.store.head,
-      );
+      setRuntimeValue(context, "last_backup_head", context.store.head);
       setBackupState(context, "backed_up", null);
       return ok(storageStatus(context));
     } catch (error) {
-      const message =
-        error instanceof Error ? error.message : String(error);
+      const message = error instanceof Error ? error.message : String(error);
       // doltlite reports a rejected push as "push failed (not a
       // fast-forward?)"; keep the detection tolerant of other phrasings.
       const diverged = /diverg|fast-forward|fetch first/i.test(message);
@@ -154,48 +152,64 @@ async function deleteObject(
   return resultOf(async () => {
     const row = context.store.db
       .prepare(
-        `SELECT object_hash, size_bytes FROM objects
-         WHERE object_hash=? AND forgotten_at IS NULL`,
+        `SELECT object_hash, size_bytes, forgotten_at FROM objects
+         WHERE object_hash=?`,
       )
-      .get(hash) as unknown as PendingObjectRow | undefined;
+      .get(hash) as unknown as
+      (PendingObjectRow & { forgotten_at: number | null }) | undefined;
     if (!row) {
       throw new EngineFault({
         code: "NOT_FOUND",
         message: `Object not found: ${hash}`,
       });
     }
-    const references = objectReferences(context, hash);
-    if (references.length > 0 && !options.force) {
-      throw new EngineFault({
-        code: "IN_USE",
-        message:
-          `Object ${hash} is referenced at HEAD by `
-          + `${references.length} row(s)`,
-        details: { references },
-      });
-    }
-    const mutation = await context.store.semantic(
-      {
-        operation: "delete_object",
-        details: {
-          hash: row.object_hash,
-          sizeBytes: row.size_bytes,
-          forced: options.force === true,
-          severedReferences: options.force ? references : [],
+    // Retrying an already-forgotten object skips the tombstone commit and
+    // just finishes byte removal — an earlier attempt may have failed after
+    // the commit but before the local or remote delete completed.
+    const alreadyForgotten = row.forgotten_at !== null;
+    const severed: ObjectReference[] = [];
+    let revision: string | undefined;
+    if (!alreadyForgotten) {
+      // The reference scan runs inside the serialized semantic section so no
+      // concurrent commit can add a reference between the IN_USE check and
+      // the tombstone. `details` is filled by the mutation and read at
+      // commit-message time, which happens after the mutation ran.
+      const details: Record<string, unknown> = {
+        hash: row.object_hash,
+        sizeBytes: row.size_bytes,
+        forced: options.force === true,
+      };
+      const mutation = await context.store.semantic(
+        {
+          operation: "delete_object",
+          details,
+          writeSet: [`object:${row.object_hash}`],
         },
-        writeSet: [`object:${row.object_hash}`],
-      },
-      (_operationId, now) => {
-        context.store.db
-          .prepare(
-            "UPDATE objects SET forgotten_at=? WHERE object_hash=?",
-          )
-          .run(now, row.object_hash);
-      },
-    );
+        (_operationId, now) => {
+          const references = objectReferences(context, hash);
+          if (references.length > 0 && !options.force) {
+            throw new EngineFault({
+              code: "IN_USE",
+              message:
+                `Object ${hash} is referenced at HEAD by ` +
+                `${references.length} row(s)`,
+              details: { references },
+            });
+          }
+          severed.push(...references);
+          details.severedReferences = references;
+          context.store.db
+            .prepare("UPDATE objects SET forgotten_at=? WHERE object_hash=?")
+            .run(now, row.object_hash);
+        },
+      );
+      revision = mutation.revision;
+    }
     const deletedLocal = await context.objects.deleteLocal(hash);
     let deletedRemote = false;
-    if (options.remote) {
+    // Remote deletion defaults on: a forget that leaves remote bytes
+    // readable is not a forget. `unpublish` is a no-op without a remote.
+    if (options.remote !== false) {
       deletedRemote = await context.objects.unpublish(hash);
       if (deletedRemote) clearPublication(context, hash);
     }
@@ -205,9 +219,10 @@ async function deleteObject(
         sizeBytes: row.size_bytes,
         deletedLocal,
         deletedRemote,
-        severedReferences: options.force ? references : [],
+        severedReferences: severed,
+        alreadyForgotten,
       },
-      mutation.revision,
+      revision,
     );
   });
 }
@@ -218,7 +233,9 @@ async function deleteObject(
  * A hash is referenced when a HEAD row of a semantic table names it in a
  * first-class `object_hash`/`payload_hash` column
  * (`artifact_files`, `artifact_streams`, `pinned_search_results`,
- * `sequence_clips`, `transcripts`) or inside a `cell_references` snapshot.
+ * `sequence_clips`, `transcripts`) or inside an engine-written JSON column
+ * that embeds object hashes (`cell_references.snapshot_json`,
+ * `pinned_search_results.location_json`, `caption_cues.source_range_json`).
  * Everything else — objects whose referencing rows were deleted by later
  * commits, and stray local files that never got an `objects` row — is
  * collected. Collection is recorded as one semantic commit that sets
@@ -228,7 +245,9 @@ async function deleteObject(
  *
  * HEAD is the commit the engine last wrote; historical revisions are not
  * consulted, which is exactly what makes restoring an old revision after GC
- * a tombstone read. Run GC only while no imports are in flight.
+ * a tombstone read. The reference scan runs inside the serialized semantic
+ * section, and stray files younger than the grace window are left alone, so
+ * GC is safe to run alongside normal engine writes.
  */
 async function collectGarbage(
   context: EngineContext,
@@ -236,79 +255,87 @@ async function collectGarbage(
 ): Promise<Result<CollectGarbageResult, EngineError>> {
   return resultOf(async () => {
     const dryRun = options.dryRun ?? false;
-    const referenced = referencedHashes(context);
-    const rows = context.store.db
-      .prepare(
-        `SELECT object_hash, size_bytes FROM objects
-         ORDER BY created_at, object_hash`,
-      )
-      .all() as unknown as PendingObjectRow[];
-    const known = new Set(rows.map((row) => row.object_hash));
-    const forgotten = forgottenHashes(context);
-    const collectable: CollectedObject[] = [];
-    for (const row of rows) {
-      if (referenced.has(row.object_hash) || forgotten.has(row.object_hash)) {
-        continue;
-      }
-      collectable.push({ hash: row.object_hash, sizeBytes: row.size_bytes });
-    }
-    // Stray local files (for example leftovers from an interrupted import)
-    // have no objects row and therefore no HEAD reference by definition.
-    const localHashes = await context.objects.listLocal();
-    const stray = localHashes.filter((hash) => !known.has(hash));
-    const reclaimedBytes = collectable.reduce(
-      (total, object) => total + object.sizeBytes,
-      0,
-    );
     if (dryRun) {
+      const scan = scanCollectable(context);
       const report: CollectGarbageResult = {
         dryRun,
-        scannedObjects: rows.length,
-        referencedObjects: referenced.size,
-        collected: collectable,
-        reclaimedBytes,
+        scannedObjects: scan.scanned,
+        referencedObjects: scan.referenced,
+        collected: scan.collectable,
+        reclaimedBytes: reclaimedBytes(scan.collectable),
       };
       return report;
     }
-    let revision: string | undefined;
-    if (collectable.length > 0) {
-      const mutation = await context.store.semantic(
-        {
-          operation: "gc_objects",
-          details: {
-            hashes: collectable.map((object) => object.hash),
-            reclaimedBytes,
-          },
-          writeSet: collectable.map((object) => `object:${object.hash}`),
-        },
-        (_operationId, now) => {
-          const markForgotten = context.store.db.prepare(
-            `UPDATE objects SET forgotten_at=?
-             WHERE object_hash=? AND forgotten_at IS NULL`,
-          );
-          for (const object of collectable) {
-            markForgotten.run(now, object.hash);
-          }
-        },
-      );
-      revision = mutation.revision;
-    }
+    // The local listing happens outside the serialized section — the stray
+    // grace window (below) protects imports racing this listing.
+    const localHashes = await context.objects.listLocal();
+    let scan = emptyScan();
+    // `details` and `writeSet` are filled by the mutation and read at
+    // commit-message time, which happens after the mutation ran.
+    const details: Record<string, unknown> = {};
+    const writeSet: string[] = [];
+    const mutation = await context.store.semantic(
+      { operation: "gc_objects", details, writeSet },
+      (_operationId, now) => {
+        // Scanning inside the serialized semantic section: no concurrent
+        // commit can add a reference between the scan and the tombstones.
+        scan = scanCollectable(context);
+        details.hashes = scan.collectable.map((object) => object.hash);
+        details.reclaimedBytes = reclaimedBytes(scan.collectable);
+        writeSet.push(
+          ...scan.collectable.map((object) => `object:${object.hash}`),
+        );
+        const markForgotten = context.store.db.prepare(
+          `UPDATE objects SET forgotten_at=?
+           WHERE object_hash=? AND forgotten_at IS NULL`,
+        );
+        for (const object of scan.collectable) {
+          markForgotten.run(now, object.hash);
+        }
+      },
+    );
+    const revision =
+      scan.collectable.length > 0 ? mutation.revision : undefined;
     // Delete the bytes for everything collectable, plus any leftover local
     // files for objects already forgotten (for example after an interrupted
     // deleteObject).
     const deleteHashes = new Set([
-      ...collectable.map((object) => object.hash),
-      ...[...forgotten].filter((hash) => localHashes.includes(hash)),
+      ...scan.collectable.map((object) => object.hash),
+      ...[...scan.forgotten].filter((hash) => localHashes.includes(hash)),
     ]);
     for (const hash of deleteHashes) {
       await context.objects.deleteLocal(hash);
-      if (options.remote && isPublished(context, hash)) {
+    }
+    if (options.remote) {
+      // The remote pass covers every forgotten hash — not just the ones
+      // with local bytes or a runtime publication row — so an interrupted
+      // deleteObject or a lost runtime table cannot leave remote bytes
+      // readable forever. `unpublish` head-checks first, so already-absent
+      // objects cost one metadata call.
+      const remoteHashes = new Set([
+        ...scan.collectable.map((object) => object.hash),
+        ...scan.forgotten,
+      ]);
+      for (const hash of remoteHashes) {
         if (await context.objects.unpublish(hash)) {
           clearPublication(context, hash);
         }
       }
     }
+    // Stray local files (bytes with no objects row) are swept only after
+    // the grace window, so an import that has written bytes but not yet
+    // committed its row cannot lose them.
+    const strayCutoff = Date.now() - (options.strayGraceMs ?? STRAY_GRACE_MS);
+    const stray = localHashes.filter(
+      (hash) => !scan.known.has(hash) && !deleteHashes.has(hash),
+    );
     for (const hash of stray) {
+      try {
+        const fileStat = await stat(context.objects.pathFor(hash));
+        if (fileStat.mtimeMs > strayCutoff) continue;
+      } catch {
+        continue;
+      }
       await context.objects.deleteLocal(hash);
     }
     let doltGcSummary: string | undefined;
@@ -317,14 +344,62 @@ async function collectGarbage(
     }
     const report: CollectGarbageResult = {
       dryRun,
-      scannedObjects: rows.length,
-      referencedObjects: referenced.size,
-      collected: collectable,
-      reclaimedBytes,
+      scannedObjects: scan.scanned,
+      referencedObjects: scan.referenced,
+      collected: scan.collectable,
+      reclaimedBytes: reclaimedBytes(scan.collectable),
       ...(doltGcSummary !== undefined ? { doltGc: doltGcSummary } : {}),
     };
     return ok(report, revision);
   });
+}
+
+interface CollectableScan {
+  scanned: number;
+  referenced: number;
+  collectable: CollectedObject[];
+  forgotten: Set<string>;
+  known: Set<string>;
+}
+
+function emptyScan(): CollectableScan {
+  return {
+    scanned: 0,
+    referenced: 0,
+    collectable: [],
+    forgotten: new Set(),
+    known: new Set(),
+  };
+}
+
+function scanCollectable(context: EngineContext): CollectableScan {
+  const referenced = referencedHashes(context);
+  const rows = context.store.db
+    .prepare(
+      `SELECT object_hash, size_bytes FROM objects
+       ORDER BY created_at, object_hash`,
+    )
+    .all() as unknown as PendingObjectRow[];
+  const known = new Set(rows.map((row) => row.object_hash));
+  const forgotten = forgottenHashes(context);
+  const collectable: CollectedObject[] = [];
+  for (const row of rows) {
+    if (referenced.has(row.object_hash) || forgotten.has(row.object_hash)) {
+      continue;
+    }
+    collectable.push({ hash: row.object_hash, sizeBytes: row.size_bytes });
+  }
+  return {
+    scanned: rows.length,
+    referenced: referenced.size,
+    collectable,
+    forgotten,
+    known,
+  };
+}
+
+function reclaimedBytes(collectable: CollectedObject[]): number {
+  return collectable.reduce((total, object) => total + object.sizeBytes, 0);
 }
 
 function forgottenHashes(context: EngineContext): Set<string> {
@@ -351,23 +426,37 @@ function referencedHashes(context: EngineContext): Set<string> {
     "SELECT payload_hash AS hash FROM transcripts",
   ];
   for (const query of queries) {
-    const rows = context.store.db
-      .prepare(query)
-      .all() as unknown as Array<{ hash: string }>;
+    const rows = context.store.db.prepare(query).all() as unknown as Array<{
+      hash: string;
+    }>;
     for (const row of rows) hashes.add(row.hash);
   }
-  // Notebook cell reference snapshots embed source object hashes inside
-  // JSON rather than a first-class column; honor them as loose roots.
-  const snapshots = context.store.db
-    .prepare("SELECT snapshot_json AS snapshot FROM cell_references")
-    .all() as unknown as Array<{ snapshot: string }>;
-  for (const row of snapshots) {
-    for (const hash of snapshotHashes(row.snapshot)) hashes.add(hash);
+  // Some engine-written JSON columns embed object hashes rather than
+  // naming them in a first-class column; honor them all as loose roots.
+  for (const query of JSON_ROOT_QUERIES) {
+    const rows = context.store.db.prepare(query).all() as unknown as Array<{
+      payload: string | null;
+    }>;
+    for (const row of rows) {
+      if (row.payload === null) continue;
+      for (const hash of jsonObjectHashes(row.payload)) hashes.add(hash);
+    }
   }
   return hashes;
 }
 
-function snapshotHashes(snapshotJson: string): string[] {
+/**
+ * Engine-written JSON columns that can carry `objectHash` values: notebook
+ * cell reference snapshots, pinned search result locations, and caption cue
+ * source ranges. Keep in sync with src/schema.ts.
+ */
+const JSON_ROOT_QUERIES = [
+  "SELECT snapshot_json AS payload FROM cell_references",
+  "SELECT location_json AS payload FROM pinned_search_results",
+  "SELECT source_range_json AS payload FROM caption_cues",
+] as const;
+
+function jsonObjectHashes(snapshotJson: string): string[] {
   const snapshot = parseJson<unknown>(snapshotJson, null);
   const hashes: string[] = [];
   const visit = (value: unknown): void => {
@@ -376,9 +465,9 @@ function snapshotHashes(snapshotJson: string): string[] {
     } else if (value !== null && typeof value === "object") {
       for (const [key, item] of Object.entries(value)) {
         if (
-          key === "objectHash"
-          && typeof item === "string"
-          && /^[a-f0-9]{64}$/.test(item)
+          key === "objectHash" &&
+          typeof item === "string" &&
+          /^[a-f0-9]{64}$/.test(item)
         ) {
           hashes.push(item);
         } else {
@@ -397,11 +486,7 @@ function objectReferences(
   hash: string,
 ): ObjectReference[] {
   const references: ObjectReference[] = [];
-  const collect = (
-    table: string,
-    query: string,
-    ...params: string[]
-  ): void => {
+  const collect = (table: string, query: string, ...params: string[]): void => {
     const rows = context.store.db
       .prepare(query)
       .all(...params) as unknown as Array<{ id: string }>;
@@ -436,38 +521,48 @@ function objectReferences(
     hash,
     hash,
   );
-  const snapshots = context.store.db
-    .prepare(
-      `SELECT notebook_id || ':' || cell_id || ':' || reference_id AS id,
-              snapshot_json AS snapshot
-       FROM cell_references`,
-    )
-    .all() as unknown as Array<{ id: string; snapshot: string }>;
-  for (const row of snapshots) {
-    if (snapshotHashes(row.snapshot).includes(hash)) {
-      references.push({ table: "cell_references", id: row.id });
+  const jsonReferenceQueries = [
+    {
+      table: "cell_references",
+      query: `SELECT notebook_id || ':' || cell_id || ':' || reference_id AS id,
+                     snapshot_json AS payload
+              FROM cell_references`,
+    },
+    {
+      table: "pinned_search_results",
+      query: `SELECT notebook_id || ':' || cell_id || ':' || result_id AS id,
+                     location_json AS payload
+              FROM pinned_search_results`,
+    },
+    {
+      table: "caption_cues",
+      query: `SELECT cue_id AS id, source_range_json AS payload
+              FROM caption_cues WHERE source_range_json IS NOT NULL`,
+    },
+  ];
+  const seen = new Set(
+    references.map((reference) => `${reference.table}:${reference.id}`),
+  );
+  for (const { table, query } of jsonReferenceQueries) {
+    const rows = context.store.db.prepare(query).all() as unknown as Array<{
+      id: string;
+      payload: string | null;
+    }>;
+    for (const row of rows) {
+      if (row.payload === null) continue;
+      if (!jsonObjectHashes(row.payload).includes(hash)) continue;
+      if (seen.has(`${table}:${row.id}`)) continue;
+      seen.add(`${table}:${row.id}`);
+      references.push({ table, id: row.id });
     }
   }
   return references;
 }
 
-function isPublished(context: EngineContext, hash: string): boolean {
-  return Boolean(
-    context.store.db
-      .prepare(
-        `SELECT 1 AS present FROM runtime_object_publications
-         WHERE object_hash=?`,
-      )
-      .get(hash),
-  );
-}
-
 function clearPublication(context: EngineContext, hash: string): void {
   context.store.runtime(() => {
     context.store.db
-      .prepare(
-        "DELETE FROM runtime_object_publications WHERE object_hash=?",
-      )
+      .prepare("DELETE FROM runtime_object_publications WHERE object_hash=?")
       .run(hash);
   });
 }
@@ -502,11 +597,7 @@ function countPendingObjects(context: EngineContext): number {
   return row.count;
 }
 
-function runtimeValue<T>(
-  context: EngineContext,
-  key: string,
-  fallback: T,
-): T {
+function runtimeValue<T>(context: EngineContext, key: string, fallback: T): T {
   const row = context.store.db
     .prepare("SELECT value_json FROM runtime_meta WHERE key=?")
     .get(key) as unknown as { value_json: string } | undefined;

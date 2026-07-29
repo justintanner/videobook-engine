@@ -33,11 +33,15 @@ one stable UUIDv7 row; it does not use a synthetic singleton column.
   never staged or versioned.
 - `dataDir/objects/sha256/` is the local content-addressed store. Objects
   are content-immutable but forgettable: `engine.storage.deleteObject` and
-  `engine.storage.gc` remove bytes (locally, and remotely via
-  `ContentStore.delete` when configured) and mark the `objects` row with
-  `forgotten_at`. Object rows are never deleted — a forgotten row is the
-  tombstone (hash + size + forgotten timestamp) for every historical
-  reference, and reads of forgotten content surface `OBJECT_UNAVAILABLE`.
+  `engine.storage.gc` remove bytes and mark the `objects` row with
+  `forgotten_at`. When a remote `ContentStore` is configured, deleteObject
+  unpublishes by default (pass `remote: false` to skip) and a remote gc pass
+  covers every forgotten hash; a forgotten hash is never lazily re-fetched
+  from the remote. deleteObject on an already-forgotten object is an
+  idempotent retry that finishes byte removal. Object rows are never
+  deleted — a forgotten row is the tombstone (hash + size + forgotten
+  timestamp) for every historical reference, and reads of forgotten content
+  surface `OBJECT_UNAVAILABLE`.
 - `workspaceDir/<artifact UUID>/` is disposable materialization.
 - Book, artifact, entity, notebook, cell, edge, run, prompt, message, action,
   sequence, track, and clip surrogate identities are UUIDv7 values.
@@ -55,9 +59,14 @@ one stable UUIDv7 row; it does not use a synthetic singleton column.
 - GC is precise about its roots: a hash is referenced at HEAD when a HEAD
   row names it in a first-class `object_hash`/`payload_hash` column
   (`artifact_files`, `artifact_streams`, `pinned_search_results`,
-  `sequence_clips`, `transcripts`) or in a `cell_references` snapshot.
+  `sequence_clips`, `transcripts`) or inside an engine-written JSON column
+  that embeds object hashes (`cell_references.snapshot_json`,
+  `pinned_search_results.location_json`, `caption_cues.source_range_json`).
   Everything else is collectable; historical revisions are not consulted,
   which is why restoring an old revision after GC yields tombstone reads.
+  The reference scan runs inside the serialized write section and stray
+  local files younger than a grace window are left alone, so GC is safe
+  alongside normal engine writes.
 - Sequences are the single timeline model: `sequences`, `sequence_tracks`,
   `sequence_clips`, `clip_links`, `clip_transforms`, `transitions`, and
   `caption_cues`, exposed through `engine.sequences` and `engine.edits`. The
@@ -68,7 +77,12 @@ one stable UUIDv7 row; it does not use a synthetic singleton column.
   `history.restore` mechanically reloads every table in `SEMANTIC_TABLES`
   from its `dolt_at_*` projection at the target revision (deleting in
   reverse, inserting in forward, parent-before-child order), so the restored
-  state is exactly the state that revision recorded.
+  state is exactly the state that revision recorded — with one exception:
+  `objects` merges instead of wiping (rows are never deleted and
+  `forgotten_at` never rewinds, so restore cannot resurrect tombstones).
+  Restore refuses targets recorded under a different schema version, and a
+  restore whose files point at forgotten objects still succeeds — those
+  reads surface `OBJECT_UNAVAILABLE`.
 - Backup publishes referenced CAS objects before pushing the Dolt `main` branch.
 - An open engine never pulls or merges a live catalog; `main` is the only
   live branch. The per-constraint merge policy (same-schema precondition,

@@ -1,4 +1,11 @@
-import { copyFile, mkdir, mkdtemp, rm, stat } from "node:fs/promises";
+import {
+  copyFile,
+  mkdir,
+  mkdtemp,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 
@@ -17,9 +24,7 @@ afterEach(async () => {
 });
 
 function value<T>(
-  result:
-    | { ok: true; value: T }
-    | { ok: false; error: { message: string } },
+  result: { ok: true; value: T } | { ok: false; error: { message: string } },
 ): T {
   if (!result.ok) throw new Error(result.error.message);
   return result.value;
@@ -71,9 +76,7 @@ async function localObjectExists(
   hash: string,
 ): Promise<boolean> {
   try {
-    await stat(
-      path.join(dataDir, "objects", "sha256", hash.slice(0, 2), hash),
-    );
+    await stat(path.join(dataDir, "objects", "sha256", hash.slice(0, 2), hash));
     return true;
   } catch {
     return false;
@@ -91,8 +94,7 @@ function tombstoneRow(
         `SELECT size_bytes, forgotten_at FROM objects WHERE object_hash=?`,
       )
       .get(hash) as
-      | { size_bytes: number; forgotten_at: number | null }
-      | undefined;
+      { size_bytes: number; forgotten_at: number | null } | undefined;
   } finally {
     db.close();
   }
@@ -103,11 +105,7 @@ async function writeOriginal(
   artifactId: string,
   content: string,
 ): Promise<{ hash: string; revision: string }> {
-  const result = await engine.files.write(
-    artifactId,
-    "original.mp4",
-    content,
-  );
+  const result = await engine.files.write(artifactId, "original.mp4", content);
   if (!result.ok) throw new Error(result.error.message);
   const manifest = value(await engine.files.manifest(artifactId));
   const hash = manifest.files[0]?.objectHash;
@@ -138,19 +136,24 @@ describe("forgettable objects", () => {
     expect(await localObjectExists(dataDir, first.hash)).toBe(false);
     expect(await localObjectExists(dataDir, second.hash)).toBe(true);
 
-    // Deleting again reports the tombstone as gone, not a crash.
-    expect(await engine.storage.deleteObject(first.hash)).toMatchObject({
+    // Deleting again is an idempotent retry: it finishes byte removal for
+    // the existing tombstone instead of failing, so an interrupted delete
+    // can always be completed.
+    expect(value(await engine.storage.deleteObject(first.hash))).toMatchObject({
+      hash: first.hash,
+      alreadyForgotten: true,
+      deletedLocal: false,
+    });
+    expect(await engine.storage.deleteObject("0".repeat(64))).toMatchObject({
       ok: false,
       error: { code: "NOT_FOUND" },
     });
-    expect(
-      await engine.storage.deleteObject("0".repeat(64)),
-    ).toMatchObject({ ok: false, error: { code: "NOT_FOUND" } });
 
     // Current content still reads; the old revision is a tombstone read.
     expect(
-      value(await engine.files.read(artifact.artifactId, "original.mp4"))
-        .toString(),
+      value(
+        await engine.files.read(artifact.artifactId, "original.mp4"),
+      ).toString(),
     ).toBe("v2-two");
     expect(
       await engine.files.readAtRevision(
@@ -231,8 +234,9 @@ describe("forgettable objects", () => {
     expect(await localObjectExists(dataDir, orphaned.hash)).toBe(false);
     expect(await localObjectExists(dataDir, current.hash)).toBe(true);
     expect(
-      value(await engine.files.read(keep.artifactId, "original.mp4"))
-        .toString(),
+      value(
+        await engine.files.read(keep.artifactId, "original.mp4"),
+      ).toString(),
     ).toBe("current");
 
     // A second sweep finds nothing: collected rows are tombstones now.
@@ -263,15 +267,13 @@ describe("forgettable objects", () => {
     value(await engine.storage.gc());
 
     // Restoring the pre-GC revision relinks the tombstone: the forward
-    // commit stands, but the bytes are gone and surface OBJECT_UNAVAILABLE.
-    const restored = await engine.history.restoreArtifact(
-      artifact.artifactId,
-      first.revision,
+    // commit stands and the restore reports it — the caller must never be
+    // told a durable restore failed. Reads of the affected file surface
+    // OBJECT_UNAVAILABLE.
+    const restored = value(
+      await engine.history.restoreArtifact(artifact.artifactId, first.revision),
     );
-    expect(restored).toMatchObject({
-      ok: false,
-      error: { code: "OBJECT_UNAVAILABLE" },
-    });
+    expect(restored.hash).toBe(engine.head);
     expect(
       await engine.files.read(artifact.artifactId, "original.mp4"),
     ).toMatchObject({ ok: false, error: { code: "OBJECT_UNAVAILABLE" } });
@@ -307,11 +309,7 @@ describe("forgettable objects", () => {
     const artifact = value(
       await engine.artifacts.create({ kind: "video", slug: "talk" }),
     );
-    const { hash } = await writeOriginal(
-      engine,
-      artifact.artifactId,
-      "media",
-    );
+    const { hash } = await writeOriginal(engine, artifact.artifactId, "media");
     const stream = value(
       await engine.streams.register({
         artifactId: artifact.artifactId,
@@ -371,9 +369,7 @@ describe("forgettable objects", () => {
 
     // Text round-trips through the CAS payload, not the versioned tables.
     expect(transcript.payloadHash).toMatch(/^[a-f0-9]{64}$/);
-    expect(await localObjectExists(dataDir, transcript.payloadHash)).toBe(
-      true,
-    );
+    expect(await localObjectExists(dataDir, transcript.payloadHash)).toBe(true);
     const reread = value(await engine.transcripts.get(transcript.transcriptId));
     expect(reread).toEqual(transcript);
     expect(reread.segments[0]?.text).toBe("Forget this utterance");
@@ -430,7 +426,177 @@ describe("forgettable objects", () => {
     } finally {
       db.close();
     }
-    expect(tombstoneRow(dataDir, transcript.payloadHash)?.forgotten_at)
-      .not.toBeNull();
+    expect(
+      tombstoneRow(dataDir, transcript.payloadHash)?.forgotten_at,
+    ).not.toBeNull();
+  });
+
+  it("book restore preserves tombstones and object rows created later", async () => {
+    const { engine } = await setup("restore-merge");
+    const artifact = value(
+      await engine.artifacts.create({ kind: "video", slug: "chronicle" }),
+    );
+    const first = await writeOriginal(engine, artifact.artifactId, "one");
+    await writeOriginal(engine, artifact.artifactId, "two-2");
+    value(await engine.storage.gc());
+    const third = await writeOriginal(engine, artifact.artifactId, "three-333");
+
+    // Restoring to a pre-GC revision must not resurrect the tombstone and
+    // must not delete object rows created after the target revision.
+    const restored = value(await engine.history.restore(first.revision));
+    expect(restored.hash).toBe(engine.head);
+
+    // The restored file names the forgotten object: tombstone read.
+    expect(
+      await engine.files.read(artifact.artifactId, "original.mp4"),
+    ).toMatchObject({ ok: false, error: { code: "OBJECT_UNAVAILABLE" } });
+    // The tombstone survived the restore (a retry delete reports it).
+    expect(value(await engine.storage.deleteObject(first.hash))).toMatchObject({
+      alreadyForgotten: true,
+    });
+    // The post-target object row survived: rolling forward again works and
+    // its bytes are intact.
+    value(
+      await engine.history.restoreArtifact(artifact.artifactId, third.revision),
+    );
+    expect(
+      value(
+        await engine.files.read(artifact.artifactId, "original.mp4"),
+      ).toString(),
+    ).toBe("three-333");
+    engine.close();
+  });
+
+  it("never resurrects forgotten bytes from the remote store", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "videobook-takedown-"));
+    roots.push(root);
+    const remoteRoot = path.join(root, "remote");
+    const remote = fileContentStore(remoteRoot);
+    const dataDir = path.join(root, "data");
+    const engine = createEngine({
+      dataDir,
+      workspaceDir: path.join(root, "workspace"),
+      initialBookSlug: "takedown",
+      remoteObjects: remote,
+      objectPrefix: "media",
+    });
+    const artifact = value(
+      await engine.artifacts.create({ kind: "video", slug: "leak" }),
+    );
+    const { hash } = await writeOriginal(
+      engine,
+      artifact.artifactId,
+      "secrets",
+    );
+    value(await engine.storage.backup());
+    const remotePath = path.join(remoteRoot, "media", hash.slice(0, 2), hash);
+    await expect(stat(remotePath)).resolves.toBeDefined();
+
+    // The takedown deletes the remote copy by default and the forgotten
+    // check stops the read path from lazily re-downloading anything.
+    const deleted = value(
+      await engine.storage.deleteObject(hash, { force: true }),
+    );
+    expect(deleted).toMatchObject({ deletedLocal: true, deletedRemote: true });
+    await expect(stat(remotePath)).rejects.toThrow();
+    expect(
+      await engine.files.read(artifact.artifactId, "original.mp4"),
+    ).toMatchObject({ ok: false, error: { code: "OBJECT_UNAVAILABLE" } });
+    expect(await localObjectExists(dataDir, hash)).toBe(false);
+    engine.close();
+  });
+
+  it("sweeps stray bytes only after the grace window", async () => {
+    const { engine, dataDir } = await setup("stray");
+    const strayHash = "ab" + "0".repeat(62);
+    const strayPath = path.join(
+      dataDir,
+      "objects",
+      "sha256",
+      strayHash.slice(0, 2),
+      strayHash,
+    );
+    await mkdir(path.dirname(strayPath), { recursive: true });
+    await writeFile(strayPath, "in-flight import bytes");
+
+    // A fresh stray (an import that has not committed its row yet) survives
+    // the default grace window; an aged one is swept.
+    value(await engine.storage.gc());
+    await expect(stat(strayPath)).resolves.toBeDefined();
+    value(await engine.storage.gc({ strayGraceMs: 0 }));
+    await expect(stat(strayPath)).rejects.toThrow();
+    engine.close();
+  });
+
+  it("lists transcripts even when one payload is forgotten", async () => {
+    const { engine } = await setup("degraded-list");
+    const artifact = value(
+      await engine.artifacts.create({ kind: "video", slug: "panel" }),
+    );
+    const { hash } = await writeOriginal(engine, artifact.artifactId, "media");
+    const stream = value(
+      await engine.streams.register({
+        artifactId: artifact.artifactId,
+        sourcePath: "original.mp4",
+        objectHash: hash,
+        streamIndex: 0,
+        kind: "audio",
+        timeBase: { numerator: 1, denominator: 1_000 },
+        durationTicks: 12_000,
+        codec: "aac",
+        audio: { sampleRateHz: 48_000, channels: 2, channelLayout: "stereo" },
+      }),
+    );
+    const transcript = value(
+      await engine.transcripts.import({
+        artifactId: artifact.artifactId,
+        streamId: stream.streamId,
+        objectHash: hash,
+        language: "en",
+        segments: [
+          {
+            ordinal: 0,
+            range: {
+              streamId: stream.streamId,
+              objectHash: hash,
+              startTick: 0,
+              durationTicks: 2_000,
+              timeBase: stream.timeBase,
+            },
+            speaker: "A",
+            text: "Hello there",
+            kind: "speech",
+            words: [
+              {
+                ordinal: 0,
+                startTick: 0,
+                durationTicks: 1_000,
+                text: "Hello",
+                corrected: false,
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    value(
+      await engine.storage.deleteObject(transcript.payloadHash, {
+        force: true,
+      }),
+    );
+    // The listing degrades the affected transcript to structure-only
+    // instead of failing wholesale; a direct get still surfaces the error.
+    const listed = value(await engine.transcripts.list());
+    expect(listed).toHaveLength(1);
+    expect(listed[0]).toMatchObject({
+      transcriptId: transcript.transcriptId,
+      payloadAvailable: false,
+    });
+    expect(listed[0]?.segments[0]?.text).toBe("");
+    expect(listed[0]?.segments[0]?.words[0]?.text).toBe("");
+    expect(await engine.transcripts.get(transcript.transcriptId)).toMatchObject(
+      { ok: false, error: { code: "OBJECT_UNAVAILABLE" } },
+    );
+    engine.close();
   });
 });

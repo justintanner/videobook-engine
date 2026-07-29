@@ -52,8 +52,7 @@ export interface EngineError {
 }
 
 export type Result<T, E = EngineError> =
-  | { ok: true; value: T; revision?: string }
-  | { ok: false; error: E };
+  { ok: true; value: T; revision?: string } | { ok: false; error: E };
 
 export function ok<T>(value: T, revision?: string): Result<T, never> {
   return revision === undefined
@@ -94,9 +93,7 @@ export interface EngineIdentity {
 }
 
 export type SemanticCommitBoundary =
-  | "before-sql-commit"
-  | "after-sql-commit"
-  | "after-dolt-commit";
+  "before-sql-commit" | "after-sql-commit" | "after-dolt-commit";
 
 interface EngineConfigBase {
   /** Required only when initializing an empty engine root. */
@@ -270,9 +267,7 @@ export type SimilarityTextQueryOptions = Omit<
 >;
 
 export interface SimilarityApi {
-  prepare(
-    options?: SimilarityPrepareOptions,
-  ): Promise<
+  prepare(options?: SimilarityPrepareOptions): Promise<
     Result<
       {
         embeddingSpace: string;
@@ -285,9 +280,10 @@ export interface SimilarityApi {
     artifact: string,
     options?: SimilarityIndexOptions,
   ): Promise<Result<SimilarityIndexResult, EngineError>>;
-  rebuild(
-    options?: { kind?: SimilarityKind; force?: boolean },
-  ): Promise<Result<SimilarityIndexResult[], EngineError>>;
+  rebuild(options?: {
+    kind?: SimilarityKind;
+    force?: boolean;
+  }): Promise<Result<SimilarityIndexResult[], EngineError>>;
   status(artifact: string): Result<SimilarityStatus, EngineError>;
   stats(): Result<SimilarityStats, EngineError>;
   findSimilar(
@@ -347,15 +343,10 @@ export interface ArtifactManifest {
   directories?: Record<string, string[]>;
 }
 
-export interface RevisionFileChange {
-  status: string;
-  file: string;
-  oldFile?: string;
-}
-
 export interface Revision {
   hash: string;
   message: string;
+  /** Commit time as an ISO-8601 UTC timestamp. */
   date: string;
   author?: string;
   operationId?: string;
@@ -363,8 +354,6 @@ export interface Revision {
   artifactId?: string;
   artifactSlug?: string;
   details?: Record<string, unknown>;
-  files?: string[];
-  fileChanges?: RevisionFileChange[];
 }
 
 export interface OperationInput {
@@ -374,6 +363,12 @@ export interface OperationInput {
   author?: string;
   baseRevision?: string;
   writeSet?: string[];
+  /**
+   * Mint a commit even when the mutation changed no semantic rows.
+   * Provenance-only operations (history.recordOperation, history.logAction)
+   * use this so the commit itself is their record.
+   */
+  allowEmpty?: boolean;
 }
 
 export interface LockData {
@@ -421,11 +416,7 @@ export interface ListPromptHistoryArgs {
 }
 
 export type BackupState =
-  | "unconfigured"
-  | "pending"
-  | "backed_up"
-  | "offline"
-  | "diverged";
+  "unconfigured" | "pending" | "backed_up" | "offline" | "diverged";
 
 export interface StorageStatus {
   state: BackupState;
@@ -451,7 +442,12 @@ export interface DeleteObjectOptions {
    * and later reads surface OBJECT_UNAVAILABLE.
    */
   force?: boolean;
-  /** Also unpublish the object from the configured remote content store. */
+  /**
+   * Unpublish the object from the configured remote content store. Defaults
+   * to true whenever a remote is configured — a forget that leaves remote
+   * bytes readable is not a forget. Pass false to skip the remote
+   * explicitly.
+   */
   remote?: boolean;
 }
 
@@ -462,13 +458,32 @@ export interface DeleteObjectResult {
   deletedRemote: boolean;
   /** HEAD references that were forcibly cut; empty for a clean delete. */
   severedReferences: ObjectReference[];
+  /**
+   * True when the object was already forgotten and this call only retried
+   * byte removal (local and remote). Retries are idempotent: deleteObject
+   * on a forgotten object finishes an interrupted delete instead of
+   * failing NOT_FOUND.
+   */
+  alreadyForgotten: boolean;
 }
 
 export interface CollectGarbageOptions {
   /** Report what would be collected without deleting anything. */
   dryRun?: boolean;
-  /** Also unpublish collected objects from the configured remote store. */
+  /**
+   * Also unpublish from the configured remote store. The remote pass covers
+   * every forgotten object — not just the ones with local bytes or a
+   * runtime publication row — so an interrupted deleteObject or a lost
+   * runtime table cannot leave remote bytes readable forever.
+   */
   remote?: boolean;
+  /**
+   * Minimum age in milliseconds before a stray local file (bytes with no
+   * objects row) is swept. Guards against sweeping an import that has
+   * written its bytes but not yet committed its objects row. Default
+   * 600000 (10 minutes).
+   */
+  strayGraceMs?: number;
   /**
    * Run Dolt's `dolt_gc()` afterwards to physically reclaim chunks left by
    * dropped table data in the versioned catalog.
@@ -492,12 +507,7 @@ export interface CollectGarbageResult {
 }
 
 export type JobState =
-  | "queued"
-  | "running"
-  | "completing"
-  | "done"
-  | "failed"
-  | "aborted";
+  "queued" | "running" | "completing" | "done" | "failed" | "aborted";
 
 export interface JobError {
   message: string;

@@ -253,6 +253,7 @@ const transcript: Transcript = {
   streamId: audioRange.streamId,
   objectHash: audioRange.objectHash,
   payloadHash: "sha256:transcript-payload",
+  payloadAvailable: true,
   language: "en",
   provider: "fixture",
   model: "fixture-word-timing-v1",
@@ -371,7 +372,9 @@ const editIntent: EditIntent = {
   actor: "fixture-user",
   sourceSurface: "slash",
   confirmationPolicy: "risk-based",
-  operations: MVP_EDIT_OPERATION_FIXTURES.map((operation) => ({ ...operation })),
+  operations: MVP_EDIT_OPERATION_FIXTURES.map((operation) => ({
+    ...operation,
+  })),
 };
 
 const editPreview: EditPreview = {
@@ -400,7 +403,8 @@ const editPreview: EditPreview = {
   warnings: [
     {
       code: "AUDIO_PITCH_CHANGE",
-      message: "Two-times speed may alter pitch when preserve-pitch is unavailable.",
+      message:
+        "Two-times speed may alter pitch when preserve-pitch is unavailable.",
       operationId: "operation-09",
     },
   ],
@@ -603,7 +607,9 @@ export const MVP_CONTRACT_FIXTURES: MvpContractFixtures = {
   stream,
   transcript,
   sequence,
-  editOperations: MVP_EDIT_OPERATION_FIXTURES.map((operation) => ({ ...operation })),
+  editOperations: MVP_EDIT_OPERATION_FIXTURES.map((operation) => ({
+    ...operation,
+  })),
   editIntent,
   editPreview,
   editCommit,

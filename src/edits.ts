@@ -37,6 +37,7 @@ import { createSequencesApi } from "./sequences.js";
 import { newUuidV7 } from "./ids.js";
 import {
   canonicalJson,
+  commitDateMs,
   type CommitOperation,
   EngineFault,
   parseCommitMessage,
@@ -77,7 +78,9 @@ export function createEditsApi(context: EngineContext) {
 
 function project(context: EngineContext, intent: EditIntent): Projection {
   validateIntent(intent);
-  const current = sequenceValue(createSequencesApi(context).get(intent.sequenceId));
+  const current = sequenceValue(
+    createSequencesApi(context).get(intent.sequenceId),
+  );
   const normalized = intent.operations.map((operation, ordinal) =>
     normalizeOperation(intent.commandId, ordinal, operation),
   );
@@ -199,7 +202,9 @@ async function restoreEdit(
         target.revision,
       ),
     );
-    const current = sequenceValue(createSequencesApi(context).get(target.sequenceId));
+    const current = sequenceValue(
+      createSequencesApi(context).get(target.sequenceId),
+    );
     if (request.baseRevision !== context.store.head) {
       throw new EngineFault({
         code: "STALE_REVISION",
@@ -213,7 +218,9 @@ async function restoreEdit(
     validateSequenceProjection(context, source);
     const actionId = newUuidV7();
     const writeSet = restoreWriteSet(current, source);
-    const artifactIds = unique(source.clips.map((clip) => clip.source.artifactId));
+    const artifactIds = unique(
+      source.clips.map((clip) => clip.source.artifactId),
+    );
     const mutation = await context.store.semantic(
       {
         operation: "restore_edit",
@@ -281,7 +288,9 @@ function validateIntent(intent: EditIntent): void {
       intent.confirmationPolicy,
     )
   ) {
-    throw new Error(`Invalid confirmation policy: ${intent.confirmationPolicy}`);
+    throw new Error(
+      `Invalid confirmation policy: ${intent.confirmationPolicy}`,
+    );
   }
   if (intent.operations.length === 0) {
     throw new Error("Edit intent must contain at least one operation");
@@ -318,9 +327,11 @@ function normalizeOperation(
     operation = {
       ...input,
       leftClipId:
-        input.leftClipId ?? deterministicUuid(commandId, `split-left:${ordinal}`),
+        input.leftClipId ??
+        deterministicUuid(commandId, `split-left:${ordinal}`),
       rightClipId:
-        input.rightClipId ?? deterministicUuid(commandId, `split-right:${ordinal}`),
+        input.rightClipId ??
+        deterministicUuid(commandId, `split-right:${ordinal}`),
     };
   } else if (input.kind === "restore-clip") {
     operation = { ...input, placement: normalizePlacement(input.placement) };
@@ -368,7 +379,12 @@ function applyOperation(
       applyInsert(context, sequence, operation, normalized.operationId);
       return;
     case "remove-range":
-      applyRemoveRange(sequence, operation.trackIds, operation.range, operation.ripple);
+      applyRemoveRange(
+        sequence,
+        operation.trackIds,
+        operation.range,
+        operation.ripple,
+      );
       return;
     case "move-clip":
       applyMove(sequence, operation);
@@ -383,8 +399,9 @@ function applyOperation(
       applyRestore(context, sequence, operation, normalized.operationId);
       return;
     case "set-clip-transform":
-      requiredClip(sequence, operation.clipId).transform =
-        validateTransform(operation.transform);
+      requiredClip(sequence, operation.clipId).transform = validateTransform(
+        operation.transform,
+      );
       return;
     case "set-clip-audio":
       applyClipAudio(sequence, operation.clipId, operation.audio);
@@ -533,7 +550,10 @@ function applyTrim(
     validateTimedSource(context, clip.source.artifactId, operation.sourceRange);
     clip.source.range = operation.sourceRange;
   } else if (clip.source.kind === "timed") {
-    clip.source.range = resizeTimedRange(clip.source.range, operation.durationFrames);
+    clip.source.range = resizeTimedRange(
+      clip.source.range,
+      operation.durationFrames,
+    );
   }
   assertNoForbiddenOverlap(sequence, clip);
 }
@@ -547,8 +567,8 @@ function applySplit(
   const clip = requiredClip(sequence, operation.clipId);
   mutableTrack(sequence, clip.trackId);
   if (
-    operation.splitFrame <= clip.timelineStartFrame
-    || operation.splitFrame >= clipEnd(clip)
+    operation.splitFrame <= clip.timelineStartFrame ||
+    operation.splitFrame >= clipEnd(clip)
   ) {
     throw new EngineFault({
       code: "INVALID_RANGE",
@@ -556,10 +576,16 @@ function applySplit(
     });
   }
   const leftId = operation.leftClipId ?? deterministicUuid(operationId, "left");
-  const rightId = operation.rightClipId ?? deterministicUuid(operationId, "right");
-  if (leftId === rightId || sequence.clips.some((item) =>
-    item.clipId !== clip.clipId && (item.clipId === leftId || item.clipId === rightId)
-  )) {
+  const rightId =
+    operation.rightClipId ?? deterministicUuid(operationId, "right");
+  if (
+    leftId === rightId ||
+    sequence.clips.some(
+      (item) =>
+        item.clipId !== clip.clipId &&
+        (item.clipId === leftId || item.clipId === rightId),
+    )
+  ) {
     throw new EngineFault({
       code: "ALREADY_EXISTS",
       message: "Split clip IDs must be unique",
@@ -567,7 +593,11 @@ function applySplit(
   }
   const leftFrames = operation.splitFrame - clip.timelineStartFrame;
   const rightFrames = clip.durationFrames - leftFrames;
-  const left = { ...structuredClone(clip), clipId: leftId, durationFrames: leftFrames };
+  const left = {
+    ...structuredClone(clip),
+    clipId: leftId,
+    durationFrames: leftFrames,
+  };
   const right = {
     ...structuredClone(clip),
     clipId: rightId,
@@ -578,10 +608,23 @@ function applySplit(
     const exactTicks =
       (clip.source.range.durationTicks * leftFrames) / clip.durationFrames;
     const leftTicks = Math.floor(exactTicks);
+    // On a source whose tick resolution is coarser than the sequence frame
+    // rate (for example a 1/25 time base in a 30 fps sequence), a split
+    // near the clip edge can floor to an empty slice. Refuse with a typed
+    // error instead of failing later in projection validation.
+    if (leftTicks === 0 || clip.source.range.durationTicks - leftTicks === 0) {
+      throw new EngineFault({
+        code: "INVALID_RANGE",
+        message:
+          "Split frame produces an empty source slice at this clip's tick " +
+          "resolution; move the split point further from the clip edge",
+      });
+    }
     if (!Number.isInteger(exactTicks)) {
       warnings.push({
         code: "ROUNDING_APPLIED",
-        message: "Split source tick was rounded while preserving total coverage",
+        message:
+          "Split source tick was rounded while preserving total coverage",
         operationId,
       });
     }
@@ -673,8 +716,8 @@ function applySpeed(
   timed.reverse = operation.reverse;
   timed.audioPolicy = operation.audioPolicy;
   if (
-    operation.audioPolicy === "preserve-pitch"
-    && !rationalEquals(timed.speed, { numerator: 1, denominator: 1 })
+    operation.audioPolicy === "preserve-pitch" &&
+    !rationalEquals(timed.speed, { numerator: 1, denominator: 1 })
   ) {
     warnings.push({
       code: "AUDIO_PITCH_CHANGE",
@@ -699,15 +742,15 @@ function applyTransition(
   }
   sequence.transitions = sequence.transitions.filter(
     (transition) =>
-      transition.outgoingClipId !== outgoing.clipId
-      || transition.incomingClipId !== incoming.clipId,
+      transition.outgoingClipId !== outgoing.clipId ||
+      transition.incomingClipId !== incoming.clipId,
   );
   if (operation.transition === null) return;
   const transition = structuredClone(operation.transition);
   if (
-    transition.trackId !== track.trackId
-    || transition.outgoingClipId !== outgoing.clipId
-    || transition.incomingClipId !== incoming.clipId
+    transition.trackId !== track.trackId ||
+    transition.outgoingClipId !== outgoing.clipId ||
+    transition.incomingClipId !== incoming.clipId
   ) {
     throw new EngineFault({
       code: "INVALID_INPUT",
@@ -716,9 +759,9 @@ function applyTransition(
   }
   safeIntegerAtLeast(transition.durationFrames, 1, "Transition duration");
   if (
-    transition.durationFrames > outgoing.durationFrames
-    || transition.durationFrames > incoming.durationFrames
-    || clipEnd(outgoing) !== clipStart(incoming)
+    transition.durationFrames > outgoing.durationFrames ||
+    transition.durationFrames > incoming.durationFrames ||
+    clipEnd(outgoing) !== clipStart(incoming)
   ) {
     throw new EngineFault({
       code: "INVALID_RANGE",
@@ -756,7 +799,9 @@ function applyCaption(
     }
     normalizeSourceRange(cue.transcriptSelection.range);
   }
-  sequence.captions = sequence.captions.filter((item) => item.cueId !== cue.cueId);
+  sequence.captions = sequence.captions.filter(
+    (item) => item.cueId !== cue.cueId,
+  );
   sequence.captions.push(structuredClone(cue));
 }
 
@@ -766,7 +811,12 @@ function applyBatchReplace(
   operation: Extract<EditOperation, { kind: "batch-replace-range" }>,
   operationId: string,
 ): void {
-  applyRemoveRange(sequence, operation.trackIds, operation.range, operation.ripple);
+  applyRemoveRange(
+    sequence,
+    operation.trackIds,
+    operation.range,
+    operation.ripple,
+  );
   operation.placements.forEach((placement, index) => {
     applyInsert(
       context,
@@ -869,9 +919,9 @@ function validateTimedSource(
     });
   }
   if (
-    row.artifact_id !== artifactId
-    || row.object_hash !== range.objectHash
-    || !rationalEquals(range.timeBase, {
+    row.artifact_id !== artifactId ||
+    row.object_hash !== range.objectHash ||
+    !rationalEquals(range.timeBase, {
       numerator: row.time_base_numerator,
       denominator: row.time_base_denominator,
     })
@@ -921,7 +971,9 @@ function validateTransform(transform: ClipTransform): ClipTransform {
     transform.opacity,
   ]) {
     if (crop < 0 || crop > 1) {
-      throw new Error("Clip crop and opacity values must be between zero and one");
+      throw new Error(
+        "Clip crop and opacity values must be between zero and one",
+      );
     }
   }
   return structuredClone(transform);
@@ -954,8 +1006,8 @@ function validateSequenceProjection(
     const outgoing = requiredClip(sequence, transition.outgoingClipId);
     const incoming = requiredClip(sequence, transition.incomingClipId);
     if (
-      outgoing.trackId !== transition.trackId
-      || incoming.trackId !== transition.trackId
+      outgoing.trackId !== transition.trackId ||
+      incoming.trackId !== transition.trackId
     ) {
       throw new EngineFault({
         code: "INVALID_INPUT",
@@ -974,13 +1026,16 @@ function validateSequenceProjection(
   }
 }
 
-function assertNoForbiddenOverlap(sequence: Sequence, candidate: SequenceClip): void {
+function assertNoForbiddenOverlap(
+  sequence: Sequence,
+  candidate: SequenceClip,
+): void {
   const track = requiredTrack(sequence, candidate.trackId);
   if (track.kind === "audio") return;
   const overlap = clipsOnTrack(sequence, candidate.trackId).find(
     (clip) =>
-      clip.clipId !== candidate.clipId
-      && rangesOverlap(
+      clip.clipId !== candidate.clipId &&
+      rangesOverlap(
         clipStart(candidate),
         clipEnd(candidate),
         clipStart(clip),
@@ -1005,7 +1060,9 @@ function clipFromPlacement(
     timelineStartFrame: placement.timelineStartFrame,
     durationFrames: placement.durationFrames,
     enabled: true,
-    ...(placement.transform ? { transform: structuredClone(placement.transform) } : {}),
+    ...(placement.transform
+      ? { transform: structuredClone(placement.transform) }
+      : {}),
     ...(placement.audio ? { audio: structuredClone(placement.audio) } : {}),
   };
   if (placement.source.kind === "still") {
@@ -1021,9 +1078,8 @@ function clipFromPlacement(
 }
 
 function placementFromClip(clip: SequenceClip): ClipPlacement {
-  const timed = clip.source.kind === "timed"
-    ? (clip as TimedSequenceClip)
-    : undefined;
+  const timed =
+    clip.source.kind === "timed" ? (clip as TimedSequenceClip) : undefined;
   return {
     trackId: clip.trackId,
     timelineStartFrame: clip.timelineStartFrame,
@@ -1060,8 +1116,8 @@ function sliceClip(
       (clip.source.range.durationTicks * offset) / clip.durationFrames,
     );
     const endTicks = Math.floor(
-      (clip.source.range.durationTicks * (offset + durationFrames))
-      / clip.durationFrames,
+      (clip.source.range.durationTicks * (offset + durationFrames)) /
+        clip.durationFrames,
     );
     sliced.source = {
       ...clip.source,
@@ -1075,7 +1131,10 @@ function sliceClip(
   return sliced;
 }
 
-function resizeTimedRange(range: SourceRange, durationFrames: number): SourceRange {
+function resizeTimedRange(
+  range: SourceRange,
+  durationFrames: number,
+): SourceRange {
   safeIntegerAtLeast(durationFrames, 1, "Trim duration");
   return {
     ...range,
@@ -1087,7 +1146,8 @@ function removeClip(sequence: Sequence, clipId: string): void {
   sequence.clips = sequence.clips.filter((clip) => clip.clipId !== clipId);
   sequence.transitions = sequence.transitions.filter(
     (transition) =>
-      transition.outgoingClipId !== clipId && transition.incomingClipId !== clipId,
+      transition.outgoingClipId !== clipId &&
+      transition.incomingClipId !== clipId,
   );
 }
 
@@ -1183,9 +1243,7 @@ function persistSequenceProjection(
   const clipIds = sequence.clips.map((clip) => clip.clipId);
   if (clipIds.length === 0) {
     context.store.db
-      .prepare(
-        `DELETE FROM sequence_clips WHERE track_id IN (${placeholders})`,
-      )
+      .prepare(`DELETE FROM sequence_clips WHERE track_id IN (${placeholders})`)
       .run(...trackIds);
   } else {
     const clipPlaceholders = clipIds.map(() => "?").join(",");
@@ -1291,9 +1349,8 @@ function upsertClips(context: EngineContext, clips: SequenceClip[]): void {
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   for (const clip of clips) {
-    const timed = clip.source.kind === "timed"
-      ? (clip as TimedSequenceClip)
-      : undefined;
+    const timed =
+      clip.source.kind === "timed" ? (clip as TimedSequenceClip) : undefined;
     upsertClip.run(
       clip.clipId,
       clip.trackId,
@@ -1438,8 +1495,8 @@ function revisionConflicts(
   const commits = context.store.db.doltLog();
   const baseIndex = commits.findIndex(
     (commit) =>
-      commit.commit_hash === intent.baseRevision
-      || commit.commit_hash.startsWith(intent.baseRevision),
+      commit.commit_hash === intent.baseRevision ||
+      commit.commit_hash.startsWith(intent.baseRevision),
   );
   if (baseIndex < 0) {
     return [
@@ -1519,8 +1576,8 @@ function findEditBatchCommit(
 ): ProvenanceCommit | undefined {
   return editCommits(context).find(
     (commit) =>
-      commit.parsed.operation === "commit_edit"
-      && commit.parsed.details.actionId === actionId,
+      commit.parsed.operation === "commit_edit" &&
+      commit.parsed.details.actionId === actionId,
   );
 }
 
@@ -1593,12 +1650,6 @@ function requiredEditBatch(
   };
 }
 
-// doltlite reports commit dates as "YYYY-MM-DD HH:MM:SS" in UTC.
-function commitDateMs(date: string): number {
-  const parsed = Date.parse(`${date.replace(" ", "T")}Z`);
-  return Number.isNaN(parsed) ? 0 : parsed;
-}
-
 function editWriteSet(
   sequenceId: string,
   operations: NormalizedEditOperation[],
@@ -1659,8 +1710,8 @@ function affectedSequenceRanges(
         durationFrames: operation.placement.durationFrames,
       });
     } else if (
-      operation.kind === "remove-range"
-      || operation.kind === "batch-replace-range"
+      operation.kind === "remove-range" ||
+      operation.kind === "batch-replace-range"
     ) {
       ranges.push(operation.range);
     } else if (operation.kind === "move-clip") {
@@ -1709,8 +1760,9 @@ function sequenceDiff(before: Sequence, after: Sequence): SequenceDiff {
   const changedClipIds = [...afterClips.keys()]
     .filter(
       (id) =>
-        beforeClips.has(id)
-        && canonicalJson(beforeClips.get(id)) !== canonicalJson(afterClips.get(id)),
+        beforeClips.has(id) &&
+        canonicalJson(beforeClips.get(id)) !==
+          canonicalJson(afterClips.get(id)),
     )
     .sort();
   const beforeCaptions = new Map(
@@ -1719,20 +1771,18 @@ function sequenceDiff(before: Sequence, after: Sequence): SequenceDiff {
   const changedCaptionCueIds = after.captions
     .filter(
       (caption) =>
-        canonicalJson(beforeCaptions.get(caption.cueId))
-        !== canonicalJson(caption),
+        canonicalJson(beforeCaptions.get(caption.cueId)) !==
+        canonicalJson(caption),
     )
     .map((caption) => caption.cueId)
     .sort();
   const changedTrackIds = unique(
-    [
-      ...insertedClipIds,
-      ...removedClipIds,
-      ...changedClipIds,
-    ].flatMap((clipId) => {
-      const clip = afterClips.get(clipId) ?? beforeClips.get(clipId);
-      return clip ? [clip.trackId] : [];
-    }),
+    [...insertedClipIds, ...removedClipIds, ...changedClipIds].flatMap(
+      (clipId) => {
+        const clip = afterClips.get(clipId) ?? beforeClips.get(clipId);
+        return clip ? [clip.trackId] : [];
+      },
+    ),
   ).sort();
   return {
     insertedClipIds,
@@ -1789,9 +1839,7 @@ function cloneSequence(sequence: Sequence): Sequence {
   return structuredClone(sequence);
 }
 
-function sequenceValue(
-  result: Result<Sequence, EngineError>,
-): Sequence {
+function sequenceValue(result: Result<Sequence, EngineError>): Sequence {
   if (!result.ok) throw new EngineFault(result.error);
   return result.value;
 }
@@ -1802,7 +1850,11 @@ function requiredText(value: string, label: string): string {
   return normalized;
 }
 
-function safeIntegerAtLeast(value: number, minimum: number, label: string): void {
+function safeIntegerAtLeast(
+  value: number,
+  minimum: number,
+  label: string,
+): void {
   if (!Number.isSafeInteger(value) || value < minimum) {
     throw new Error(`${label} must be a safe integer of at least ${minimum}`);
   }

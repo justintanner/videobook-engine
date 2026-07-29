@@ -7,17 +7,14 @@ import type {
   Revision,
 } from "./engine-types.js";
 import { ok } from "./engine-types.js";
-import {
-  EngineContext,
-  resultOf,
-  type ArtifactRow,
-} from "./context.js";
+import { EngineContext, resultOf, type ArtifactRow } from "./context.js";
 import { artifactSlug } from "./artifacts.js";
 import { materializeArtifact } from "./files.js";
 import { assertUuidV7, isUuidV7, newUuidV7 } from "./ids.js";
-import { SEMANTIC_TABLES } from "./schema.js";
+import { SCHEMA_VERSION, SEMANTIC_TABLES } from "./schema.js";
 import {
   canonicalJson,
+  commitDateIso,
   type CommitOperation,
   EngineFault,
   parseCommitMessage,
@@ -53,8 +50,7 @@ interface ActiveRuntimeJobRow {
 
 export function createHistoryApi(context: EngineContext) {
   return {
-    revisions: (limit = 20): Revision[] =>
-      revisionHistory(context, limit),
+    revisions: (limit = 20): Revision[] => revisionHistory(context, limit),
     artifact: (artifact: string, limit = 20): Revision[] =>
       artifactHistory(context, artifact, limit),
     resolveRevision: (revision: string): Revision | null =>
@@ -78,9 +74,10 @@ export function createHistoryApi(context: EngineContext) {
       payload: string | Record<string, unknown>,
     ): Promise<Result<ActionLogEntry, EngineError>> =>
       logAction(context, action, payload),
-    actionLog: (
-      options?: { limit?: number; action?: string },
-    ): ActionLogEntry[] => actionLog(context, options),
+    actionLog: (options?: {
+      limit?: number;
+      action?: string;
+    }): ActionLogEntry[] => actionLog(context, options),
   };
 }
 
@@ -94,10 +91,12 @@ function revisionForHash(context: EngineContext, hash: string): Revision {
       message: `Revision not found: ${hash}`,
     });
   }
+  const parsed = parseCommitMessage(commit.message);
+  if (parsed) return revisionFromCommit(context, commit, parsed);
   return {
     hash,
     message: commit.message,
-    date: commit.date,
+    date: commitDateIso(commit.date),
     author: commit.committer,
   };
 }
@@ -149,7 +148,12 @@ function commitRevisions(context: EngineContext): Revision[] {
 
 function revisionFromCommit(
   context: EngineContext,
-  commit: { commit_hash: string; message: string; date: string; committer: string },
+  commit: {
+    commit_hash: string;
+    message: string;
+    date: string;
+    committer: string;
+  },
   parsed: CommitOperation,
 ): Revision {
   const artifactSlugAtRevision = parsed.artifactId
@@ -158,14 +162,12 @@ function revisionFromCommit(
   return {
     hash: commit.commit_hash,
     message: commit.message,
-    date: commit.date,
+    date: commitDateIso(commit.date),
     author: parsed.actor ?? commit.committer,
     operationId: parsed.operationId,
     operation: parsed.operation,
     ...(parsed.artifactId ? { artifactId: parsed.artifactId } : {}),
-    ...(artifactSlugAtRevision
-      ? { artifactSlug: artifactSlugAtRevision }
-      : {}),
+    ...(artifactSlugAtRevision ? { artifactSlug: artifactSlugAtRevision } : {}),
     details: {
       ...parsed.details,
       ...(parsed.writeSet.length > 0 ? { writeSet: parsed.writeSet } : {}),
@@ -183,24 +185,24 @@ function resolveRevision(
       revision.hash === reference || revision.hash.startsWith(reference),
   );
   if (historical) return historical;
-  const commit = context.store.db.doltLog().find(
-    (item) =>
-      item.commit_hash === reference || item.commit_hash.startsWith(reference),
-  );
+  const commit = context.store.db
+    .doltLog()
+    .find(
+      (item) =>
+        item.commit_hash === reference ||
+        item.commit_hash.startsWith(reference),
+    );
   return commit
     ? {
         hash: commit.commit_hash,
         message: commit.message,
-        date: commit.date,
+        date: commitDateIso(commit.date),
         author: commit.committer,
       }
     : null;
 }
 
-function requiredRevision(
-  context: EngineContext,
-  reference: string,
-): Revision {
+function requiredRevision(context: EngineContext, reference: string): Revision {
   const revision = resolveRevision(context, reference);
   if (!revision) {
     throw new EngineFault({
@@ -229,9 +231,10 @@ async function recordOperation(
           ...(details ?? {}),
           ...(artifact ? { artifactSlug: artifact.slug } : {}),
         },
-        writeSet: artifact
-          ? [`artifact:${artifact.artifact_id}`]
-          : ["book"],
+        writeSet: artifact ? [`artifact:${artifact.artifact_id}`] : ["book"],
+        // Provenance-only operations change no semantic rows; the commit
+        // itself is their record, so it must be minted even when empty.
+        allowEmpty: true,
       },
       () => undefined,
     );
@@ -255,8 +258,7 @@ async function restoreArtifact(
          WHERE artifact_id=?`,
       )
       .get(revision.hash, artifactId) as unknown as
-      | HistoricalArtifactRow
-      | undefined;
+      HistoricalArtifactRow | undefined;
     if (!target) {
       throw new EngineFault({
         code: "NOT_FOUND",
@@ -272,8 +274,7 @@ async function restoreArtifact(
          WHERE slug=? AND artifact_id<>?`,
       )
       .get(desiredSlug, artifactId) as unknown as
-      | { artifact_id: string }
-      | undefined;
+      { artifact_id: string } | undefined;
     if (owner) {
       throw new EngineFault({
         code: "SLUG_CONFLICT",
@@ -294,17 +295,13 @@ async function restoreArtifact(
          FROM dolt_at_audio_waveforms(?) WHERE artifact_id=?`,
       )
       .get(revision.hash, artifactId) as unknown as
-      | WaveformSnapshotRow
-      | undefined;
+      WaveformSnapshotRow | undefined;
     const mutation = await context.store.semantic(
       {
         operation: "restore_artifact",
         artifactId,
         details: { fromRevision: revision.hash, slug: desiredSlug },
-        writeSet: [
-          `artifact:${artifactId}`,
-          `artifact-slug:${desiredSlug}`,
-        ],
+        writeSet: [`artifact:${artifactId}`, `artifact-slug:${desiredSlug}`],
       },
       (_operationId, now) => {
         context.store.db
@@ -316,12 +313,7 @@ async function restoreArtifact(
               slug=excluded.slug,
               kind=excluded.kind`,
           )
-          .run(
-            target.artifact_id,
-            desiredSlug,
-            target.kind,
-            target.created_at,
-          );
+          .run(target.artifact_id, desiredSlug, target.kind, target.created_at);
         context.store.db
           .prepare("DELETE FROM artifact_files WHERE artifact_id=?")
           .run(artifactId);
@@ -351,8 +343,11 @@ async function restoreArtifact(
         resetArtifactRuntime(context, artifactId, now);
       },
     );
-    await rm(context.artifactPath(artifactId), { recursive: true, force: true });
-    await materializeArtifact(context, artifactId);
+    await rm(context.artifactPath(artifactId), {
+      recursive: true,
+      force: true,
+    });
+    await materializeIgnoringForgotten(context, artifactId);
     return ok(revisionForHash(context, mutation.revision), mutation.revision);
   });
 }
@@ -366,8 +361,7 @@ async function restoreBook(
     const targetBook = context.store.db
       .prepare("SELECT book_id, slug, created_at FROM dolt_at_book(?)")
       .get(revision.hash) as unknown as
-      | { book_id: string; slug: string; created_at: number }
-      | undefined;
+      { book_id: string; slug: string; created_at: number } | undefined;
     if (!targetBook) {
       throw new EngineFault({
         code: "NOT_FOUND",
@@ -379,6 +373,17 @@ async function restoreBook(
       throw new EngineFault({
         code: "SCHEMA_INCOMPATIBLE",
         message: "A restore cannot replace the catalog's stable book ID",
+      });
+    }
+    const targetSchema = context.store.db
+      .prepare("SELECT version FROM dolt_at_engine_schema(?) WHERE singleton=1")
+      .get(revision.hash) as unknown as { version: number } | undefined;
+    if (!targetSchema || targetSchema.version !== SCHEMA_VERSION) {
+      throw new EngineFault({
+        code: "SCHEMA_INCOMPATIBLE",
+        message:
+          `Cannot restore ${revision.hash}: it records schema version ` +
+          `${targetSchema?.version ?? "unknown"}, not the current ${SCHEMA_VERSION}`,
       });
     }
 
@@ -417,7 +422,9 @@ async function restoreBook(
         context.store.db.prepare("DELETE FROM runtime_artifact_views").run();
         context.store.db.prepare("DELETE FROM runtime_pending_tasks").run();
         context.store.db.prepare("DELETE FROM runtime_generation_errors").run();
-        context.store.db.prepare("DELETE FROM runtime_similarity_embeddings").run();
+        context.store.db
+          .prepare("DELETE FROM runtime_similarity_embeddings")
+          .run();
         context.store.db
           .prepare("DELETE FROM runtime_text_similarity_documents")
           .run();
@@ -428,13 +435,34 @@ async function restoreBook(
     );
 
     for (const artifactId of new Set([...currentArtifactIds, ...targetIds])) {
-      await rm(context.artifactPath(artifactId), { recursive: true, force: true });
+      await rm(context.artifactPath(artifactId), {
+        recursive: true,
+        force: true,
+      });
     }
     for (const artifact of targetArtifacts) {
-      await materializeArtifact(context, artifact.artifact_id);
+      await materializeIgnoringForgotten(context, artifact.artifact_id);
     }
     return ok(revisionForHash(context, mutation.revision), mutation.revision);
   });
+}
+
+/**
+ * Workspace materialization after a restore tolerates forgotten objects:
+ * the restore commit is already durable, so a file whose bytes were
+ * deliberately deleted must not fail the whole restore — reads of that file
+ * surface OBJECT_UNAVAILABLE instead.
+ */
+async function materializeIgnoringForgotten(
+  context: EngineContext,
+  artifactId: string,
+): Promise<void> {
+  try {
+    await materializeArtifact(context, artifactId);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (!/object unavailable/i.test(message)) throw error;
+  }
 }
 
 /**
@@ -446,6 +474,10 @@ async function restoreBook(
  * foreign keys; columns come from `PRAGMA table_info`, not per-table code.
  * Reinserted rows identical to HEAD produce no diff, so unchanged tables
  * are never staged by the surrounding commit.
+ *
+ * The single deliberate exception is `objects`: its rows are permanent
+ * tombstone records, so restore merges instead of wiping — rows are never
+ * deleted and `forgotten_at` never rewinds (see `restoreObjectRows`).
  */
 function reloadSemanticTables(context: EngineContext, revision: string): void {
   const db = context.store.db;
@@ -461,10 +493,18 @@ function reloadSemanticTables(context: EngineContext, revision: string): void {
     return { table, columns, rows };
   });
   for (const { table } of [...snapshots].reverse()) {
+    // `objects` is the one exception to the mechanical wipe: rows are never
+    // deleted (a row is the permanent tombstone for every historical
+    // reference) and `forgotten_at` never rewinds — see the upsert below.
+    if (table === "objects") continue;
     db.prepare(`DELETE FROM ${table}`).run();
   }
   for (const { table, columns, rows } of snapshots) {
     if (rows.length === 0) continue;
+    if (table === "objects") {
+      restoreObjectRows(db, columns, rows);
+      continue;
+    }
     const insert = db.prepare(
       `INSERT INTO ${table}(${columns.join(", ")})
        VALUES (${columns.map(() => "?").join(", ")})`,
@@ -475,15 +515,43 @@ function reloadSemanticTables(context: EngineContext, revision: string): void {
   }
 }
 
+/**
+ * Restores `objects` with merge semantics instead of wipe-and-reload:
+ * rows created after the target revision survive (object rows are never
+ * deleted), and an existing forget tombstone always wins over the target
+ * revision's live state (`forgotten_at` never rewinds — deleted bytes do
+ * not come back because history was restored).
+ */
+function restoreObjectRows(
+  db: EngineContext["store"]["db"],
+  columns: string[],
+  rows: Array<Record<string, unknown>>,
+): void {
+  const upsert = db.prepare(
+    `INSERT INTO objects(${columns.join(", ")})
+     VALUES (${columns.map(() => "?").join(", ")})
+     ON CONFLICT(object_hash) DO UPDATE SET
+       forgotten_at=COALESCE(objects.forgotten_at, excluded.forgotten_at)`,
+  );
+  for (const row of rows) {
+    upsert.run(...columns.map((column) => row[column] ?? null));
+  }
+}
+
 async function logAction(
   context: EngineContext,
   actionName: string,
   payload: string | Record<string, unknown>,
 ): Promise<Result<ActionLogEntry, EngineError>> {
   return resultOf(async () => {
-    const result = await recordOperation(context, `action:${actionName}`, undefined, {
-      payload,
-    });
+    const result = await recordOperation(
+      context,
+      `action:${actionName}`,
+      undefined,
+      {
+        payload,
+      },
+    );
     if (!result.ok) throw new EngineFault(result.error);
     return {
       hash: result.value.hash,
@@ -509,8 +577,8 @@ function actionLog(
       hash: revision.hash,
       action: revision.operation!.slice("action:".length),
       payload:
-        (revision.details?.payload as string | Record<string, unknown> | undefined) ??
-        {},
+        (revision.details?.payload as
+          string | Record<string, unknown> | undefined) ?? {},
       date: revision.date,
     }));
 }
@@ -620,12 +688,7 @@ function insertFiles(
     ) VALUES (?, ?, ?, ?)`,
   );
   for (const row of files) {
-    insert.run(
-      row.artifact_id,
-      row.path,
-      row.object_hash,
-      row.created_at,
-    );
+    insert.run(row.artifact_id, row.path, row.object_hash, row.created_at);
   }
 }
 
@@ -635,9 +698,7 @@ function artifactSlugAt(
   revision: string,
 ): string | undefined {
   const row = context.store.db
-    .prepare(
-      `SELECT slug FROM dolt_at_artifacts(?) WHERE artifact_id=?`,
-    )
+    .prepare(`SELECT slug FROM dolt_at_artifacts(?) WHERE artifact_id=?`)
     .get(revision, artifactId) as unknown as { slug: string } | undefined;
   return row?.slug;
 }

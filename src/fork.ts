@@ -166,7 +166,8 @@ export async function bootstrapFork(
   options: ForkBootstrapOptions,
 ): Promise<Engine> {
   if (
-    (options.snapshotPath === undefined) === (options.upstreamUrl === undefined)
+    (options.snapshotPath === undefined) ===
+    (options.upstreamUrl === undefined)
   ) {
     throw new EngineFault({
       code: "INVALID_INPUT",
@@ -201,7 +202,9 @@ export async function bootstrapFork(
           "ve-wsu: multi-table working-set materialization drops index " +
           "rootpages). Bootstrap from a snapshot of the upstream database " +
           "with snapshotPath instead.",
-        details: { cause: error instanceof Error ? error.message : String(error) },
+        details: {
+          cause: error instanceof Error ? error.message : String(error),
+        },
       });
     }
   }
@@ -235,7 +238,8 @@ export async function mergeBack(
   options: MergeBackOptions,
 ): Promise<MergeBackResult> {
   const workDir =
-    options.workDir ?? (await mkdtemp(path.join(tmpdir(), "videobook-merge-back-")));
+    options.workDir ??
+    (await mkdtemp(path.join(tmpdir(), "videobook-merge-back-")));
   await mkdir(workDir, { recursive: true });
   try {
     const result = await mergeBackIn(workDir, options);
@@ -257,10 +261,7 @@ async function mergeBackIn(
   const theirsRef = `${forkRemoteName}/${forkBranch}`;
   const localForkRef = `merge-back-${forkRemoteName}-${forkBranch}`;
 
-  await copyFile(
-    options.upstreamDbPath,
-    path.join(workDir, "videobook.db"),
-  );
+  await copyFile(options.upstreamDbPath, path.join(workDir, "videobook.db"));
   const db = new DatabaseSync(path.join(workDir, "videobook.db"));
   try {
     const upstreamRemote = options.upstreamRemote ?? findRemote(db, "origin");
@@ -305,7 +306,8 @@ async function mergeBackIn(
     }
     const baseRow = db
       .prepare("SELECT dolt_merge_base(?, ?) AS hash")
-      .get("main", localForkRef) as unknown as { hash: string | null } | undefined;
+      .get("main", localForkRef) as unknown as
+      { hash: string | null } | undefined;
     const baseRevision = baseRow?.hash ?? null;
     if (!baseRevision) {
       throw new EngineFault({
@@ -345,7 +347,9 @@ async function mergeBackIn(
     const uploadedObjects = await uploadForkObjects(db, newObjects, options);
 
     try {
-      db.prepare("SELECT dolt_push(?, 'main') AS result").get(upstreamRemote.name);
+      db.prepare("SELECT dolt_push(?, 'main') AS result").get(
+        upstreamRemote.name,
+      );
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (/diverg|fast-forward|fetch first/i.test(message)) {
@@ -397,7 +401,10 @@ function integrate(
     forkBranch: string;
     author: string;
   },
-): { commit: string; reconciled: { transcripts: number; sequences: number } } | null {
+): {
+  commit: string;
+  reconciled: { transcripts: number; sequences: number };
+} | null {
   assertSameSchemaVersion(db, "HEAD", forkRef);
   const slugConflicts = findSlugConflicts(db, "HEAD", forkRef);
   if (slugConflicts.length > 0) {
@@ -409,7 +416,8 @@ function integrate(
       details: { branch: displayRef, slugConflicts },
     });
   }
-  if (!mergeRefs(db, "HEAD", forkRef, context.baseRevision)) {
+  const merge = mergeRefs(db, "HEAD", forkRef, context.baseRevision);
+  if (!merge) {
     // The fork's net changes are already present on main (for example a
     // re-run after an earlier integration commit): nothing to commit.
     return null;
@@ -421,12 +429,22 @@ function integrate(
     db.prepare("SELECT dolt_add(?) AS result").get(table);
   }
   const operationId = uuidv7();
+  // The write-set trailer names every resource the integration rewrote, so
+  // edit conflict detection (revisionConflicts in src/edits.ts) sees
+  // integrated changes exactly like locally committed ones. Oversized sets
+  // degrade the same way as engine commits: an omitted marker.
+  const writeSetJson = canonicalJson([...merge.writeSet].sort());
+  const writeSetTrailer =
+    Buffer.byteLength(writeSetJson, "utf8") <= 32_000
+      ? `write-set: ${writeSetJson}`
+      : `write-set-omitted: ${Buffer.byteLength(writeSetJson, "utf8")}`;
   const message = [
     "merge_back",
     "",
     `op-id: ${operationId}`,
     `base-revision: ${context.baseRevision}`,
     `merged-revision: ${context.theirsRevision}`,
+    writeSetTrailer,
     `details: ${canonicalJson({
       forkRemote: context.forkRemote,
       forkBranch: context.forkBranch,
@@ -469,10 +487,14 @@ function mergeRefs(
   oursRef: string,
   theirsRef: string,
   baseRef: string,
-): boolean {
+): { writeSet: Set<string> } | null {
   const shapes = SEMANTIC_TABLES.map((table) => tableShape(db, table));
-  const merged: Array<{ shape: TableShape; rows: Array<Record<string, unknown>> }> = [];
+  const merged: Array<{
+    shape: TableShape;
+    rows: Array<Record<string, unknown>>;
+  }> = [];
   const conflicts: RowConflict[] = [];
+  const writeSet = new Set<string>();
   let changed = false;
   for (const shape of shapes) {
     const base = rowsByKey(db, shape, baseRef);
@@ -480,6 +502,11 @@ function mergeRefs(
     const theirs = rowsByKey(db, shape, theirsRef);
     const result = new Map<string, Record<string, unknown>>(ours);
     const keys = new Set([...base.keys(), ...theirs.keys()]);
+    const applyRow = (key: string, row: Record<string, unknown>): void => {
+      result.set(key, row);
+      changed = true;
+      resourcesFor(shape, row).forEach((resource) => writeSet.add(resource));
+    };
     for (const key of keys) {
       const b = base.get(key);
       const o = ours.get(key);
@@ -487,14 +514,18 @@ function mergeRefs(
       if (t !== undefined && b === undefined) {
         // Added on theirs.
         if (o !== undefined && !rowsEqual(o, t)) {
-          conflicts.push({
-            table: shape.table,
-            key: keyObject(shape, key),
-            reason: "row added with different content on both sides",
-          });
+          const resolved = resolveObjectsRow(shape, o, t);
+          if (resolved) {
+            if (!rowsEqual(resolved, o)) applyRow(key, resolved);
+          } else {
+            conflicts.push({
+              table: shape.table,
+              key: keyObject(shape, key),
+              reason: "row added with different content on both sides",
+            });
+          }
         } else if (o === undefined) {
-          result.set(key, t);
-          changed = true;
+          applyRow(key, t);
         }
       } else if (t === undefined && b !== undefined) {
         // Deleted on theirs.
@@ -507,6 +538,7 @@ function mergeRefs(
         } else if (o !== undefined) {
           result.delete(key);
           changed = true;
+          resourcesFor(shape, o).forEach((resource) => writeSet.add(resource));
         }
       } else if (t !== undefined && b !== undefined && !rowsEqual(t, b)) {
         // Changed on theirs.
@@ -517,14 +549,18 @@ function mergeRefs(
             reason: "row modified on theirs but deleted on ours",
           });
         } else if (rowsEqual(o, b) || rowsEqual(o, t)) {
-          result.set(key, t);
-          changed = true;
+          if (!rowsEqual(o, t)) applyRow(key, t);
         } else {
-          conflicts.push({
-            table: shape.table,
-            key: keyObject(shape, key),
-            reason: "row modified differently on both sides",
-          });
+          const resolved = resolveObjectsRow(shape, o, t);
+          if (resolved) {
+            if (!rowsEqual(resolved, o)) applyRow(key, resolved);
+          } else {
+            conflicts.push({
+              table: shape.table,
+              key: keyObject(shape, key),
+              reason: "row modified differently on both sides",
+            });
+          }
         }
       }
     }
@@ -544,7 +580,7 @@ function mergeRefs(
       details: { conflicts },
     });
   }
-  if (!changed) return false;
+  if (!changed) return null;
 
   db.exec("PRAGMA foreign_keys = OFF");
   try {
@@ -564,11 +600,95 @@ function mergeRefs(
   } finally {
     db.exec("PRAGMA foreign_keys = ON");
   }
-  return true;
+  return { writeSet };
+}
+
+/**
+ * `objects` rows merge instead of conflicting when both sides agree on
+ * everything except `forgotten_at`: a forget on either side wins (deleted
+ * bytes must stay deleted on both lineages), and when both sides forgot
+ * independently the earlier wall-clock stamp is kept so the same takedown
+ * applied on fork and upstream cannot wedge integration. Returns null for
+ * any other table or any other difference.
+ */
+function resolveObjectsRow(
+  shape: TableShape,
+  ours: Record<string, unknown>,
+  theirs: Record<string, unknown>,
+): Record<string, unknown> | null {
+  if (shape.table !== "objects") return null;
+  const keys = new Set([...Object.keys(ours), ...Object.keys(theirs)]);
+  for (const key of keys) {
+    if (key === "forgotten_at") continue;
+    if (comparable(ours[key]) !== comparable(theirs[key])) return null;
+  }
+  const oursForgotten = ours["forgotten_at"] as number | null | undefined;
+  const theirsForgotten = theirs["forgotten_at"] as number | null | undefined;
+  const forgotten =
+    oursForgotten != null && theirsForgotten != null
+      ? Math.min(oursForgotten, theirsForgotten)
+      : (oursForgotten ?? theirsForgotten ?? null);
+  return { ...ours, forgotten_at: forgotten };
+}
+
+/**
+ * Resource strings for the integration commit's write-set trailer, using
+ * the same vocabulary as engine write sets (src/edits.ts editWriteSet,
+ * storage/artifact operations) so overlap detection matches.
+ */
+function resourcesFor(
+  shape: TableShape,
+  row: Record<string, unknown>,
+): string[] {
+  const value = (column: string): string => String(row[column] ?? "");
+  switch (shape.table) {
+    case "sequences":
+      return [`sequence:${value("sequence_id")}`];
+    case "sequence_tracks":
+      return [`sequence:${value("sequence_id")}`, `track:${value("track_id")}`];
+    case "sequence_clips":
+      return [`clip:${value("clip_id")}`, `track:${value("track_id")}`];
+    case "clip_links":
+    case "clip_transforms":
+      return [`clip:${value("clip_id")}`];
+    case "transitions":
+      return [`transition:${value("transition_id")}`];
+    case "caption_cues":
+      return [`track:${value("track_id")}`];
+    case "artifacts":
+      return [`artifact:${value("artifact_id")}`];
+    case "artifact_files":
+    case "artifact_streams":
+    case "artifact_metadata":
+    case "audio_waveforms":
+      return [`artifact:${value("artifact_id")}`];
+    case "objects":
+      return [`object:${value("object_hash")}`];
+    case "transcripts":
+      return [`transcript:${value("transcript_id")}`];
+    case "transcript_segments":
+      return [`transcript:${value("transcript_id")}`];
+    case "book":
+    case "book_metadata":
+      return ["book"];
+    case "notebooks":
+    case "cells":
+    case "edges":
+    case "runs":
+    case "cell_references":
+    case "pinned_search_results":
+      return [`notebook:${value("notebook_id")}`];
+    default:
+      return [
+        `${shape.table}:${shape.primaryKey.map((column) => value(column)).join(":")}`,
+      ];
+  }
 }
 
 function tableShape(db: DatabaseSync, table: string): TableShape {
-  const info = db.prepare(`PRAGMA table_info(${table})`).all() as unknown as Array<{
+  const info = db
+    .prepare(`PRAGMA table_info(${table})`)
+    .all() as unknown as Array<{
     name: string;
     pk: number;
   }>;
@@ -594,7 +714,9 @@ function rowsByKey(
 }
 
 function rowKey(shape: TableShape, row: Record<string, unknown>): string {
-  return canonicalJson(shape.primaryKey.map((column) => comparable(row[column])));
+  return canonicalJson(
+    shape.primaryKey.map((column) => comparable(row[column])),
+  );
 }
 
 function keyObject(shape: TableShape, key: string): Record<string, unknown> {
@@ -676,7 +798,9 @@ async function uploadForkObjects(
     });
   }
   const prefix = options.objectPrefix;
-  const downloadDir = await mkdtemp(path.join(tmpdir(), "videobook-merge-objects-"));
+  const downloadDir = await mkdtemp(
+    path.join(tmpdir(), "videobook-merge-objects-"),
+  );
   try {
     const forkStore = new ObjectStore(
       path.join(downloadDir, "fork"),
@@ -705,8 +829,13 @@ async function uploadForkObjects(
   }
 }
 
-function findRemote(db: DatabaseSync, name: string): CatalogBackupConfig | null {
-  const rows = db.prepare("SELECT * FROM dolt_remotes()").all() as unknown as RemoteRow[];
+function findRemote(
+  db: DatabaseSync,
+  name: string,
+): CatalogBackupConfig | null {
+  const rows = db
+    .prepare("SELECT * FROM dolt_remotes()")
+    .all() as unknown as RemoteRow[];
   const remote = rows.find((row) => row.name === name);
   return remote ? { name: remote.name, url: remote.url } : null;
 }

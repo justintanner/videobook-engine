@@ -40,6 +40,7 @@ export class ObjectStore {
     root: string,
     private readonly remote?: ContentStore,
     prefix = "superlzy-media/videobook/sha256",
+    private readonly isForgotten?: (hash: string) => boolean,
   ) {
     this.root = root;
     this.prefix = prefix.replace(/^\/+|\/+$/g, "");
@@ -106,20 +107,14 @@ export class ObjectStore {
     const current = await this.remote.head(key);
     if (!current.exists) {
       await this.remote.uploadFile(key, this.pathFor(hash));
-    } else if (
-      current.size !== undefined &&
-      current.size !== expectedSize
-    ) {
+    } else if (current.size !== undefined && current.size !== expectedSize) {
       throw new Error(`Remote object size mismatch: ${hash}`);
     }
     const verified = await this.remote.head(key);
     if (!verified.exists) {
       throw new Error(`Remote object verification failed: ${hash}`);
     }
-    if (
-      verified.size !== undefined &&
-      verified.size !== expectedSize
-    ) {
+    if (verified.size !== undefined && verified.size !== expectedSize) {
       throw new Error(`Remote object size mismatch: ${hash}`);
     }
   }
@@ -187,6 +182,12 @@ export class ObjectStore {
   }
 
   private async ensureLocal(hash: string): Promise<void> {
+    // A forgotten object must stay forgotten: refuse the read before even
+    // looking at local bytes, so neither a lingering local file nor a
+    // configured remote can resurrect deleted content.
+    if (this.isForgotten?.(hash)) {
+      throw new Error(`Object unavailable: ${hash}`);
+    }
     const destination = this.pathFor(hash);
     try {
       await stat(destination);

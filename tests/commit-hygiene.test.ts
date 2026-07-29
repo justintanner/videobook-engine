@@ -28,9 +28,7 @@ async function tempRoot(): Promise<string> {
 }
 
 function value<T>(
-  result:
-    | { ok: true; value: T }
-    | { ok: false; error: { message: string } },
+  result: { ok: true; value: T } | { ok: false; error: { message: string } },
 ): T {
   if (!result.ok) throw new Error(result.error.message);
   return result.value;
@@ -159,8 +157,51 @@ describe("commit hygiene", () => {
           )
           .run();
       }),
-    ).rejects.toThrow(/Semantic worktree is dirty after commit/);
+    ).rejects.toMatchObject({
+      error: {
+        code: "STORAGE_ERROR",
+        // The commit is durable; the error names it so the caller can
+        // recover instead of believing the mutation was lost.
+        details: {
+          committedRevision: expect.stringMatching(/^[0-9a-v]+$/),
+          dirtyTables: ["book_metadata"],
+        },
+      },
+    });
+    // The outbox row was cleared before the assertion fired, so recovery
+    // cannot re-attribute this operation's rows to a later commit.
+    const outbox = context.store.db
+      .prepare("SELECT COUNT(*) AS count FROM runtime_commit_outbox")
+      .get() as unknown as { count: number };
+    expect(outbox.count).toBe(0);
+    // The committed operation is in the log despite the thrown assertion.
+    expect(
+      context.store.db.doltLog({ limit: 1 })[0]?.message.split("\n")[0],
+    ).toBe("dirty_commit");
     context.store.close();
+  });
+
+  it("rejects a malformed engine identity", async () => {
+    const root = await tempRoot();
+    const common = {
+      dataDir: path.join(root, "data"),
+      workspaceDir: path.join(root, "workspace"),
+      initialBookSlug: "demo",
+    };
+    expect(
+      () =>
+        new EngineContext({
+          ...common,
+          identity: { name: "Mallory\nInjected", email: "m@example.com" },
+        }),
+    ).toThrow(/control characters/);
+    expect(
+      () =>
+        new EngineContext({
+          ...common,
+          identity: { name: "Fine Name", email: "not-an-email" },
+        }),
+    ).toThrow(/plausible address/);
   });
 
   it("sets the configured identity as the commit author", async () => {
@@ -173,7 +214,9 @@ describe("commit hygiene", () => {
     });
     await context.store.semantic({ operation: "authored" }, () => {
       context.store.db
-        .prepare("INSERT INTO book_metadata(key, value_json) VALUES ('k', '{}')")
+        .prepare(
+          "INSERT INTO book_metadata(key, value_json) VALUES ('k', '{}')",
+        )
         .run();
     });
     const commit = context.store.db.doltLog({ limit: 1 })[0] as unknown as {
@@ -194,7 +237,9 @@ describe("commit hygiene", () => {
     });
     await context.store.semantic({ operation: "authored" }, () => {
       context.store.db
-        .prepare("INSERT INTO book_metadata(key, value_json) VALUES ('k', '{}')")
+        .prepare(
+          "INSERT INTO book_metadata(key, value_json) VALUES ('k', '{}')",
+        )
         .run();
     });
     const commit = context.store.db.doltLog({ limit: 1 })[0] as unknown as {
@@ -204,7 +249,7 @@ describe("commit hygiene", () => {
     context.store.close();
   });
 
-  it("mints no commit for recordOperation with empty tables", async () => {
+  it("mints an empty provenance commit for recordOperation", async () => {
     const root = await tempRoot();
     const context = new EngineContext({
       dataDir: path.join(root, "data"),
@@ -213,9 +258,64 @@ describe("commit hygiene", () => {
     });
     const history = createHistoryApi(context);
     const head = context.store.head;
-    value(await history.recordOperation("touch"));
+    const recorded = value(await history.recordOperation("touch"));
+    // Provenance-only operations have no row changes; the commit itself is
+    // the record, so one is minted with --allow-empty.
+    expect(context.store.head).not.toBe(head);
+    expect(recorded.hash).toBe(context.store.head);
+    expect(recorded.operation).toBe("touch");
+    context.store.close();
+  });
+
+  it("round-trips logAction through actionLog", async () => {
+    const root = await tempRoot();
+    const context = new EngineContext({
+      dataDir: path.join(root, "data"),
+      workspaceDir: path.join(root, "workspace"),
+      initialBookSlug: "demo",
+    });
+    const history = createHistoryApi(context);
+    const logged = value(
+      await history.logAction("render", { preset: "portrait" }),
+    );
+    expect(logged.action).toBe("render");
+    expect(logged.hash).toBe(context.store.head);
+    const entries = history.actionLog();
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      hash: logged.hash,
+      action: "render",
+      payload: { preset: "portrait" },
+    });
+    // Revision dates are normalized ISO-8601 UTC strings.
+    expect(entries[0]!.date).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/);
+    context.store.close();
+  });
+
+  it("rejects control characters in the operation actor", async () => {
+    const root = await tempRoot();
+    const context = new EngineContext({
+      dataDir: path.join(root, "data"),
+      workspaceDir: path.join(root, "workspace"),
+      initialBookSlug: "demo",
+    });
+    const head = context.store.head;
+    await expect(
+      context.store.semantic(
+        {
+          operation: "touch",
+          author: "mallory\nop-id: forged-op-id\nbase-revision: forged",
+          allowEmpty: true,
+        },
+        () => undefined,
+      ),
+    ).rejects.toThrow(/control characters/);
+    // The rejected mutation rolled back: no commit, no stranded outbox row.
     expect(context.store.head).toBe(head);
-    expect(context.store.db.doltLog({ limit: 1 })[0]?.commit_hash).toBe(head);
+    const outbox = context.store.db
+      .prepare("SELECT COUNT(*) AS count FROM runtime_commit_outbox")
+      .get() as unknown as { count: number };
+    expect(outbox.count).toBe(0);
     context.store.close();
   });
 
@@ -261,13 +361,17 @@ describe("commit hygiene", () => {
       },
       () => {
         context.store.db
-          .prepare("INSERT INTO book_metadata(key, value_json) VALUES ('k', '{}')")
+          .prepare(
+            "INSERT INTO book_metadata(key, value_json) VALUES ('k', '{}')",
+          )
           .run();
       },
     );
     const commit = context.store.db.doltLog({ limit: 1 })[0]!;
     expect(commit.commit_hash).toBe(mutation.revision);
-    expect(commit.message.split("\n")[0]).toBe(`write_thing artifact:${artifactId}`);
+    expect(commit.message.split("\n")[0]).toBe(
+      `write_thing artifact:${artifactId}`,
+    );
     expect(parseCommitMessage(commit.message)).toEqual({
       operation: "write_thing",
       operationId: mutation.operationId,

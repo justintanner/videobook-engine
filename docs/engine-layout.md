@@ -256,7 +256,16 @@ are the constraint-verification primitives.
 - **Grid slots and order keys** need no resolution: `(grid_row,
   grid_column)` collisions and identical fractional order keys are both
   resolved at read time by the stable row-UUID tie-break (see the order
-  rules above).
+  rules above). Writers self-repair: `moveTrack` runs `reconcileOrderKeys`
+  over a duplicate-key sibling group before computing a between-key, so the
+  position between two merge-minted duplicates stays reachable.
+- **`objects.forgotten_at` → forget wins, earliest stamp.** The same
+  takedown applied independently on fork and upstream produces a same-row
+  different-value cell (wall clocks differ). The projection merge resolves
+  it instead of conflicting: when both sides agree on everything except
+  `forgotten_at`, a set value beats NULL (deleted bytes stay deleted on
+  both lineages) and two set values keep the earlier timestamp
+  (`resolveObjectsRow` in `src/fork.ts`).
 
 ve-wsu: doltlite currently corrupts secondary UNIQUE indexes on
 `dolt_checkout` once a working set has three or more tables, corrupts full

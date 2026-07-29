@@ -1,7 +1,4 @@
-import type {
-  EngineError,
-  Result,
-} from "./engine-types.js";
+import type { EngineError, Result } from "./engine-types.js";
 import { ok } from "./engine-types.js";
 import type {
   AudioTrack,
@@ -20,21 +17,15 @@ import type {
   UpdateSequenceTrackInput,
   VideoTrack,
 } from "./mvp-contracts.js";
-import {
-  EngineContext,
-  resultOf,
-  syncResultOf,
-} from "./context.js";
+import { EngineContext, resultOf, syncResultOf } from "./context.js";
 import { assertUuidV7, newUuidV7 } from "./ids.js";
 import {
   initialOrderKeys,
   orderKeyAfter,
   orderKeyBetween,
+  reconcileOrderKeys,
 } from "./order-keys.js";
-import {
-  normalizeRational,
-  normalizeSourceRange,
-} from "./mvp-time.js";
+import { normalizeRational, normalizeSourceRange } from "./mvp-time.js";
 import { canonicalJson, parseJson } from "./store.js";
 import { EngineFault } from "./store.js";
 
@@ -139,8 +130,7 @@ export function createSequencesApi(context: EngineContext) {
   return {
     create: (
       input: CreateSequenceInput,
-    ): Promise<Result<Sequence, EngineError>> =>
-      createSequence(context, input),
+    ): Promise<Result<Sequence, EngineError>> => createSequence(context, input),
     list: (): Sequence[] => listSequences(context),
     get: (sequenceId: string): Result<Sequence, EngineError> =>
       syncResultOf(() => requiredSequence(context, sequenceId)),
@@ -175,9 +165,7 @@ export function createSequencesApi(context: EngineContext) {
       toOrdinal: number,
     ): Promise<Result<Sequence, EngineError>> =>
       moveTrack(context, trackId, toOrdinal),
-    removeTrack: (
-      trackId: string,
-    ): Promise<Result<Sequence, EngineError>> =>
+    removeTrack: (trackId: string): Promise<Result<Sequence, EngineError>> =>
       removeTrack(context, trackId),
     delete: (
       sequenceId: string,
@@ -206,11 +194,12 @@ async function addTrack(
     const orderKey = orderKeyAfter(
       siblings.length > 0 ? siblings[siblings.length - 1]!.order_key : null,
     );
-    const name = input.name === undefined
-      ? input.kind === "caption"
-        ? `Captions ${ordinal + 1}`
-        : `${input.kind === "video" ? "Video" : "Audio"} ${ordinal + 1}`
-      : requiredText(input.name, "Track name");
+    const name =
+      input.name === undefined
+        ? input.kind === "caption"
+          ? `Captions ${ordinal + 1}`
+          : `${input.kind === "video" ? "Video" : "Audio"} ${ordinal + 1}`
+        : requiredText(input.name, "Track name");
     const common = {
       trackId,
       sequenceId,
@@ -219,11 +208,12 @@ async function addTrack(
       enabled: true,
       locked: false,
     };
-    const track: SequenceTrack = input.kind === "video"
-      ? { ...common, kind: "video", blendMode: "normal" }
-      : input.kind === "audio"
-        ? { ...common, kind: "audio", muted: false, solo: false }
-        : { ...common, kind: "caption" };
+    const track: SequenceTrack =
+      input.kind === "video"
+        ? { ...common, kind: "video", blendMode: "normal" }
+        : input.kind === "audio"
+          ? { ...common, kind: "audio", muted: false, solo: false }
+          : { ...common, kind: "caption" };
     const mutation = await context.store.semantic(
       {
         operation: "add_sequence_track",
@@ -257,23 +247,45 @@ async function moveTrack(
          ORDER BY order_key, track_id`,
       )
       .all(row.sequence_id, row.kind) as unknown as Array<{
-        track_id: string;
-        order_key: string;
-      }>;
+      track_id: string;
+      order_key: string;
+    }>;
     const currentOrdinal = siblings.findIndex(
       (candidate) => candidate.track_id === trackId,
     );
-    const others = siblings.filter((candidate) => candidate.track_id !== trackId);
+    // A merge can leave siblings with identical order keys (forks mint keys
+    // independently; readers tie-break by track_id). The writer path
+    // self-repairs via reconcileOrderKeys before computing a between-key,
+    // otherwise the position between two duplicates would be unreachable.
+    const keyByTrack = new Map(
+      siblings.map((sibling) => [sibling.track_id, sibling.order_key]),
+    );
+    const repairs = new Map<string, string>();
+    if (new Set(keyByTrack.values()).size !== siblings.length) {
+      const reconciled = reconcileOrderKeys(
+        siblings.map((sibling) => sibling.track_id),
+        keyByTrack,
+      );
+      for (const [id, key] of reconciled) {
+        if (keyByTrack.get(id) !== key) {
+          repairs.set(id, key);
+          keyByTrack.set(id, key);
+        }
+      }
+    }
+    const others = siblings.filter(
+      (candidate) => candidate.track_id !== trackId,
+    );
     const target = Math.max(0, Math.min(toOrdinal, others.length));
-    if (target === currentOrdinal) {
+    if (target === currentOrdinal && repairs.size === 0) {
       return requiredSequence(context, row.sequence_id);
     }
-    const orderKey = target === others.length
-      ? orderKeyAfter(others.length > 0 ? others[others.length - 1]!.order_key : null)
-      : orderKeyBetween(
-        target > 0 ? others[target - 1]!.order_key : null,
-        others[target]!.order_key,
-      );
+    const keyOf = (index: number): string =>
+      keyByTrack.get(others[index]!.track_id)!;
+    const orderKey =
+      target === others.length
+        ? orderKeyAfter(others.length > 0 ? keyOf(others.length - 1) : null)
+        : orderKeyBetween(target > 0 ? keyOf(target - 1) : null, keyOf(target));
     const mutation = await context.store.semantic(
       {
         operation: "move_sequence_track",
@@ -283,13 +295,18 @@ async function moveTrack(
           kind: row.kind,
           fromOrdinal: currentOrdinal,
           toOrdinal: target,
+          ...(repairs.size > 0 ? { repairedOrderKeys: repairs.size } : {}),
         },
         writeSet: [`sequence:${row.sequence_id}`, `track:${trackId}`],
       },
       () => {
-        context.store.db
-          .prepare("UPDATE sequence_tracks SET order_key=? WHERE track_id=?")
-          .run(orderKey, trackId);
+        const update = context.store.db.prepare(
+          "UPDATE sequence_tracks SET order_key=? WHERE track_id=?",
+        );
+        for (const [id, key] of repairs) {
+          if (id !== trackId) update.run(key, id);
+        }
+        update.run(orderKey, trackId);
       },
     );
     return ok(
@@ -362,15 +379,19 @@ async function updateTrack(
 ): Promise<Result<Sequence, EngineError>> {
   return resultOf(async () => {
     const row = requiredTrackRow(context, trackId);
-    if (row.kind !== "audio" && (input.muted !== undefined || input.solo !== undefined)) {
+    if (
+      row.kind !== "audio" &&
+      (input.muted !== undefined || input.solo !== undefined)
+    ) {
       throw new EngineFault({
         code: "INVALID_INPUT",
         message: "Muted and solo are only valid for audio tracks",
       });
     }
-    const name = input.name === undefined
-      ? row.name
-      : requiredText(input.name, "Track name");
+    const name =
+      input.name === undefined
+        ? row.name
+        : requiredText(input.name, "Track name");
     const mutation = await context.store.semantic(
       {
         operation: "update_sequence_track",
@@ -389,10 +410,14 @@ async function updateTrack(
             (input.enabled ?? row.enabled === 1) ? 1 : 0,
             (input.locked ?? row.locked === 1) ? 1 : 0,
             row.kind === "audio"
-              ? ((input.muted ?? row.muted === 1) ? 1 : 0)
+              ? (input.muted ?? row.muted === 1)
+                ? 1
+                : 0
               : null,
             row.kind === "audio"
-              ? ((input.solo ?? row.solo === 1) ? 1 : 0)
+              ? (input.solo ?? row.solo === 1)
+                ? 1
+                : 0
               : null,
             trackId,
           );
@@ -439,7 +464,8 @@ async function createSequence(
       (_operationId, now) => {
         insertSequence(context, sequenceId, bookId, normalized, now);
         insertTracks(context, tracks);
-      },    );
+      },
+    );
     return ok(
       requiredSequence(context, sequenceId, mutation.revision),
       mutation.revision,
@@ -564,7 +590,9 @@ async function deleteSequence(
 
 function listSequences(context: EngineContext): Sequence[] {
   const rows = context.store.db
-    .prepare(`${SEQUENCE_SELECT} FROM sequences ORDER BY is_primary DESC, created_at, sequence_id`)
+    .prepare(
+      `${SEQUENCE_SELECT} FROM sequences ORDER BY is_primary DESC, created_at, sequence_id`,
+    )
     .all() as unknown as SequenceRow[];
   return rows.map((row) => sequenceFromRow(context, row));
 }
@@ -611,8 +639,7 @@ function requiredSequenceRow(
   const row = context.store.db
     .prepare(`${SEQUENCE_SELECT} FROM ${source} WHERE sequence_id=?`)
     .get(...revisionParams(revision, sequenceId)) as unknown as
-    | SequenceRow
-    | undefined;
+    SequenceRow | undefined;
   if (!row) {
     throw new EngineFault({
       code: "NOT_FOUND",
@@ -643,15 +670,12 @@ function sequenceFromRow(
     return trackFromRow(trackRow, ordinal);
   });
   const trackIds = tracks.map((track) => track.trackId);
-  const clips = trackIds.length === 0
-    ? []
-    : readClips(context, trackIds, revision);
-  const transitions = trackIds.length === 0
-    ? []
-    : readTransitions(context, trackIds, revision);
-  const captions = trackIds.length === 0
-    ? []
-    : readCaptions(context, trackIds, revision);
+  const clips =
+    trackIds.length === 0 ? [] : readClips(context, trackIds, revision);
+  const transitions =
+    trackIds.length === 0 ? [] : readTransitions(context, trackIds, revision);
+  const captions =
+    trackIds.length === 0 ? [] : readCaptions(context, trackIds, revision);
   const background = parseJson<unknown>(row.background_rgba_json, [0, 0, 0, 1]);
   if (!isRgba(background)) {
     throw new EngineFault({
@@ -717,7 +741,9 @@ function readClips(
     revision,
     ...clipIds,
   );
-  const linkByClip = new Map(links.map((link) => [link.clip_id, link.link_group_id]));
+  const linkByClip = new Map(
+    links.map((link) => [link.clip_id, link.link_group_id]),
+  );
   const transformByClip = new Map(
     transforms.map((transformRow) => [
       transformRow.clip_id,
@@ -805,15 +831,15 @@ function clipFromRow(
     };
   }
   if (
-    !row.stream_id
-    || row.source_start_tick === null
-    || row.source_duration_ticks === null
-    || row.time_base_numerator === null
-    || row.time_base_denominator === null
-    || row.speed_numerator === null
-    || row.speed_denominator === null
-    || row.reverse === null
-    || row.audio_policy === null
+    !row.stream_id ||
+    row.source_start_tick === null ||
+    row.source_duration_ticks === null ||
+    row.time_base_numerator === null ||
+    row.time_base_denominator === null ||
+    row.speed_numerator === null ||
+    row.speed_denominator === null ||
+    row.reverse === null ||
+    row.audio_policy === null
   ) {
     throw invalidClip(row.clip_id, "timed source mapping");
   }
@@ -969,8 +995,14 @@ function normalizeCreateInput(input: CreateSequenceInput) {
   if (!isRgba(backgroundRgba)) {
     throw new Error("Sequence background RGBA must contain four finite values");
   }
-  const videoTrackCount = trackCount(input.videoTrackCount ?? 2, "Video track count");
-  const audioTrackCount = trackCount(input.audioTrackCount ?? 4, "Audio track count");
+  const videoTrackCount = trackCount(
+    input.videoTrackCount ?? 2,
+    "Video track count",
+  );
+  const audioTrackCount = trackCount(
+    input.audioTrackCount ?? 4,
+    "Audio track count",
+  );
   const captionTrackCount = trackCount(
     input.captionTrackCount ?? 1,
     "Caption track count",
@@ -1156,14 +1188,19 @@ function semanticSource(table: string, revision?: string): string {
   return revision ? `dolt_at_${table}(?)` : table;
 }
 
-function revisionParams(revision: string | undefined, ...params: string[]): string[] {
+function revisionParams(
+  revision: string | undefined,
+  ...params: string[]
+): string[] {
   return revision ? [revision, ...params] : params;
 }
 
 function isRgba(value: unknown): value is [number, number, number, number] {
-  return Array.isArray(value)
-    && value.length === 4
-    && value.every((channel) => Number.isFinite(channel));
+  return (
+    Array.isArray(value) &&
+    value.length === 4 &&
+    value.every((channel) => Number.isFinite(channel))
+  );
 }
 
 function invalidClip(clipId: string, field: string): EngineFault {
@@ -1179,7 +1216,11 @@ function requiredText(value: string, label: string): string {
   return normalized;
 }
 
-function safeIntegerAtLeast(value: number, minimum: number, label: string): void {
+function safeIntegerAtLeast(
+  value: number,
+  minimum: number,
+  label: string,
+): void {
   if (!Number.isSafeInteger(value) || value < minimum) {
     throw new Error(`${label} must be a safe integer of at least ${minimum}`);
   }

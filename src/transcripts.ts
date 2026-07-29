@@ -1,7 +1,4 @@
-import type {
-  EngineError,
-  Result,
-} from "./engine-types.js";
+import type { EngineError, Result } from "./engine-types.js";
 import { ok } from "./engine-types.js";
 import type {
   ImportTranscriptInput,
@@ -13,11 +10,7 @@ import type {
   TranscriptSegmentKind,
   TranscriptWord,
 } from "./mvp-contracts.js";
-import {
-  EngineContext,
-  resultOf,
-  syncResultOf,
-} from "./context.js";
+import { EngineContext, resultOf, syncResultOf } from "./context.js";
 import { assertUuidV7, newUuidV7 } from "./ids.js";
 import {
   normalizeSourceRange,
@@ -131,12 +124,7 @@ export function createTranscriptsApi(context: EngineContext) {
       endWordId: string,
     ): Result<ReturnType<typeof normalizeSourceRange>, EngineError> =>
       syncResultOf(() =>
-        transcriptSelectionRange(
-          context,
-          transcriptId,
-          startWordId,
-          endWordId,
-        ),
+        transcriptSelectionRange(context, transcriptId, startWordId, endWordId),
       ),
   };
 }
@@ -214,12 +202,13 @@ async function importTranscript(
     assertUuidV7(input.streamId, "Transcript stream ID");
     const stream = requiredStreamRow(context, input.streamId);
     if (
-      stream.artifact_id !== artifact.artifact_id
-      || stream.object_hash !== input.objectHash
+      stream.artifact_id !== artifact.artifact_id ||
+      stream.object_hash !== input.objectHash
     ) {
       throw new EngineFault({
         code: "INVALID_INPUT",
-        message: "Transcript artifact, stream, and object hash must identify one source",
+        message:
+          "Transcript artifact, stream, and object hash must identify one source",
       });
     }
     const language = requiredText(input.language, "Transcript language");
@@ -315,8 +304,8 @@ async function deleteTranscript(
       throw new EngineFault({
         code: "IN_USE",
         message:
-          `Transcript ${transcriptId} is referenced by `
-          + `${cues.length} caption cue(s)`,
+          `Transcript ${transcriptId} is referenced by ` +
+          `${cues.length} caption cue(s)`,
         details: { cueIds: cues.map((cue) => cue.cue_id) },
       });
     }
@@ -360,14 +349,14 @@ function requiredTranscriptRow(
   revision?: string,
 ): TranscriptRow {
   assertUuidV7(transcriptId, "Transcript ID");
-  const transcriptSource = revision
-    ? "dolt_at_transcripts(?)"
-    : "transcripts";
+  const transcriptSource = revision ? "dolt_at_transcripts(?)" : "transcripts";
   const row = context.store.db
-    .prepare(`${TRANSCRIPT_SELECT} FROM ${transcriptSource} WHERE transcript_id=?`)
-    .get(...(revision ? [revision, transcriptId] : [transcriptId])) as unknown as
-    | TranscriptRow
-    | undefined;
+    .prepare(
+      `${TRANSCRIPT_SELECT} FROM ${transcriptSource} WHERE transcript_id=?`,
+    )
+    .get(
+      ...(revision ? [revision, transcriptId] : [transcriptId]),
+    ) as unknown as TranscriptRow | undefined;
   if (!row) {
     throw new EngineFault({
       code: "NOT_FOUND",
@@ -402,7 +391,14 @@ async function listTranscripts(
         .all() as unknown as TranscriptRow[]);
   const transcripts: Transcript[] = [];
   for (const row of rows) {
-    transcripts.push(await transcriptFromRow(context, row));
+    // A single forgotten payload must not make every other transcript
+    // unlistable: the listing degrades that row to structure-only
+    // (payloadAvailable=false, empty text) instead of failing wholesale.
+    transcripts.push(
+      await transcriptFromRow(context, row, undefined, {
+        tolerateMissingPayload: true,
+      }),
+    );
   }
   return transcripts;
 }
@@ -411,25 +407,42 @@ async function transcriptFromRow(
   context: EngineContext,
   row: TranscriptRow,
   revision?: string,
+  options?: { tolerateMissingPayload?: boolean },
 ): Promise<Transcript> {
   // A forgotten payload surfaces through the shared OBJECT_UNAVAILABLE
   // mapping ("Object unavailable: <hash>"); the row itself stays readable
   // as a tombstone of hash + size via the objects table.
-  const payload = await readTranscriptPayload(context, row.payload_hash);
-  const textBySegment = new Map<string, TranscriptPayload["segments"][number]>();
+  let payload: TranscriptPayload | null = null;
+  try {
+    payload = await readTranscriptPayload(context, row.payload_hash);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    if (
+      !options?.tolerateMissingPayload ||
+      !/object unavailable/i.test(message)
+    ) {
+      throw error;
+    }
+  }
+  const textBySegment = new Map<
+    string,
+    TranscriptPayload["segments"][number]
+  >();
   const textByWord = new Map<string, { text: string }>();
-  for (const segment of payload.segments) {
+  for (const segment of payload?.segments ?? []) {
     textBySegment.set(segment.segmentId, segment);
     for (const word of segment.words) textByWord.set(word.wordId, word);
   }
   const segments = structuralSegments(context, row.transcript_id, revision);
   const stream = requiredStreamRow(context, row.stream_id, revision);
+  const payloadAvailable = payload !== null;
   return {
     transcriptId: row.transcript_id,
     artifactId: row.artifact_id,
     streamId: row.stream_id,
     objectHash: row.object_hash,
     payloadHash: row.payload_hash,
+    payloadAvailable,
     language: row.language,
     ...(row.provider ? { provider: row.provider } : {}),
     ...(row.model ? { model: row.model } : {}),
@@ -439,8 +452,11 @@ async function transcriptFromRow(
         segment,
         row,
         stream,
-        requiredPayloadText(textBySegment, segment.segmentId, "segment"),
+        payloadAvailable
+          ? requiredPayloadText(textBySegment, segment.segmentId, "segment")
+          : { text: "" },
         textByWord,
+        payloadAvailable,
       ),
     ),
     createdAt: row.created_at,
@@ -577,9 +593,9 @@ function normalizeSegments(
     }
     const range = normalizeSourceRange(segment.range);
     if (
-      range.streamId !== stream.stream_id
-      || range.objectHash !== stream.object_hash
-      || !rationalEquals(range.timeBase, {
+      range.streamId !== stream.stream_id ||
+      range.objectHash !== stream.object_hash ||
+      !rationalEquals(range.timeBase, {
         numerator: stream.time_base_numerator,
         denominator: stream.time_base_denominator,
       })
@@ -593,7 +609,8 @@ function normalizeSegments(
     if (range.startTick < previousEnd || end > stream.duration_ticks) {
       throw new EngineFault({
         code: "INVALID_RANGE",
-        message: "Transcript segments must be ordered and bounded by the source",
+        message:
+          "Transcript segments must be ordered and bounded by the source",
       });
     }
     previousEnd = end;
@@ -624,13 +641,17 @@ function normalizeWords(
     if (word.ordinal !== index) {
       throw new Error("Transcript word ordinals must be contiguous");
     }
-    safeIntegerAtLeast(word.startTick, range.startTick, "Transcript word start");
+    safeIntegerAtLeast(
+      word.startTick,
+      range.startTick,
+      "Transcript word start",
+    );
     safeIntegerAtLeast(word.durationTicks, 1, "Transcript word duration");
     const end = word.startTick + word.durationTicks;
     if (
-      !Number.isSafeInteger(end)
-      || word.startTick < previousEnd
-      || end > rangeEnd
+      !Number.isSafeInteger(end) ||
+      word.startTick < previousEnd ||
+      end > rangeEnd
     ) {
       throw new EngineFault({
         code: "INVALID_RANGE",
@@ -701,18 +722,16 @@ function requiredStreamRow(
   streamIdValue: string,
   revision?: string,
 ): StreamRow {
-  const source = revision
-    ? "dolt_at_artifact_streams(?)"
-    : "artifact_streams";
+  const source = revision ? "dolt_at_artifact_streams(?)" : "artifact_streams";
   const row = context.store.db
     .prepare(
       `SELECT stream_id, artifact_id, object_hash,
               time_base_numerator, time_base_denominator, duration_ticks
        FROM ${source} WHERE stream_id=?`,
     )
-    .get(...(revision ? [revision, streamIdValue] : [streamIdValue])) as unknown as
-    | StreamRow
-    | undefined;
+    .get(
+      ...(revision ? [revision, streamIdValue] : [streamIdValue]),
+    ) as unknown as StreamRow | undefined;
   if (!row) {
     throw new EngineFault({
       code: "NOT_FOUND",
@@ -728,6 +747,7 @@ function segmentFromStructure(
   stream: StreamRow,
   payloadSegment: { text: string },
   textByWord: Map<string, { text: string }>,
+  payloadAvailable = true,
 ): TranscriptSegment {
   return {
     segmentId: structure.segmentId,
@@ -751,7 +771,9 @@ function segmentFromStructure(
     words: structure.words.map((word) =>
       wordFromStructure(
         word,
-        requiredPayloadText(textByWord, word.wordId, "word"),
+        payloadAvailable
+          ? requiredPayloadText(textByWord, word.wordId, "word")
+          : { text: "" },
       ),
     ),
   };
@@ -793,7 +815,11 @@ function confidence(value: number): number {
   return value;
 }
 
-function safeIntegerAtLeast(value: number, minimum: number, label: string): void {
+function safeIntegerAtLeast(
+  value: number,
+  minimum: number,
+  label: string,
+): void {
   if (!Number.isSafeInteger(value) || value < minimum) {
     throw new Error(`${label} must be a safe integer of at least ${minimum}`);
   }
