@@ -81,20 +81,6 @@ export type {
   PinnedSearchResult,
 } from "./notebook/types.js";
 
-export type {
-  GetHistoryActionsOptions,
-  HistoryAction,
-  HistoryActionEvent,
-  HistoryActionPage,
-  HistoryActionPhase,
-  HistoryActionRevision,
-  HistoryActionScope,
-  HistoryArtifactKind,
-  HistoryArtifactRef,
-  HistoryLayout,
-  RecordActionInput,
-} from "./history-types.js";
-
 export {
   findAudioFile,
   findPrimaryMediaFile,

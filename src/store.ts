@@ -128,23 +128,6 @@ export class DoltStore {
         value = mutate(operationId, now);
         this.db
           .prepare(
-            `INSERT INTO operations(
-              operation_id, operation, artifact_id, details_json,
-              write_set_json, base_revision, created_at, author
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-          )
-          .run(
-            operationId,
-            input.operation,
-            input.artifactId ?? null,
-            canonicalJson(input.details ?? {}),
-            canonicalJson(input.writeSet ?? []),
-            input.baseRevision ?? null,
-            now,
-            input.author ?? "videobook",
-          );
-        this.db
-          .prepare(
             `INSERT INTO runtime_commit_outbox(
               operation_id, tables_json, message, created_at
             ) VALUES (?, ?, ?, ?)`,
@@ -421,29 +404,14 @@ export class DoltStore {
     if (!row) return this.head;
     const dirty = this.dirtySemanticTables();
     if (dirty.length === 0) {
-      // Recovery after a crash that followed the dolt commit: the operation
-      // is already part of HEAD, so only the outbox row is left to clear.
+      // Either the mutation only touched ignored runtime tables (bookkeeping
+      // mints no commit), or this is recovery after a crash that followed the
+      // dolt commit. Either way only the outbox row is left to clear.
       this.runtime(() => {
         this.db
           .prepare(
             "DELETE FROM runtime_commit_outbox WHERE operation_id = ?",
           )
-          .run(operationId);
-      });
-      return this.head;
-    }
-    if (dirty.every((table) => table === "operations")) {
-      // The mutation only touched ignored runtime tables, so committing
-      // would mint a revision whose only payload is the bookkeeping row in
-      // operations. Erase the bookkeeping instead of committing.
-      this.runtime(() => {
-        this.db
-          .prepare(
-            "DELETE FROM runtime_commit_outbox WHERE operation_id = ?",
-          )
-          .run(operationId);
-        this.db
-          .prepare("DELETE FROM operations WHERE operation_id = ?")
           .run(operationId);
       });
       return this.head;
@@ -623,9 +591,105 @@ function sortJson(value: unknown): unknown {
   );
 }
 
+export interface CommitOperation {
+  operation: string;
+  operationId: string;
+  artifactId?: string;
+  baseRevision?: string;
+  actor?: string;
+  writeSet: string[];
+  details: Record<string, unknown>;
+}
+
+// The commit is the provenance record: the subject names the operation (and
+// the artifact it targeted), and git-style trailers carry the operation ID,
+// base revision, actor, write set, and parameters as canonical JSON.
+//
+// doltlite rejects commit messages of 65536 bytes or more, so oversized
+// payloads degrade deterministically: the details trailer is dropped first
+// (a `details-omitted` trailer records its size), then the write-set trailer
+// (a `write-set-omitted` trailer records its size). History and conflict
+// projections treat omitted trailers as empty.
+const MAX_COMMIT_MESSAGE_BYTES = 65_024;
+
 function commitMessage(input: OperationInput, operationId: string): string {
+  const message = buildCommitMessage(input, operationId, true, true);
+  if (byteLength(message) < MAX_COMMIT_MESSAGE_BYTES) return message;
+  const withoutDetails = buildCommitMessage(input, operationId, false, true);
+  if (byteLength(withoutDetails) < MAX_COMMIT_MESSAGE_BYTES) {
+    return withoutDetails;
+  }
+  const minimal = buildCommitMessage(input, operationId, false, false);
+  if (byteLength(minimal) >= MAX_COMMIT_MESSAGE_BYTES) {
+    throw new EngineFault({
+      code: "STORAGE_ERROR",
+      message: `Commit message for ${input.operation} exceeds the Dolt size limit`,
+    });
+  }
+  return minimal;
+}
+
+function buildCommitMessage(
+  input: OperationInput,
+  operationId: string,
+  includeDetails: boolean,
+  includeWriteSet: boolean,
+): string {
   const target = input.artifactId ? ` artifact:${input.artifactId}` : "";
-  return `${input.operation}${target}\n\nop-id: ${operationId}`;
+  const trailers = [`op-id: ${operationId}`];
+  if (input.baseRevision) trailers.push(`base-revision: ${input.baseRevision}`);
+  if (input.author) trailers.push(`actor: ${input.author}`);
+  const writeSetJson = canonicalJson(input.writeSet ?? []);
+  if (includeWriteSet && input.writeSet && input.writeSet.length > 0) {
+    trailers.push(`write-set: ${writeSetJson}`);
+  } else if (!includeWriteSet && input.writeSet && input.writeSet.length > 0) {
+    trailers.push(`write-set-omitted: ${byteLength(writeSetJson)}`);
+  }
+  const detailsJson = canonicalJson(input.details ?? {});
+  if (includeDetails && input.details && Object.keys(input.details).length > 0) {
+    trailers.push(`details: ${detailsJson}`);
+  } else if (!includeDetails && input.details && Object.keys(input.details).length > 0) {
+    trailers.push(`details-omitted: ${byteLength(detailsJson)}`);
+  }
+  return `${input.operation}${target}\n\n${trailers.join("\n")}`;
+}
+
+function byteLength(text: string): number {
+  return Buffer.byteLength(text, "utf8");
+}
+
+export function parseCommitMessage(message: string): CommitOperation | null {
+  const lines = message.split("\n");
+  const subject = lines[0] ?? "";
+  const trailers = new Map<string, string>();
+  for (const line of lines.slice(1)) {
+    const match = /^([a-z-]+): (.*)$/.exec(line);
+    if (match) trailers.set(match[1]!, match[2]!);
+  }
+  const operationId = trailers.get("op-id");
+  if (!operationId) return null;
+  let operation = subject;
+  let artifactId: string | undefined;
+  const artifactMarker = subject.lastIndexOf(" artifact:");
+  if (artifactMarker > 0) {
+    operation = subject.slice(0, artifactMarker);
+    artifactId = subject.slice(artifactMarker + " artifact:".length);
+  }
+  if (!operation) return null;
+  const baseRevision = trailers.get("base-revision");
+  const actor = trailers.get("actor");
+  return {
+    operation,
+    operationId,
+    ...(artifactId ? { artifactId } : {}),
+    ...(baseRevision ? { baseRevision } : {}),
+    ...(actor ? { actor } : {}),
+    writeSet: parseJson<string[]>(trailers.get("write-set") ?? "[]", []),
+    details: parseJson<Record<string, unknown>>(
+      trailers.get("details") ?? "{}",
+      {},
+    ),
+  };
 }
 
 function isSemanticTable(table: string): table is SemanticTable {

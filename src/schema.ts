@@ -1,4 +1,4 @@
-export const SCHEMA_VERSION = 13;
+export const SCHEMA_VERSION = 14;
 
 export const NOTEBOOK_CELL_TYPES = [
   "audio",
@@ -95,13 +95,6 @@ export const SEMANTIC_TABLES = [
   "audio_waveforms",
   "prompt_entries",
   "messages",
-  "operations",
-  "actions",
-  "action_events",
-  "action_parents",
-  "action_artifacts",
-  "action_write_set",
-  "edit_batches",
 ] as const;
 
 export type SemanticTable = (typeof SEMANTIC_TABLES)[number];
@@ -614,100 +607,6 @@ export const SEMANTIC_SCHEMA_SQL = `
     body_json TEXT NOT NULL,
     created_at INTEGER NOT NULL
   );
-  CREATE TABLE IF NOT EXISTS operations (
-    operation_id TEXT PRIMARY KEY,
-    operation TEXT NOT NULL,
-    artifact_id TEXT,
-    details_json TEXT NOT NULL DEFAULT '{}',
-    write_set_json TEXT NOT NULL DEFAULT '[]',
-    base_revision TEXT,
-    created_at INTEGER NOT NULL,
-    author TEXT NOT NULL
-  );
-  CREATE TABLE IF NOT EXISTS actions (
-    action_id TEXT PRIMARY KEY,
-    operation TEXT NOT NULL,
-    scope TEXT NOT NULL CHECK (
-      scope IN ('book','artifact','layout','external','system')
-    ),
-    actor TEXT NOT NULL,
-    lane TEXT NOT NULL,
-    phase TEXT NOT NULL CHECK (
-      phase IN (
-        'requested','started','completed','failed','cancelled','conflicted'
-      )
-    ),
-    base_revision TEXT,
-    target_artifact_id TEXT,
-    target_action_id TEXT,
-    layout_json TEXT,
-    details_json TEXT NOT NULL DEFAULT '{}',
-    created_at INTEGER NOT NULL
-  );
-
-  CREATE TABLE IF NOT EXISTS action_events (
-    event_id TEXT PRIMARY KEY,
-    action_id TEXT NOT NULL
-      REFERENCES actions(action_id) ON DELETE CASCADE,
-    operation_id TEXT NOT NULL,
-    phase TEXT NOT NULL CHECK (
-      phase IN (
-        'requested','started','completed','failed','cancelled','conflicted'
-      )
-    ),
-    details_json TEXT NOT NULL DEFAULT '{}',
-    created_at INTEGER NOT NULL
-  );
-  CREATE TABLE IF NOT EXISTS action_parents (
-    action_id TEXT NOT NULL
-      REFERENCES actions(action_id) ON DELETE CASCADE,
-    parent_action_id TEXT NOT NULL
-      REFERENCES actions(action_id) ON DELETE RESTRICT,
-    PRIMARY KEY(action_id, parent_action_id)
-  );
-
-  CREATE TABLE IF NOT EXISTS action_artifacts (
-    action_id TEXT NOT NULL
-      REFERENCES actions(action_id) ON DELETE CASCADE,
-    artifact_id TEXT NOT NULL,
-    direction TEXT NOT NULL CHECK (direction IN ('input','output')),
-    PRIMARY KEY(action_id, artifact_id, direction)
-  );
-
-  CREATE TABLE IF NOT EXISTS action_write_set (
-    action_id TEXT NOT NULL
-      REFERENCES actions(action_id) ON DELETE CASCADE,
-    resource TEXT NOT NULL,
-    PRIMARY KEY(action_id, resource)
-  );
-  CREATE TABLE IF NOT EXISTS edit_batches (
-    action_id TEXT PRIMARY KEY
-      REFERENCES actions(action_id) ON DELETE CASCADE,
-    command_id TEXT NOT NULL UNIQUE,
-    intent_version INTEGER NOT NULL CHECK (intent_version > 0),
-    source_surface TEXT NOT NULL CHECK (
-      source_surface IN ('ui','slash','chat','system')
-    ),
-    actor TEXT NOT NULL,
-    sequence_id TEXT NOT NULL
-      REFERENCES sequences(sequence_id) ON DELETE RESTRICT,
-    base_revision TEXT NOT NULL,
-    committed_revision TEXT,
-    operations_json TEXT NOT NULL,
-    affected_ranges_json TEXT NOT NULL,
-    write_set_json TEXT NOT NULL,
-    preview_hash TEXT NOT NULL,
-    before_hash TEXT NOT NULL,
-    after_hash TEXT NOT NULL,
-    confirmation_policy TEXT NOT NULL CHECK (
-      confirmation_policy IN (
-        'always','risk-based','reversible-single-step'
-      )
-    ),
-    confirmation_json TEXT NOT NULL DEFAULT '{}',
-    warnings_json TEXT NOT NULL DEFAULT '[]',
-    created_at INTEGER NOT NULL
-  );
 
   CREATE INDEX IF NOT EXISTS artifacts_created
     ON artifacts(created_at, artifact_id);
@@ -763,14 +662,6 @@ export const SEMANTIC_SCHEMA_SQL = `
     ON prompt_entries(surface, created_at, prompt_id);
   CREATE INDEX IF NOT EXISTS messages_created
     ON messages(created_at, message_id);
-  CREATE INDEX IF NOT EXISTS operations_created
-    ON operations(created_at, operation_id);
-  CREATE INDEX IF NOT EXISTS operations_artifact_created
-    ON operations(artifact_id, created_at, operation_id);
-  CREATE INDEX IF NOT EXISTS action_events_action_created
-    ON action_events(action_id, created_at, event_id);
-  CREATE INDEX IF NOT EXISTS edit_batches_sequence_created
-    ON edit_batches(sequence_id, created_at, action_id);
 `;
 
 const RUNTIME_SIMILARITY_SCHEMA_SQL = `

@@ -86,16 +86,21 @@ versioned `runtime_%` ignore policy, and are never staged. Semantic surrogate
 identities are UUIDv7 values. Artifact slugs are human-facing names and can be
 reused after hard deletion; immutable CAS objects remain available to history.
 
-The current catalog format is schema version 4. It intentionally rejects v3
-and older catalogs rather than migrating them; create a fresh engine root.
+The current catalog format is schema version 14. It intentionally rejects
+older catalogs rather than migrating them; create a fresh engine root.
 
-The 25 versioned semantic tables are `engine_schema`, `book`, `artifacts`,
-`objects`, `artifact_files`, `book_metadata`, `artifact_metadata`,
-`entities`, `notebooks`, `cells`, `edges`, `runs`, `timeline`,
-`timeline_slots`, `timeline_audio`, `audio_waveforms`, `prompt_entries`,
-`messages`, `operations`, `actions`, `action_events`, `action_parents`,
-`action_artifacts`, `action_write_set`, and `job_runs`. Dolt's versioned
-`dolt_ignore` configuration table carries the local-table policy.
+The 31 versioned semantic tables are `engine_schema`, `book`, `artifacts`,
+`objects`, `artifact_files`, `artifact_streams`, `book_metadata`,
+`artifact_metadata`, `entities`, `notebooks`, `cells`, `edges`, `runs`,
+`cell_references`, `pinned_search_results`, `transcripts`,
+`transcript_segments`, `transcript_words`, `sequences`, `sequence_tracks`,
+`sequence_clips`, `clip_links`, `clip_transforms`, `transitions`,
+`caption_cues`, `timeline`, `timeline_slots`, `timeline_audio`,
+`audio_waveforms`, `prompt_entries`, and `messages`. Dolt's versioned
+`dolt_ignore` configuration table carries the local-table policy. Provenance
+is the commit log itself: every semantic commit carries its operation,
+parameters, and write set in a structured commit message, authored by the
+configured engine identity.
 
 The 14 local-only tables are `runtime_meta`, `runtime_jobs`,
 `runtime_resource_leases`, `runtime_object_publications`,
@@ -140,8 +145,8 @@ graphs remain available separately through `engine.notebooks`.
 - `engine.entities` and `engine.notebooks` — normalized characters, prompts,
   scenes, and notebook graph documents
 - `engine.prompts` and `engine.messages` — semantic prompt and message history
-- `engine.history` — revisions, generic action graph entries, and forward
-  restores
+- `engine.history` — revision listings, per-artifact history, and forward
+  restores derived from the Dolt commit log
 - `engine.jobs`, `engine.status`, `engine.settings`, and `engine.logs` —
   runtime coordination
 - `engine.storage` — object publication and catalog backup
@@ -179,27 +184,14 @@ active jobs are aborted during a restore.
 
 ## Future forks
 
-Schema v4 prepares stable row identities and normalized merge boundaries for
+Schema v14 prepares stable row identities and normalized merge boundaries for
 DoltHub-native forks. A fork is a separate catalog copy in another namespace,
 keeps the same `bookId`, and can open a pull request against the upstream
 `main` branch. User, origin, fork, and pull-request APIs are intentionally not
 part of this release; an open engine still accepts only its local `main`
-branch.
-
-Generic action records are available for higher-level workflows:
-
-```ts
-const action = await engine.history.recordAction({
-  operation: "generate_image",
-  scope: "artifact",
-  targetArtifactId: imageId,
-  inputArtifactIds: [promptId],
-  outputArtifactIds: [imageId],
-  writeSet: [`artifact:${imageId}`],
-});
-
-const page = engine.history.actions({ limit: 50 });
-```
+branch. Because provenance lives in authored Dolt commits rather than
+engine-owned meta-history tables, merging a fork never requires merging a
+parallel audit graph.
 
 ## Similarity
 

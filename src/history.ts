@@ -1,30 +1,15 @@
 import { rm } from "node:fs/promises";
 
-import type { DoltDiffRow } from "@dolthub/doltlite";
-import type {
-  GetHistoryActionsOptions,
-  HistoryAction,
-  HistoryActionEvent,
-  HistoryActionPage,
-  HistoryActionPhase,
-  HistoryActionRevision,
-  HistoryActionScope,
-  HistoryArtifactKind,
-  HistoryArtifactRef,
-  RecordActionInput,
-} from "./history-types.js";
 import type {
   ActionLogEntry,
   EngineError,
   Result,
   Revision,
-  RevisionFileChange,
 } from "./engine-types.js";
 import { ok } from "./engine-types.js";
 import {
   EngineContext,
   resultOf,
-  syncResultOf,
   type ArtifactRow,
 } from "./context.js";
 import { artifactSlug } from "./artifacts.js";
@@ -32,57 +17,10 @@ import { materializeArtifact } from "./files.js";
 import { assertUuidV7, isUuidV7, newUuidV7 } from "./ids.js";
 import {
   canonicalJson,
+  type CommitOperation,
   EngineFault,
-  parseJson,
+  parseCommitMessage,
 } from "./store.js";
-
-interface OperationDiff {
-  operation_id: string;
-  operation: string;
-  artifact_id: string | null;
-  details_json: string;
-  write_set_json: string;
-  base_revision: string | null;
-  created_at: number;
-  author: string;
-}
-
-interface ActionRow {
-  action_id: string;
-  operation: string;
-  scope: HistoryActionScope;
-  actor: string;
-  lane: string;
-  phase: HistoryActionPhase;
-  base_revision: string | null;
-  target_artifact_id: string | null;
-  target_action_id: string | null;
-  layout_json: string | null;
-  details_json: string;
-  created_at: number;
-}
-
-interface ActionEventRow {
-  event_id: string;
-  action_id: string;
-  operation_id: string;
-  phase: HistoryActionPhase;
-  details_json: string;
-  created_at: number;
-}
-
-interface ActionEventRevision {
-  hash: string;
-  files: string[];
-  fileChanges: RevisionFileChange[];
-}
-
-interface OperationCommitRow {
-  to_operation_id: string;
-  to_artifact_id: string | null;
-  to_commit: string;
-  from_commit: string;
-}
 
 interface HistoricalArtifactRow extends ArtifactRow {}
 
@@ -240,15 +178,6 @@ export function createHistoryApi(context: EngineContext) {
     actionLog: (
       options?: { limit?: number; action?: string },
     ): ActionLogEntry[] => actionLog(context, options),
-    actions: (
-      options?: GetHistoryActionsOptions,
-    ): Result<HistoryActionPage, EngineError> => actions(context, options),
-    action: (actionId: string): Result<HistoryAction, EngineError> =>
-      action(context, actionId),
-    recordAction: (
-      input: RecordActionInput,
-    ): Promise<Result<HistoryActionRevision, EngineError>> =>
-      recordAction(context, input),
   };
 }
 
@@ -271,7 +200,7 @@ function revisionForHash(context: EngineContext, hash: string): Revision {
 }
 
 function revisionHistory(context: EngineContext, limit: number): Revision[] {
-  return allRevisions(context).slice(0, Math.max(0, limit));
+  return commitRevisions(context).slice(0, Math.max(0, limit));
 }
 
 function artifactHistory(
@@ -279,7 +208,7 @@ function artifactHistory(
   artifactReference: string,
   limit: number,
 ): Revision[] {
-  const revisions = allRevisions(context);
+  const revisions = commitRevisions(context);
   let artifactId: string;
   if (isUuidV7(artifactReference)) {
     artifactId = artifactReference;
@@ -302,69 +231,51 @@ function artifactHistory(
     .slice(0, Math.max(0, limit));
 }
 
-function allRevisions(context: EngineContext): Revision[] {
-  const commits = context.store.db.doltLog();
+// History listings are direct commit-log reads: every engine commit carries
+// its operation, parameters, and write set in its structured message, so no
+// per-commit table diffs are needed to describe a revision.
+function commitRevisions(context: EngineContext): Revision[] {
   const revisions: Revision[] = [];
-  for (let index = 0; index < commits.length - 1; index += 1) {
-    const commit = commits[index]!;
-    const parent = commits[index + 1]!;
-    const operations = context.store
-      .diff(parent.commit_hash, commit.commit_hash, "operations")
-      .filter((row) => row.diff_type === "added")
-      .map(operationFromDiff)
-      .filter(
-        (operation): operation is OperationDiff => operation !== null,
-      );
-    for (const operation of operations) {
-      const details = parseJson<Record<string, unknown>>(
-        operation.details_json,
-        {},
-      );
-      const writeSet = parseJson<string[]>(operation.write_set_json, []);
-      const artifactSlugAtRevision = operation.artifact_id
-        ? artifactSlugAt(context, operation.artifact_id, commit.commit_hash)
-        : undefined;
-      const fileChanges = revisionFileChanges(
-        context.store.diff(
-          parent.commit_hash,
-          commit.commit_hash,
-          "artifact_files",
-        ),
-        operation.artifact_id,
-      );
-      revisions.push({
-        hash: commit.commit_hash,
-        message: commit.message,
-        date: new Date(operation.created_at).toISOString(),
-        author: operation.author,
-        operationId: operation.operation_id,
-        operation: operation.operation,
-        ...(operation.artifact_id
-          ? { artifactId: operation.artifact_id }
-          : {}),
-        ...(artifactSlugAtRevision
-          ? { artifactSlug: artifactSlugAtRevision }
-          : {}),
-        details: {
-          ...details,
-          ...(writeSet.length > 0 ? { writeSet } : {}),
-          ...(operation.base_revision
-            ? { baseRevision: operation.base_revision }
-            : {}),
-        },
-        files: fileChanges.map((change) => change.file),
-        fileChanges,
-      });
-    }
+  for (const commit of context.store.db.doltLog()) {
+    const parsed = parseCommitMessage(commit.message);
+    if (!parsed) continue;
+    revisions.push(revisionFromCommit(context, commit, parsed));
   }
   return revisions;
+}
+
+function revisionFromCommit(
+  context: EngineContext,
+  commit: { commit_hash: string; message: string; date: string; committer: string },
+  parsed: CommitOperation,
+): Revision {
+  const artifactSlugAtRevision = parsed.artifactId
+    ? artifactSlugAt(context, parsed.artifactId, commit.commit_hash)
+    : undefined;
+  return {
+    hash: commit.commit_hash,
+    message: commit.message,
+    date: commit.date,
+    author: parsed.actor ?? commit.committer,
+    operationId: parsed.operationId,
+    operation: parsed.operation,
+    ...(parsed.artifactId ? { artifactId: parsed.artifactId } : {}),
+    ...(artifactSlugAtRevision
+      ? { artifactSlug: artifactSlugAtRevision }
+      : {}),
+    details: {
+      ...parsed.details,
+      ...(parsed.writeSet.length > 0 ? { writeSet: parsed.writeSet } : {}),
+      ...(parsed.baseRevision ? { baseRevision: parsed.baseRevision } : {}),
+    },
+  };
 }
 
 function resolveRevision(
   context: EngineContext,
   reference: string,
 ): Revision | null {
-  const historical = allRevisions(context).find(
+  const historical = commitRevisions(context).find(
     (revision) =>
       revision.hash === reference || revision.hash.startsWith(reference),
   );
@@ -906,360 +817,6 @@ function actionLog(
     }));
 }
 
-function actions(
-  context: EngineContext,
-  options: GetHistoryActionsOptions = {},
-): Result<HistoryActionPage, EngineError> {
-  return syncResultOf(() => {
-    const limit = Math.max(1, options.limit ?? 200);
-    const params: unknown[] = [];
-    let cursorClause = "";
-    if (options.cursor) {
-      const cursor = context.store.db
-        .prepare("SELECT created_at, action_id FROM actions WHERE action_id=?")
-        .get(options.cursor) as unknown as
-        | { created_at: number; action_id: string }
-        | undefined;
-      if (cursor) {
-        cursorClause = "WHERE (created_at < ? OR (created_at = ? AND action_id < ?))";
-        params.push(cursor.created_at, cursor.created_at, cursor.action_id);
-      }
-    }
-    params.push(limit + 1);
-    const rows = context.store.db
-      .prepare(
-        `${ACTION_SELECT}
-         ${cursorClause}
-         ORDER BY created_at DESC, action_id DESC
-         LIMIT ?`,
-      )
-      .all(...params) as unknown as ActionRow[];
-    const page = rows.slice(0, limit);
-    return {
-      headRevision: context.store.head,
-      actions: page
-        .map((row) => actionFromRow(context, row))
-        .sort((left, right) => left.date.localeCompare(right.date)),
-      ...(rows.length > limit ? { nextCursor: page.at(-1)?.action_id } : {}),
-    };
-  });
-}
-
-function action(
-  context: EngineContext,
-  actionId: string,
-): Result<HistoryAction, EngineError> {
-  return syncResultOf(() => requiredAction(context, actionId));
-}
-
-async function recordAction(
-  context: EngineContext,
-  input: RecordActionInput,
-): Promise<Result<HistoryActionRevision, EngineError>> {
-  return resultOf(async () => {
-    assertWriteSet(context, input.baseRevision, input.writeSet ?? []);
-    const actionId = input.actionId ?? newUuidV7();
-    assertUuidV7(actionId, "Action ID");
-    const phase = input.phase ?? "completed";
-    const scope = input.scope ?? "book";
-    assertActionPhase(phase);
-    assertActionScope(scope);
-    for (const parentId of input.parentActionIds ?? []) {
-      assertUuidV7(parentId, "Parent action ID");
-      requiredAction(context, parentId);
-    }
-    if (input.targetActionId) {
-      assertUuidV7(input.targetActionId, "Target action ID");
-    }
-    const actor = input.actor ?? "videobook";
-    const inputArtifacts = resolveArtifactReferences(
-      context,
-      input.inputArtifactIds ?? [],
-    );
-    const outputArtifacts = resolveArtifactReferences(
-      context,
-      input.outputArtifactIds ?? [],
-    );
-    const targetArtifactId = input.targetArtifactId
-      ? context.artifactRow(input.targetArtifactId).artifact_id
-      : null;
-    const mutation = await context.store.semantic(
-      {
-        operation: `action:${input.operation}`,
-        ...(targetArtifactId ? { artifactId: targetArtifactId } : {}),
-        details: {
-          ...(input.details ?? {}),
-          actionId,
-          phase,
-          scope,
-          lane: input.lane ?? actor,
-        },
-        ...(input.baseRevision ? { baseRevision: input.baseRevision } : {}),
-        writeSet: input.writeSet ?? [],
-      },
-      (operationId, now) => {
-        context.store.db
-          .prepare(
-            `INSERT INTO actions(
-              action_id, operation, scope, actor, lane, phase,
-              base_revision, target_artifact_id, target_action_id,
-              layout_json, details_json, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(action_id) DO UPDATE SET
-              operation=excluded.operation,
-              scope=excluded.scope,
-              actor=excluded.actor,
-              lane=excluded.lane,
-              phase=excluded.phase,
-              base_revision=excluded.base_revision,
-              target_artifact_id=excluded.target_artifact_id,
-              target_action_id=excluded.target_action_id,
-              layout_json=excluded.layout_json,
-              details_json=excluded.details_json`,
-          )
-          .run(
-            actionId,
-            input.operation,
-            scope,
-            actor,
-            input.lane ?? actor,
-            phase,
-            input.baseRevision ?? null,
-            targetArtifactId,
-            input.targetActionId ?? null,
-            input.layout ? canonicalJson(input.layout) : null,
-            canonicalJson(input.details ?? {}),
-            now,
-          );
-        context.store.db
-          .prepare(
-            `INSERT INTO action_events(
-              event_id, action_id, operation_id, phase,
-              details_json, created_at
-            ) VALUES (?, ?, ?, ?, ?, ?)`,
-          )
-          .run(
-            newUuidV7(),
-            actionId,
-            operationId,
-            phase,
-            canonicalJson(input.details ?? {}),
-            now,
-          );
-        replaceActionLinks(
-          context,
-          actionId,
-          input.parentActionIds ?? [],
-          inputArtifacts,
-          outputArtifacts,
-          input.writeSet ?? [],
-        );
-      },
-    );
-    return ok(
-      {
-        action: requiredAction(context, actionId),
-        revision: revisionForHash(context, mutation.revision),
-      },
-      mutation.revision,
-    );
-  });
-}
-
-function requiredAction(context: EngineContext, actionId: string): HistoryAction {
-  const row = context.store.db
-    .prepare(`${ACTION_SELECT} WHERE action_id=?`)
-    .get(actionId) as unknown as ActionRow | undefined;
-  if (!row) {
-    throw new EngineFault({
-      code: "NOT_FOUND",
-      message: `History action not found: ${actionId}`,
-    });
-  }
-  return actionFromRow(context, row);
-}
-
-function actionFromRow(
-  context: EngineContext,
-  row: ActionRow,
-): HistoryAction {
-  const parents = (
-    context.store.db
-      .prepare("SELECT parent_action_id FROM action_parents WHERE action_id=?")
-      .all(row.action_id) as unknown as Array<{ parent_action_id: string }>
-  ).map((item) => item.parent_action_id);
-  const links = context.store.db
-    .prepare(
-      `SELECT artifact_id, direction
-       FROM action_artifacts WHERE action_id=?`,
-    )
-    .all(row.action_id) as unknown as Array<{
-    artifact_id: string;
-    direction: "input" | "output";
-  }>;
-  const events = context.store.db
-    .prepare(
-      `SELECT event_id, action_id, operation_id, phase,
-              details_json, created_at
-       FROM action_events WHERE action_id=?
-       ORDER BY created_at, event_id`,
-    )
-    .all(row.action_id) as unknown as ActionEventRow[];
-  const revisionsByOperation = actionEventRevisions(context, events);
-  return {
-    id: row.action_id,
-    operation: row.operation,
-    title: titleForOperation(row.operation),
-    scope: row.scope,
-    actor: row.actor,
-    lane: row.lane,
-    date: new Date(row.created_at).toISOString(),
-    phase: row.phase,
-    ...(row.base_revision ? { baseRevision: row.base_revision } : {}),
-    parentActionIds: parents,
-    inputArtifacts: links
-      .filter((link) => link.direction === "input")
-      .map((link) => artifactRef(context, link.artifact_id)),
-    outputArtifacts: links
-      .filter((link) => link.direction === "output")
-      .map((link) => artifactRef(context, link.artifact_id)),
-    ...(row.target_artifact_id
-      ? { targetArtifactId: row.target_artifact_id }
-      : {}),
-    ...(row.target_action_id ? { targetActionId: row.target_action_id } : {}),
-    ...(row.layout_json
-      ? {
-          layout: parseJson(row.layout_json, { stage: 0, column: 0 }),
-        }
-      : {}),
-    details: parseJson<Record<string, unknown>>(row.details_json, {}),
-    events: events.map((event) => {
-      const revision = revisionsByOperation.get(event.operation_id);
-      return {
-        id: event.event_id,
-        revision: revision?.hash ?? context.store.head,
-        phase: event.phase,
-        date: new Date(event.created_at).toISOString(),
-        details: parseJson(event.details_json, {}),
-        files: revision?.files ?? [],
-        fileChanges: revision?.fileChanges ?? [],
-      } satisfies HistoryActionEvent;
-    }),
-  };
-}
-
-function actionEventRevisions(
-  context: EngineContext,
-  events: ActionEventRow[],
-): Map<string, ActionEventRevision> {
-  const result = new Map<string, ActionEventRevision>();
-  const findCommit = context.store.db.prepare(
-    `SELECT to_operation_id, to_artifact_id, to_commit, from_commit
-     FROM dolt_diff_operations
-     WHERE to_operation_id=? AND diff_type='added'
-     LIMIT 1`,
-  );
-  for (const operationId of new Set(events.map((event) => event.operation_id))) {
-    const row = findCommit.get(operationId) as unknown as
-      | OperationCommitRow
-      | undefined;
-    if (!row) continue;
-    const fileChanges = revisionFileChanges(
-      context.store.diff(row.from_commit, row.to_commit, "artifact_files"),
-      row.to_artifact_id,
-    );
-    result.set(operationId, {
-      hash: row.to_commit,
-      files: fileChanges.map((change) => change.file),
-      fileChanges,
-    });
-  }
-  return result;
-}
-
-function replaceActionLinks(
-  context: EngineContext,
-  actionId: string,
-  parents: string[],
-  inputs: string[],
-  outputs: string[],
-  writeSet: string[],
-): void {
-  context.store.db
-    .prepare("DELETE FROM action_parents WHERE action_id=?")
-    .run(actionId);
-  context.store.db
-    .prepare("DELETE FROM action_artifacts WHERE action_id=?")
-    .run(actionId);
-  context.store.db
-    .prepare("DELETE FROM action_write_set WHERE action_id=?")
-    .run(actionId);
-  const insertParent = context.store.db.prepare(
-    "INSERT INTO action_parents(action_id, parent_action_id) VALUES (?, ?)",
-  );
-  for (const parent of new Set(parents)) insertParent.run(actionId, parent);
-  const insertArtifact = context.store.db.prepare(
-    `INSERT INTO action_artifacts(action_id, artifact_id, direction)
-     VALUES (?, ?, ?)`,
-  );
-  for (const artifactId of new Set(inputs)) {
-    insertArtifact.run(actionId, artifactId, "input");
-  }
-  for (const artifactId of new Set(outputs)) {
-    insertArtifact.run(actionId, artifactId, "output");
-  }
-  const insertResource = context.store.db.prepare(
-    "INSERT INTO action_write_set(action_id, resource) VALUES (?, ?)",
-  );
-  for (const resource of new Set(writeSet)) insertResource.run(actionId, resource);
-}
-
-function assertWriteSet(
-  context: EngineContext,
-  baseRevision: string | undefined,
-  writeSet: string[],
-): void {
-  if (!baseRevision || baseRevision === context.store.head) return;
-  const revisions = allRevisions(context);
-  let baseIndex = revisions.findIndex(
-    (revision) =>
-      revision.hash === baseRevision || revision.hash.startsWith(baseRevision),
-  );
-  if (baseIndex < 0) {
-    const commit = context.store.db.doltLog().find(
-      (item) =>
-        item.commit_hash === baseRevision || item.commit_hash.startsWith(baseRevision),
-    );
-    if (!commit) {
-      throw new EngineFault({
-        code: "STALE_REVISION",
-        message: `Base revision not found: ${baseRevision}`,
-      });
-    }
-    // Initialization has no operation record, so it is older than every
-    // operation-bearing revision we can inspect for a write-set conflict.
-    baseIndex = revisions.length;
-  }
-  const requested = new Set(writeSet);
-  const conflicts = new Set<string>();
-  for (const revision of revisions.slice(0, baseIndex)) {
-    const changed = revision.details?.writeSet;
-    if (!Array.isArray(changed)) continue;
-    for (const resource of changed) {
-      if (typeof resource === "string" && requested.has(resource)) {
-        conflicts.add(resource);
-      }
-    }
-  }
-  if (conflicts.size > 0) {
-    throw new EngineFault({
-      code: "ACTION_CONFLICT",
-      message: `Action conflicts with newer changes: ${[...conflicts].join(", ")}`,
-      details: { resources: [...conflicts] },
-    });
-  }
-}
-
 function resetArtifactRuntime(
   context: EngineContext,
   artifactId: string,
@@ -1474,69 +1031,6 @@ function insertNotebookChildren(
   }
 }
 
-function operationFromDiff(row: DoltDiffRow): OperationDiff | null {
-  const prefix = row.diff_type === "removed" ? "from_" : "to_";
-  const operationId = row[`${prefix}operation_id`];
-  const operation = row[`${prefix}operation`];
-  const detailsJson = row[`${prefix}details_json`];
-  const writeSetJson = row[`${prefix}write_set_json`];
-  const createdAt = row[`${prefix}created_at`];
-  const author = row[`${prefix}author`];
-  if (
-    typeof operationId !== "string" ||
-    typeof operation !== "string" ||
-    typeof detailsJson !== "string" ||
-    typeof writeSetJson !== "string" ||
-    typeof createdAt !== "number" ||
-    typeof author !== "string"
-  ) {
-    return null;
-  }
-  const artifactId = row[`${prefix}artifact_id`];
-  const baseRevision = row[`${prefix}base_revision`];
-  return {
-    operation_id: operationId,
-    operation,
-    artifact_id: typeof artifactId === "string" ? artifactId : null,
-    details_json: detailsJson,
-    write_set_json: writeSetJson,
-    base_revision: typeof baseRevision === "string" ? baseRevision : null,
-    created_at: createdAt,
-    author,
-  };
-}
-
-function revisionFileChanges(
-  rows: DoltDiffRow[],
-  artifactId: string | null,
-): RevisionFileChange[] {
-  const changes: RevisionFileChange[] = [];
-  for (const row of rows) {
-    const fromArtifact = row.from_artifact_id;
-    const toArtifact = row.to_artifact_id;
-    if (
-      artifactId &&
-      fromArtifact !== artifactId &&
-      toArtifact !== artifactId
-    ) {
-      continue;
-    }
-    const fromPath =
-      typeof row.from_path === "string" ? row.from_path : undefined;
-    const toPath = typeof row.to_path === "string" ? row.to_path : undefined;
-    const file = toPath ?? fromPath;
-    if (!file) continue;
-    changes.push({
-      status: row.diff_type,
-      file,
-      ...(fromPath && toPath && fromPath !== toPath
-        ? { oldFile: fromPath }
-        : {}),
-    });
-  }
-  return changes;
-}
-
 function artifactSlugAt(
   context: EngineContext,
   artifactId: string,
@@ -1549,66 +1043,3 @@ function artifactSlugAt(
     .get(revision, artifactId) as unknown as { slug: string } | undefined;
   return row?.slug;
 }
-
-function resolveArtifactReferences(
-  context: EngineContext,
-  references: string[],
-): string[] {
-  return [
-    ...new Set(
-      references.map((reference) => context.artifactRow(reference).artifact_id),
-    ),
-  ];
-}
-
-function artifactRef(
-  context: EngineContext,
-  artifactId: string,
-): HistoryArtifactRef {
-  try {
-    const artifact = context.artifactRowById(artifactId);
-    return {
-      id: artifact.artifact_id,
-      slug: artifact.slug,
-      kind: historyArtifactKind(artifact.kind),
-    };
-  } catch {
-    return { id: artifactId, slug: artifactId, kind: "unknown" };
-  }
-}
-
-function historyArtifactKind(kind: ArtifactRow["kind"]): HistoryArtifactKind {
-  return kind;
-}
-
-function assertActionPhase(value: string): asserts value is HistoryActionPhase {
-  if (
-    ![
-      "requested",
-      "started",
-      "completed",
-      "failed",
-      "cancelled",
-      "conflicted",
-    ].includes(value)
-  ) {
-    throw new Error(`Invalid action phase: ${value}`);
-  }
-}
-
-function assertActionScope(value: string): asserts value is HistoryActionScope {
-  if (!["book", "artifact", "layout", "external", "system"].includes(value)) {
-    throw new Error(`Invalid action scope: ${value}`);
-  }
-}
-
-function titleForOperation(operation: string): string {
-  return operation.replaceAll("_", " ").replaceAll("-", " ");
-}
-
-const ACTION_SELECT = `
-  SELECT action_id, operation, scope, actor, lane, phase,
-         base_revision, target_artifact_id, target_action_id,
-         layout_json, details_json, created_at
-  FROM actions
-`;

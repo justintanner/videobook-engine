@@ -32,7 +32,6 @@ const MERGE_TABLES = [
   "notebooks",
   "cells",
   "prompt_entries",
-  "actions",
   "timeline",
   "timeline_slots",
 ] as const;
@@ -87,16 +86,6 @@ const MERGE_SCHEMA_SQL = `
     surface TEXT NOT NULL,
     prompt TEXT NOT NULL,
     context_json TEXT NOT NULL,
-    created_at INTEGER NOT NULL
-  );
-  CREATE TABLE actions (
-    action_id TEXT PRIMARY KEY,
-    operation TEXT NOT NULL,
-    scope TEXT NOT NULL,
-    actor TEXT NOT NULL,
-    lane TEXT NOT NULL,
-    phase TEXT NOT NULL,
-    details_json TEXT NOT NULL,
     created_at INTEGER NOT NULL
   );
   CREATE TABLE timeline (
@@ -241,9 +230,9 @@ describe("single-book Dolt engine", () => {
     suppliedAgain.close();
   });
 
-  it("creates the exact normalized v12 semantic and runtime schema", async () => {
+  it("creates the exact normalized v14 semantic and runtime schema", async () => {
     const { engine, dataDir } = await setup();
-    expect(SCHEMA_VERSION).toBe(13);
+    expect(SCHEMA_VERSION).toBe(14);
     engine.close();
 
     const db = new DatabaseSync(path.join(dataDir, "videobook.db"));
@@ -261,7 +250,7 @@ describe("single-book Dolt engine", () => {
     expect(tables).toEqual(
       [...SEMANTIC_TABLES, ...RUNTIME_TABLES].sort(),
     );
-    expect(tables).toHaveLength(61);
+    expect(tables).toHaveLength(54);
 
     const columns = (table: string) =>
       (
@@ -309,7 +298,6 @@ describe("single-book Dolt engine", () => {
     expect(columns("sequences")).toContain("frame_rate_numerator");
     expect(columns("sequence_clips")).toContain("source_duration_ticks");
     expect(columns("caption_cues")).toContain("transcript_revision");
-    expect(columns("edit_batches")).toContain("preview_hash");
     expect(columns("runtime_media_segments")).toContain("source_range_json");
     expect(columns("runtime_segment_embeddings")).toContain("embedding_space");
     expect(columns("runtime_index_coverage")).toContain("covered_ranges_json");
@@ -318,14 +306,16 @@ describe("single-book Dolt engine", () => {
       (db
         .prepare("SELECT version FROM engine_schema WHERE singleton=1")
         .get() as { version: number }).version,
-    ).toBe(13);
+    ).toBe(14);
     expect(
       db
         .prepare(
           `SELECT 1 AS present FROM sqlite_master
            WHERE name IN (
              'notebook_cells','notebook_edges','notebook_runs',
-             'timelines','artifact_events','runtime_engine_leases'
+             'timelines','artifact_events','runtime_engine_leases',
+             'operations','actions','action_events','action_parents',
+             'action_artifacts','action_write_set','edit_batches'
            )`,
         )
         .get(),
@@ -333,7 +323,7 @@ describe("single-book Dolt engine", () => {
     db.close();
   });
 
-  it.each([3, 4])("rejects v%s catalogs without an explicit migration", async (version) => {
+  it.each([3, 4, 13])("rejects v%s catalogs without an explicit migration", async (version) => {
     const root = await mkdtemp(path.join(tmpdir(), `videobook-v${version}-schema-`));
     roots.push(root);
     const dataDir = path.join(root, "data");
@@ -593,12 +583,6 @@ describe("single-book Dolt engine", () => {
         edges: [],
       }),
     ).toMatchObject({ ok: false, error: { code: "INVALID_INPUT" } });
-    expect(
-      await engine.history.recordAction({
-        actionId: "action-1",
-        operation: "invalid",
-      }),
-    ).toMatchObject({ ok: false, error: { code: "INVALID_INPUT" } });
     engine.close();
   });
 
@@ -646,8 +630,6 @@ describe("single-book Dolt engine", () => {
     const rightCell = uuidv7();
     const leftPrompt = uuidv7();
     const rightPrompt = uuidv7();
-    const leftAction = uuidv7();
-    const rightAction = uuidv7();
     const leftSlot = uuidv7();
     const rightSlot = uuidv7();
 
@@ -667,17 +649,12 @@ describe("single-book Dolt engine", () => {
       ) VALUES (?, 'merge', 'left', '{}', 1)`,
     ).run(leftPrompt);
     db.prepare(
-      `INSERT INTO actions(
-        action_id, operation, scope, actor, lane, phase, details_json, created_at
-      ) VALUES (?, 'left', 'book', 'test', 'left', 'completed', '{}', 1)`,
-    ).run(leftAction);
-    db.prepare(
       `INSERT INTO timeline_slots(slot_id, artifact_id, ordinal)
        VALUES (?, ?, 0)`,
     ).run(leftSlot, leftArtifact);
     commitTables(
       db,
-      ["entities", "cells", "prompt_entries", "actions", "timeline_slots"],
+      ["entities", "cells", "prompt_entries", "timeline_slots"],
       "left fork",
     );
 
@@ -700,17 +677,12 @@ describe("single-book Dolt engine", () => {
       ) VALUES (?, 'merge', 'right', '{}', 2)`,
     ).run(rightPrompt);
     db.prepare(
-      `INSERT INTO actions(
-        action_id, operation, scope, actor, lane, phase, details_json, created_at
-      ) VALUES (?, 'right', 'book', 'test', 'right', 'completed', '{}', 2)`,
-    ).run(rightAction);
-    db.prepare(
       `INSERT INTO timeline_slots(slot_id, artifact_id, ordinal)
        VALUES (?, ?, 0)`,
     ).run(rightSlot, rightArtifact);
     commitTables(
       db,
-      ["entities", "cells", "prompt_entries", "actions", "timeline_slots"],
+      ["entities", "cells", "prompt_entries", "timeline_slots"],
       "right fork",
     );
 
@@ -958,44 +930,47 @@ describe("single-book Dolt engine", () => {
     engine.close();
   });
 
-  it("records generic action graph entries and detects stale write sets", async () => {
+  it("derives history listings from structured commit messages", async () => {
     const { engine } = await setup();
     const artifact = value(
       await engine.artifacts.create({ kind: "image", slug: "img-action" }),
     );
-    const base = engine.head;
-    const action = value(
-      await engine.history.recordAction({
-        operation: "generate_image",
-        scope: "artifact",
-        targetArtifactId: artifact.artifactId,
-        inputArtifactIds: [artifact.artifactId],
-        outputArtifactIds: [artifact.artifactId],
-        writeSet: [`artifact:${artifact.artifactId}`],
-        details: { prompt: "cat" },
-      }),
+    const written = await engine.files.write(
+      artifact.artifactId,
+      "original.png",
+      "pixel",
     );
-    expect(action.action.operation).toBe("generate_image");
-    expect(action.action.inputArtifacts[0]?.id).toBe(artifact.artifactId);
-    expect(value(engine.history.action(action.action.id)).events).toHaveLength(1);
-    expect(value(engine.history.actions()).actions).toHaveLength(1);
+    if (!written.ok || !written.revision) throw new Error("missing revision");
 
-    value(
-      await engine.history.recordAction({
-        operation: "touch",
-        writeSet: [`artifact:${artifact.artifactId}`],
-      }),
-    );
-    const conflict = await engine.history.recordAction({
-      operation: "stale_action",
-      baseRevision: base,
-      writeSet: [`artifact:${artifact.artifactId}`],
+    const revisions = engine.history.revisions();
+    const latest = revisions[0]!;
+    expect(latest.operation).toBe("write_file");
+    expect(latest.hash).toBe(written.revision);
+    expect(latest.artifactId).toBe(artifact.artifactId);
+    expect(latest.artifactSlug).toBe(artifact.slug);
+    expect(latest.author).toBe("Videobook");
+    expect(latest.operationId).toMatch(/^[0-9a-f-]{36}$/);
+    expect(latest.details).toMatchObject({
+      path: "original.png",
+      writeSet: [
+        `artifact:${artifact.artifactId}`,
+        `file:${artifact.artifactId}:original.png`,
+      ],
     });
-    expect(conflict).toMatchObject({ ok: false, error: { code: "ACTION_CONFLICT" } });
+    expect(revisions[1]?.operation).toBe("create_artifact");
+
+    const artifactRevisions = engine.history.artifact(artifact.artifactId);
+    expect(artifactRevisions.map((revision) => revision.operation)).toEqual([
+      "write_file",
+      "create_artifact",
+    ]);
+    expect(
+      engine.history.resolveRevision(written.revision.slice(0, 12))?.hash,
+    ).toBe(written.revision);
     engine.close();
   });
 
-  it("resolves action event revisions without scanning unrelated commits", async () => {
+  it("lists history without per-commit table diffs", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "videobook-action-history-"));
     roots.push(root);
     const context = new EngineContext({
@@ -1004,9 +979,7 @@ describe("single-book Dolt engine", () => {
       initialBookSlug: "action-history",
     });
     const history = createHistoryApi(context);
-    // Seed two unrelated commits so naive revision scans would wander.
-    // recordOperation no longer mints commits, so seed through a direct
-    // semantic mutation instead.
+    // Seed three unrelated commits so naive revision scans would wander.
     const seed = async (operation: string): Promise<void> => {
       await context.store.semantic({ operation }, () => {
         context.store.db
@@ -1019,6 +992,7 @@ describe("single-book Dolt engine", () => {
     };
     await seed("seed-one");
     await seed("seed-two");
+    await seed("seed-three");
     const originalDiff = context.store.diff.bind(context.store);
     let diffCalls = 0;
     context.store.diff = (from, to, table) => {
@@ -1026,17 +1000,14 @@ describe("single-book Dolt engine", () => {
       return originalDiff(from, to, table);
     };
 
-    const recorded = value(
-      await history.recordAction({
-        operation: "bounded_action_history",
-        details: { source: "test" },
-      }),
-    );
-    expect(recorded.action.events).toHaveLength(1);
-    expect(recorded.action.events[0]?.revision).toBe(recorded.revision.hash);
-    expect(value(history.action(recorded.action.id)).events).toHaveLength(1);
-    expect(value(history.actions()).actions).toHaveLength(1);
-    expect(diffCalls).toBe(3);
+    const revisions = history.revisions();
+    expect(revisions.map((revision) => revision.operation)).toEqual([
+      "seed-three",
+      "seed-two",
+      "seed-one",
+    ]);
+    expect(history.artifact(uuidv7())).toEqual([]);
+    expect(diffCalls).toBe(0);
     context.store.close();
   });
 

@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 
 import { DatabaseSync } from "@dolthub/doltlite";
+import { v7 as uuidv7 } from "uuid";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { EngineContext } from "../src/context.js";
@@ -10,6 +11,7 @@ import { createEngine } from "../src/engine.js";
 import { createNotebooksApi } from "../src/domain.js";
 import { createHistoryApi } from "../src/history.js";
 import { SEMANTIC_TABLES } from "../src/schema.js";
+import { parseCommitMessage } from "../src/store.js";
 
 const roots: string[] = [];
 
@@ -213,10 +215,7 @@ describe("commit hygiene", () => {
     const head = context.store.head;
     value(await history.recordOperation("touch"));
     expect(context.store.head).toBe(head);
-    const recorded = context.store.db
-      .prepare("SELECT COUNT(*) AS count FROM operations WHERE operation='touch'")
-      .get() as unknown as { count: number };
-    expect(recorded.count).toBe(0);
+    expect(context.store.db.doltLog({ limit: 1 })[0]?.commit_hash).toBe(head);
     context.store.close();
   });
 
@@ -239,13 +238,48 @@ describe("commit hygiene", () => {
       },
     );
     expect(context.store.head).toBe(head);
-    expect(
-      context.store.db
-        .prepare(
-          "SELECT COUNT(*) AS count FROM operations WHERE operation='clear_artifact_failure'",
-        )
-        .get() as unknown as { count: number },
-    ).toMatchObject({ count: 0 });
+    context.store.close();
+  });
+
+  it("records the operation and its params in a structured commit message", async () => {
+    const root = await tempRoot();
+    const context = new EngineContext({
+      dataDir: path.join(root, "data"),
+      workspaceDir: path.join(root, "workspace"),
+      initialBookSlug: "demo",
+    });
+    const artifactId = uuidv7();
+    const baseRevision = context.store.head;
+    const mutation = await context.store.semantic(
+      {
+        operation: "write_thing",
+        artifactId,
+        details: { size: 12, path: "a.png" },
+        writeSet: [`artifact:${artifactId}`],
+        baseRevision,
+        author: "ada",
+      },
+      () => {
+        context.store.db
+          .prepare("INSERT INTO book_metadata(key, value_json) VALUES ('k', '{}')")
+          .run();
+      },
+    );
+    const commit = context.store.db.doltLog({ limit: 1 })[0]!;
+    expect(commit.commit_hash).toBe(mutation.revision);
+    expect(commit.message.split("\n")[0]).toBe(`write_thing artifact:${artifactId}`);
+    expect(parseCommitMessage(commit.message)).toEqual({
+      operation: "write_thing",
+      operationId: mutation.operationId,
+      artifactId,
+      baseRevision,
+      actor: "ada",
+      writeSet: [`artifact:${artifactId}`],
+      details: { path: "a.png", size: 12 },
+    });
+    // Catalog initialization predates structured messages and is not parsed.
+    const initial = context.store.db.doltLog().at(-1)!;
+    expect(parseCommitMessage(initial.message)).toBeNull();
     context.store.close();
   });
 });

@@ -35,7 +35,12 @@ import {
 import { EngineContext, resultOf, syncResultOf } from "./context.js";
 import { createSequencesApi } from "./sequences.js";
 import { newUuidV7 } from "./ids.js";
-import { canonicalJson, EngineFault, parseJson } from "./store.js";
+import {
+  canonicalJson,
+  type CommitOperation,
+  EngineFault,
+  parseCommitMessage,
+} from "./store.js";
 
 interface Projection {
   preview: EditPreview;
@@ -50,26 +55,6 @@ interface StreamRow {
   time_base_numerator: number;
   time_base_denominator: number;
   duration_ticks: number;
-}
-
-interface EditBatchRow {
-  action_id: string;
-  command_id: string;
-  intent_version: number;
-  source_surface: EditIntent["sourceSurface"];
-  actor: string;
-  sequence_id: string;
-  base_revision: string;
-  committed_revision: string | null;
-  operations_json: string;
-  affected_ranges_json: string;
-  write_set_json: string;
-  preview_hash: string;
-  before_hash: string;
-  after_hash: string;
-  confirmation_policy: EditIntent["confirmationPolicy"];
-  warnings_json: string;
-  created_at: number;
 }
 
 export function createEditsApi(context: EngineContext) {
@@ -152,7 +137,6 @@ async function commitEdit(
     const artifactIds = unique(
       initial.sequence.clips.map((clip) => clip.source.artifactId),
     );
-    const parentActionIds = latestParentActions(context, initial.preview.writeSet);
     const mutation = await context.store.semantic(
       {
         operation: "commit_edit",
@@ -160,28 +144,26 @@ async function commitEdit(
           commandId: intent.commandId,
           actionId,
           sequenceId: intent.sequenceId,
+          intentVersion: intent.intentVersion,
           sourceSurface: intent.sourceSurface,
+          confirmationPolicy: intent.confirmationPolicy,
+          actor: intent.actor,
+          operations: initial.preview.operations,
           operationCount: initial.preview.operations.length,
+          affectedRanges: initial.preview.affectedRanges,
+          warnings: initial.preview.warnings,
           previewHash: initial.preview.previewHash,
+          beforeHash: initial.preview.beforeHash,
+          afterHash: initial.preview.afterHash,
         },
         baseRevision: intent.baseRevision,
         writeSet: initial.preview.writeSet,
         author: intent.actor,
       },
-      (operationId, now) => {
+      (_operationId, now) => {
         const verified = project(context, intent);
         assertCommittable(verified.preview, suppliedPreviewHash);
         persistSequenceProjection(context, verified.sequence);
-        recordEditAction(
-          context,
-          actionId,
-          operationId,
-          now,
-          intent,
-          verified.preview,
-          artifactIds,
-          parentActionIds,
-        );
         invalidateEditedArtifacts(context, artifactIds, now);
       },
     );
@@ -242,12 +224,14 @@ async function restoreEdit(
           ...(request.targetActionId
             ? { restoredFromActionId: request.targetActionId }
             : {}),
+          actor: request.actor,
+          sourceSurface: request.sourceSurface,
         },
         baseRevision: request.baseRevision,
         writeSet,
         author: request.actor,
       },
-      (operationId, now) => {
+      (_operationId, now) => {
         if (context.store.head !== request.baseRevision) {
           throw new EngineFault({
             code: "STALE_REVISION",
@@ -255,17 +239,6 @@ async function restoreEdit(
           });
         }
         persistSequenceProjection(context, source);
-        recordRestoreAction(
-          context,
-          actionId,
-          operationId,
-          now,
-          request,
-          target.sequenceId,
-          target.revision,
-          writeSet,
-          artifactIds,
-        );
         invalidateEditedArtifacts(context, artifactIds, now);
       },
     );
@@ -635,15 +608,7 @@ function applyRestore(
   operation: Extract<EditOperation, { kind: "restore-clip" }>,
   operationId: string,
 ): void {
-  const source = context.store.db
-    .prepare(
-      `SELECT 1 AS present
-       FROM actions a
-       JOIN edit_batches e ON e.action_id=a.action_id
-       WHERE a.action_id=?`,
-    )
-    .get(operation.sourceActionId);
-  if (!source) {
+  if (!findEditBatchCommit(context, operation.sourceActionId)) {
     throw new EngineFault({
       code: "NOT_FOUND",
       message: `Source edit action not found: ${operation.sourceActionId}`,
@@ -1374,164 +1339,6 @@ function insertCaptions(context: EngineContext, captions: CaptionCue[]): void {
   }
 }
 
-function recordEditAction(
-  context: EngineContext,
-  actionId: string,
-  operationId: string,
-  now: number,
-  intent: EditIntent,
-  preview: EditPreview,
-  artifactIds: string[],
-  parentActionIds: string[],
-): void {
-  const details = {
-    commandId: intent.commandId,
-    sourceSurface: intent.sourceSurface,
-    confirmationPolicy: intent.confirmationPolicy,
-    operationCount: preview.operations.length,
-    affectedRanges: preview.affectedRanges,
-    warnings: preview.warnings,
-    previewHash: preview.previewHash,
-    beforeHash: preview.beforeHash,
-    afterHash: preview.afterHash,
-  };
-  context.store.db
-    .prepare(
-      `INSERT INTO actions(
-        action_id, operation, scope, actor, lane, phase,
-        base_revision, details_json, created_at
-      ) VALUES (?, 'edit_sequence', 'layout', ?, ?, 'completed', ?, ?, ?)`,
-    )
-    .run(
-      actionId,
-      intent.actor,
-      intent.sourceSurface,
-      intent.baseRevision,
-      canonicalJson(details),
-      now,
-    );
-  insertActionEvent(context, actionId, operationId, now, details);
-  insertActionLinks(
-    context,
-    actionId,
-    parentActionIds,
-    artifactIds,
-    preview.writeSet,
-  );
-  context.store.db
-    .prepare(
-      `INSERT INTO edit_batches(
-        action_id, command_id, intent_version, source_surface, actor,
-        sequence_id, base_revision, committed_revision, operations_json,
-        affected_ranges_json, write_set_json, preview_hash, before_hash,
-        after_hash, confirmation_policy, confirmation_json,
-        warnings_json, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, '{}', ?, ?)`,
-    )
-    .run(
-      actionId,
-      intent.commandId,
-      intent.intentVersion,
-      intent.sourceSurface,
-      intent.actor,
-      intent.sequenceId,
-      intent.baseRevision,
-      canonicalJson(preview.operations),
-      canonicalJson(preview.affectedRanges),
-      canonicalJson(preview.writeSet),
-      preview.previewHash,
-      preview.beforeHash,
-      preview.afterHash,
-      intent.confirmationPolicy,
-      canonicalJson(preview.warnings),
-      now,
-    );
-}
-
-function recordRestoreAction(
-  context: EngineContext,
-  actionId: string,
-  operationId: string,
-  now: number,
-  request: EditRestoreRequest,
-  sequenceId: string,
-  restoredRevision: string,
-  writeSet: string[],
-  artifactIds: string[],
-): void {
-  const details = {
-    sequenceId,
-    restoredFromRevision: restoredRevision,
-    ...(request.targetActionId
-      ? { restoredFromActionId: request.targetActionId }
-      : {}),
-  };
-  context.store.db
-    .prepare(
-      `INSERT INTO actions(
-        action_id, operation, scope, actor, lane, phase,
-        base_revision, target_action_id, details_json, created_at
-      ) VALUES (?, 'restore_sequence', 'layout', ?, ?, 'completed', ?, ?, ?, ?)`,
-    )
-    .run(
-      actionId,
-      request.actor,
-      request.sourceSurface,
-      request.baseRevision,
-      request.targetActionId ?? null,
-      canonicalJson(details),
-      now,
-    );
-  insertActionEvent(context, actionId, operationId, now, details);
-  insertActionLinks(
-    context,
-    actionId,
-    request.targetActionId ? [request.targetActionId] : [],
-    artifactIds,
-    writeSet,
-  );
-}
-
-function insertActionEvent(
-  context: EngineContext,
-  actionId: string,
-  operationId: string,
-  now: number,
-  details: Record<string, unknown>,
-): void {
-  context.store.db
-    .prepare(
-      `INSERT INTO action_events(
-        event_id, action_id, operation_id, phase, details_json, created_at
-      ) VALUES (?, ?, ?, 'completed', ?, ?)`,
-    )
-    .run(newUuidV7(), actionId, operationId, canonicalJson(details), now);
-}
-
-function insertActionLinks(
-  context: EngineContext,
-  actionId: string,
-  parents: string[],
-  artifactIds: string[],
-  writeSet: string[],
-): void {
-  const insertParent = context.store.db.prepare(
-    "INSERT INTO action_parents(action_id, parent_action_id) VALUES (?, ?)",
-  );
-  for (const parent of unique(parents)) insertParent.run(actionId, parent);
-  const insertArtifact = context.store.db.prepare(
-    `INSERT INTO action_artifacts(action_id, artifact_id, direction)
-     VALUES (?, ?, 'input')`,
-  );
-  for (const artifactId of unique(artifactIds)) {
-    insertArtifact.run(actionId, artifactId);
-  }
-  const insertWrite = context.store.db.prepare(
-    "INSERT INTO action_write_set(action_id, resource) VALUES (?, ?)",
-  );
-  for (const resource of unique(writeSet)) insertWrite.run(actionId, resource);
-}
-
 function invalidateEditedArtifacts(
   context: EngineContext,
   artifactIds: string[],
@@ -1572,21 +1379,10 @@ function revisionConflicts(
   );
   const overlapping = new Set<string>();
   for (let index = 0; index < baseIndex; index += 1) {
-    const commit = commits[index];
-    const parent = commits[index + 1];
-    if (!commit || !parent) continue;
-    const operations = context.store
-      .diff(parent.commit_hash, commit.commit_hash, "operations")
-      .filter((row) => row.diff_type === "added");
-    for (const row of operations) {
-      const values = row as unknown as Record<string, unknown>;
-      const writeSetJson =
-        stringValue(values.to_write_set_json)
-        ?? stringValue(values.write_set_json)
-        ?? "[]";
-      for (const resource of parseJson<string[]>(writeSetJson, [])) {
-        if (requested.has(resource)) overlapping.add(resource);
-      }
+    const parsed = parseCommitMessage(commits[index]!.message);
+    if (!parsed) continue;
+    for (const resource of parsed.writeSet) {
+      if (requested.has(resource)) overlapping.add(resource);
     }
   }
   return [...overlapping].sort().map((resource) => ({
@@ -1621,27 +1417,34 @@ function assertCommittable(preview: EditPreview, suppliedHash: string): void {
   }
 }
 
-function latestParentActions(
+// Edit provenance lives in the structured commit messages: a committed edit
+// is found by the actionId carried in its commit's details, and its revision
+// is the commit hash itself.
+interface ProvenanceCommit {
+  hash: string;
+  date: string;
+  parsed: CommitOperation;
+}
+
+function editCommits(context: EngineContext): ProvenanceCommit[] {
+  const commits: ProvenanceCommit[] = [];
+  for (const commit of context.store.db.doltLog()) {
+    const parsed = parseCommitMessage(commit.message);
+    if (!parsed) continue;
+    commits.push({ hash: commit.commit_hash, date: commit.date, parsed });
+  }
+  return commits;
+}
+
+function findEditBatchCommit(
   context: EngineContext,
-  writeSet: string[],
-): string[] {
-  if (writeSet.length === 0) return [];
-  const placeholders = writeSet.map(() => "?").join(",");
-  return (
-    context.store.db
-      .prepare(
-        `SELECT DISTINCT a.action_id, a.created_at
-         FROM actions a
-         JOIN action_write_set w ON w.action_id=a.action_id
-         WHERE w.resource IN (${placeholders})
-         ORDER BY a.created_at DESC, a.action_id DESC
-         LIMIT 8`,
-      )
-      .all(...writeSet) as unknown as Array<{
-      action_id: string;
-      created_at: number;
-    }>
-  ).map((row) => row.action_id);
+  actionId: string,
+): ProvenanceCommit | undefined {
+  return editCommits(context).find(
+    (commit) =>
+      commit.parsed.operation === "commit_edit"
+      && commit.parsed.details.actionId === actionId,
+  );
 }
 
 function restoreTarget(
@@ -1649,21 +1452,16 @@ function restoreTarget(
   request: EditRestoreRequest,
 ): { sequenceId: string; revision: string } {
   if (request.targetActionId) {
-    const row = context.store.db
-      .prepare(
-        `SELECT * FROM edit_batches WHERE action_id=?`,
-      )
-      .get(request.targetActionId) as unknown as EditBatchRow | undefined;
-    if (!row) {
+    const commit = findEditBatchCommit(context, request.targetActionId);
+    if (!commit || typeof commit.parsed.details.sequenceId !== "string") {
       throw new EngineFault({
         code: "NOT_FOUND",
         message: `Edit action not found: ${request.targetActionId}`,
       });
     }
-    const actionRevision = revisionForAction(context, row.action_id);
     return {
-      sequenceId: row.sequence_id,
-      revision: row.committed_revision ?? actionRevision,
+      sequenceId: commit.parsed.details.sequenceId,
+      revision: commit.hash,
     };
   }
   if (!request.targetRevision) {
@@ -1682,71 +1480,46 @@ function requiredEditBatch(
   context: EngineContext,
   actionId: string,
 ): EditBatchAudit {
-  const row = context.store.db
-    .prepare("SELECT * FROM edit_batches WHERE action_id=?")
-    .get(actionId) as unknown as EditBatchRow | undefined;
-  if (!row) {
+  const commit = findEditBatchCommit(context, actionId);
+  if (!commit) {
     throw new EngineFault({
       code: "NOT_FOUND",
       message: `Edit batch not found: ${actionId}`,
     });
   }
+  const details = commit.parsed.details;
   return {
-    actionId: row.action_id,
-    commandId: row.command_id,
-    intentVersion: row.intent_version,
-    sourceSurface: row.source_surface,
-    actor: row.actor,
-    sequenceId: row.sequence_id,
-    baseRevision: row.base_revision,
-    committedRevision:
-      row.committed_revision ?? revisionForAction(context, row.action_id),
-    operations: parseJson<NormalizedEditOperation[]>(row.operations_json, []),
-    affectedRanges: parseJson<SequenceRange[]>(row.affected_ranges_json, []),
-    writeSet: parseJson<string[]>(row.write_set_json, []),
-    previewHash: row.preview_hash,
-    beforeHash: row.before_hash,
-    afterHash: row.after_hash,
-    confirmationPolicy: row.confirmation_policy,
-    warnings: parseJson<EditWarning[]>(row.warnings_json, []),
-    createdAt: row.created_at,
+    actionId,
+    commandId: String(details.commandId),
+    intentVersion: Number(details.intentVersion),
+    sourceSurface: details.sourceSurface as EditBatchAudit["sourceSurface"],
+    actor: String(details.actor),
+    sequenceId: String(details.sequenceId),
+    baseRevision: commit.parsed.baseRevision ?? "",
+    committedRevision: commit.hash,
+    operations: Array.isArray(details.operations)
+      ? (details.operations as NormalizedEditOperation[])
+      : [],
+    affectedRanges: Array.isArray(details.affectedRanges)
+      ? (details.affectedRanges as SequenceRange[])
+      : [],
+    writeSet: commit.parsed.writeSet,
+    previewHash: String(details.previewHash),
+    beforeHash: String(details.beforeHash),
+    afterHash: String(details.afterHash),
+    confirmationPolicy:
+      details.confirmationPolicy as EditBatchAudit["confirmationPolicy"],
+    warnings: Array.isArray(details.warnings)
+      ? (details.warnings as EditWarning[])
+      : [],
+    createdAt: commitDateMs(commit.date),
   };
 }
 
-function revisionForAction(context: EngineContext, actionId: string): string {
-  const event = context.store.db
-    .prepare(
-      `SELECT operation_id FROM action_events
-       WHERE action_id=? AND phase='completed'
-       ORDER BY created_at DESC, event_id DESC LIMIT 1`,
-    )
-    .get(actionId) as unknown as { operation_id: string } | undefined;
-  if (!event) {
-    throw new EngineFault({
-      code: "NOT_FOUND",
-      message: `Completed action event not found: ${actionId}`,
-    });
-  }
-  const commits = context.store.db.doltLog();
-  for (let index = 0; index < commits.length - 1; index += 1) {
-    const commit = commits[index];
-    const parent = commits[index + 1];
-    if (!commit || !parent) continue;
-    const found = context.store
-      .diff(parent.commit_hash, commit.commit_hash, "operations")
-      .some((row) => {
-        const values = row as unknown as Record<string, unknown>;
-        return (
-          stringValue(values.to_operation_id)
-          ?? stringValue(values.operation_id)
-        ) === event.operation_id;
-      });
-    if (found) return commit.commit_hash;
-  }
-  throw new EngineFault({
-    code: "NOT_FOUND",
-    message: `Revision for action not found: ${actionId}`,
-  });
+// doltlite reports commit dates as "YYYY-MM-DD HH:MM:SS" in UTC.
+function commitDateMs(date: string): number {
+  const parsed = Date.parse(`${date.replace(" ", "T")}Z`);
+  return Number.isNaN(parsed) ? 0 : parsed;
 }
 
 function editWriteSet(
@@ -1960,8 +1733,4 @@ function safeIntegerAtLeast(value: number, minimum: number, label: string): void
 
 function unique<T>(values: T[]): T[] {
   return [...new Set(values)];
-}
-
-function stringValue(value: unknown): string | undefined {
-  return typeof value === "string" ? value : undefined;
 }

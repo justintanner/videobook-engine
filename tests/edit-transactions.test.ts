@@ -510,8 +510,8 @@ describe("edit transactions", () => {
     expect(restored.revision).not.toBe(committed.revision);
     expect(restored.sequence.clips).toHaveLength(1);
     expect(
-      value(engine.history.action(restored.actionId)).parentActionIds,
-    ).toContain(committed.actionId);
+      engine.history.resolveRevision(restored.revision)?.details,
+    ).toMatchObject({ restoredFromActionId: committed.actionId });
     engine.close();
   });
 
@@ -551,7 +551,9 @@ describe("edit transactions", () => {
         workspaceDir: path.join(root, "workspace"),
       });
       const clipCount = recovered.sequences.getPrimary().clips.length;
-      const actionCount = value(recovered.history.actions()).actions.length;
+      const actionCount = recovered.history
+        .revisions()
+        .filter((revision) => revision.operation === "commit_edit").length;
       if (boundary === "before-sql-commit") {
         expect(clipCount).toBe(0);
         expect(actionCount).toBe(0);

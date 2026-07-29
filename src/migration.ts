@@ -274,33 +274,37 @@ export async function migrateV4(
       engine.close();
       return reportFile;
     }
-    const action = await engine.history.recordAction({
-      operation: "import_schema_v4",
-      scope: "book",
-      actor: "videobook-engine",
-      lane: "migration",
-      outputArtifactIds: [reportArtifact.value.artifactId],
-      writeSet: [
-        `book:${dryRun.value.sourceBookId}`,
-        `migration:${dryRun.value.migrationKey}`,
-      ],
-      details: {
+    // The import audit is an authored Dolt commit like every other record:
+    // the audit payload lands in book_metadata and the commit hash becomes
+    // the import's durable handle (importActionId).
+    const audit = await engine.metadata.book.write(
+      `migration.${dryRun.value.migrationKey.replaceAll(":", ".")}`,
+      {
+        operation: "import_schema_v4",
         migrationKey: dryRun.value.migrationKey,
         sourceBookId: dryRun.value.sourceBookId,
         sourceHeadRevision: dryRun.value.sourceHeadRevision,
         sourceSchemaVersion: MVP_LEGACY_SCHEMA_VERSION,
         destinationSchemaVersion: MVP_SCHEMA_VERSION,
+        reportArtifactId: reportArtifact.value.artifactId,
       },
-    });
-    if (!action.ok) {
+    );
+    if (!audit.ok) {
       engine.close();
-      return action;
+      return audit;
+    }
+    if (!audit.revision) {
+      engine.close();
+      return err({
+        code: "STORAGE_ERROR",
+        message: "Migration audit commit did not return a revision",
+      });
     }
     const result: V4MigrationResult = {
       ...dryRun.value,
       destinationBookId: engine.book.get().bookId,
       destinationRevision: engine.head,
-      importActionId: action.value.action.id,
+      importActionId: audit.revision,
       reportArtifactId: reportArtifact.value.artifactId,
       copiedObjectCount: objectCounts.copied,
       reusedObjectCount: objectCounts.reused,

@@ -60,7 +60,9 @@ flowchart LR
 - `SEMANTIC_TABLES` is the staging allowlist. Commits stage every dirty
   semantic table (not a caller-declared subset), assert a clean semantic
   worktree afterwards, and are skipped when only runtime bookkeeping
-  changed. Every committed mutation also records an `operations` row.
+  changed. The commit itself is the provenance record: the operation, its
+  parameters, write set, and base revision ride in a structured commit
+  message under the configured identity as `--author`.
 - `runtime_%`, `job_runs`, and `sqlite_sequence` are ignored by Dolt. Runtime
   state can be rebuilt, expired, or invalidated without changing semantic
   history.
@@ -84,13 +86,13 @@ Notation used below:
 - `→` names the referenced column.
 - Defaults and checks are shown inline.
 
-There are 38 allowlisted semantic tables.
+There are 31 allowlisted semantic tables.
 
 ### Catalog, artifacts, and content
 
 | Table | Columns | Keys, constraints, and purpose |
 | --- | --- | --- |
-| `engine_schema` | `singleton INTEGER`<br>`version INTEGER`<br>`created_at INTEGER` | `singleton PK CHECK(singleton = 1)`. Records the clean-break catalog version. Version 4 rejects older catalogs rather than migrating them. |
+| `engine_schema` | `singleton INTEGER`<br>`version INTEGER`<br>`created_at INTEGER` | `singleton PK CHECK(singleton = 1)`. Records the clean-break catalog version. The recorded version rejects older catalogs rather than migrating them. |
 | `book` | `book_id TEXT`<br>`slug TEXT`<br>`created_at INTEGER` | `book_id PK`; `slug UQ`. Exactly one row per engine root. |
 | `artifacts` | `artifact_id TEXT`<br>`slug TEXT`<br>`kind TEXT`<br>`created_at INTEGER` | `artifact_id PK`; `slug UQ`; `kind CHECK IN (video, image, audio, script, character, prompt, scene, final)`. The artifact is the stable identity for source media, generated media, documents, and final renders. |
 | `objects` | `object_hash TEXT`<br>`size_bytes INTEGER`<br>`created_at INTEGER` | `object_hash PK`; `size_bytes CHECK >= 0`. This is versioned metadata for immutable bytes stored outside the database. |
@@ -141,16 +143,29 @@ duration frames, but there is no catalog-level frame-rate/timebase row yet.
 | `prompt_entries` | `prompt_id TEXT`<br>`surface TEXT`<br>`prompt TEXT`<br>`context_json TEXT DEFAULT '{}'`<br>`created_at INTEGER` | `prompt_id PK`. Semantic prompt history grouped by UI or agent surface. |
 | `messages` | `message_id TEXT`<br>`role TEXT`<br>`body_json TEXT`<br>`created_at INTEGER` | `message_id PK`. Structured semantic conversation history. |
 
-### Operations, action graph, and terminal jobs
+### Provenance and terminal jobs
 
-| Table | Columns | Keys, constraints, and purpose |
-| --- | --- | --- |
-| `operations` | `operation_id TEXT`<br>`operation TEXT`<br>`artifact_id TEXT?`<br>`details_json TEXT DEFAULT '{}'`<br>`write_set_json TEXT DEFAULT '[]'`<br>`base_revision TEXT?`<br>`created_at INTEGER`<br>`author TEXT` | `operation_id PK`. One low-level provenance row is written with every semantic mutation. Artifact and revision references are deliberately loose so audit history survives deletion. |
-| `actions` | `action_id TEXT`<br>`operation TEXT`<br>`scope TEXT`<br>`actor TEXT`<br>`lane TEXT`<br>`phase TEXT`<br>`base_revision TEXT?`<br>`target_artifact_id TEXT?`<br>`target_action_id TEXT?`<br>`layout_json TEXT?`<br>`details_json TEXT DEFAULT '{}'`<br>`created_at INTEGER` | `action_id PK`; scope `CHECK IN (book, artifact, layout, external, system)`; phase `CHECK IN (requested, started, completed, failed, cancelled, conflicted)`. High-level workflow/action projection. Targets are loose audit references. |
-| `action_events` | `event_id TEXT`<br>`action_id TEXT`<br>`operation_id TEXT`<br>`phase TEXT`<br>`details_json TEXT DEFAULT '{}'`<br>`created_at INTEGER` | `event_id PK`; action `FK → actions ON DELETE CASCADE`; same phase check as `actions`. `operation_id` is a loose provenance link. |
-| `action_parents` | `action_id TEXT`<br>`parent_action_id TEXT` | `(action_id, parent_action_id) PK`; child `FK → actions ON DELETE CASCADE`; parent `FK → actions ON DELETE RESTRICT`. Forms the action DAG. |
-| `action_artifacts` | `action_id TEXT`<br>`artifact_id TEXT`<br>`direction TEXT` | `(action_id, artifact_id, direction) PK`; action `FK → actions ON DELETE CASCADE`; `direction CHECK IN (input, output)`. Artifact ID is deliberately loose for durable lineage. |
-| `action_write_set` | `action_id TEXT`<br>`resource TEXT` | `(action_id, resource) PK`; action `FK → actions ON DELETE CASCADE`. Normalized resources used for overlap/conflict reasoning. |
+Provenance is not a set of tables; it is the Dolt commit log itself. Every
+semantic commit message is structured and machine-parseable:
+
+```
+<operation>[ artifact:<artifactId>]
+
+op-id: <uuidv7>
+base-revision: <commit hash>      (when the mutation declared one)
+actor: <operation actor>          (when the mutation declared one)
+write-set: <canonical JSON array> (when non-empty)
+details: <canonical JSON object>  (when non-empty)
+```
+
+History listings, per-artifact history, stale write-set conflict checks, and
+edit restore are all derived from `dolt_log`, `dolt_diff`, and
+`dolt_at_<table>(revision)` projections — there is no parallel `operations`,
+`actions`, or `edit_batches` record to merge. doltlite rejects commit
+messages of 65536 bytes or more, so an oversized `details` or `write-set`
+payload is dropped in favor of a `details-omitted` / `write-set-omitted`
+trailer that records the payload size; projections treat omitted trailers as
+empty.
 
 Terminal job audit rows live in `job_runs` (`run_id PK`; `state CHECK IN
 (done, failed, aborted)`), an ignored runtime table rather than a semantic
@@ -158,13 +173,9 @@ one: job payload blobs are rebuildable bookkeeping, so recording a terminal
 job never mints a commit. Artifact references are loose so completed history
 survives artifact deletion.
 
-`actions.layout_json` currently maps to the public
-`HistoryLayout { stage: number; column: number }`. It is workflow layout
-metadata, not spatial video composition.
-
 ### Committed Dolt policy table
 
-`dolt_ignore` is created and staged separately from the 38-table allowlist:
+`dolt_ignore` is created and staged separately from the 31-table allowlist:
 
 | Column | Constraint |
 | --- | --- |
@@ -201,9 +212,6 @@ schema additionally defines every index below.
 | `timeline_audio_artifact` | `timeline_audio(artifact_id)` |
 | `prompt_entries_lookup` | `prompt_entries(surface, created_at, prompt_id)` |
 | `messages_created` | `messages(created_at, message_id)` |
-| `operations_created` | `operations(created_at, operation_id)` |
-| `operations_artifact_created` | `operations(artifact_id, created_at, operation_id)` |
-| `action_events_action_created` | `action_events(action_id, created_at, event_id)` |
 
 ## Local-only runtime schema
 
@@ -261,15 +269,15 @@ to recover safely:
 
 1. Start `BEGIN IMMEDIATE`.
 2. Change the requested semantic rows.
-3. Insert the mutation's `operations` row.
-4. Insert `runtime_commit_outbox(operation_id, tables_json, message, created_at)`.
-5. Commit the SQL transaction.
-6. Stage every dirty table from `SEMANTIC_TABLES` (row-level diffs filter out
+3. Insert `runtime_commit_outbox(operation_id, tables_json, message, created_at)`
+   with the structured commit message described above.
+4. Commit the SQL transaction.
+5. Stage every dirty table from `SEMANTIC_TABLES` (row-level diffs filter out
    doltlite's phantom `modified` entries for tables with secondary indexes).
-7. Create a Dolt commit on `main` with the configured identity as `--author`;
-   when nothing semantic changed besides `operations`, erase the bookkeeping
-   rows instead of minting an empty commit.
-8. Assert no semantic table is still dirty, then delete the runtime outbox
+6. Create a Dolt commit on `main` with the configured identity as `--author`;
+   when nothing semantic changed, clear the outbox row instead of minting an
+   empty commit.
+7. Assert no semantic table is still dirty, then delete the runtime outbox
    row in a runtime transaction.
 
 On reopen, the engine drains any surviving outbox record. Runtime staging is
@@ -375,12 +383,10 @@ status, and error. Entities provide structured prompts, characters, and scenes.
 
 ### Provenance and concurrency
 
-- `Revision` projects Dolt commit hash, operation, artifact, details, and file
-  changes.
-- `HistoryAction` projects the action DAG, lifecycle events, input/output
-  artifact lineage, workflow layout, and write set.
-- `base_revision` plus normalized write sets detect overlapping semantic
-  actions.
+- `Revision` projects the Dolt commit hash, operation, artifact, and
+  parameters parsed from the structured commit message.
+- `base_revision` plus the write sets carried in commit messages detect
+  overlapping semantic changes.
 - Runtime jobs, resource leases, artifact views, owner IDs, expiry times, and
   monotonic fences coordinate processors without polluting Dolt history.
 

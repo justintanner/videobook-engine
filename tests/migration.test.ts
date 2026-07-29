@@ -105,7 +105,7 @@ describe("schema-v4 copy-forward migration", () => {
     const dryRun = value(dryRunV4Migration(source.root));
     expect(dryRun).toMatchObject({
       sourceSchemaVersion: 4,
-      destinationSchemaVersion: 13,
+      destinationSchemaVersion: 14,
       sourceBookId: source.bookId,
       artifactCount: 1,
       notebookCount: 1,
@@ -148,7 +148,7 @@ describe("schema-v4 copy-forward migration", () => {
       }),
     ]);
     expect(engine.artifacts.get(migrated.reportArtifactId).ok).toBe(true);
-    expect(engine.history.action(migrated.importActionId).ok).toBe(true);
+    expect(engine.history.resolveRevision(migrated.importActionId)).not.toBeNull();
     engine.close();
     const sourceAfter = value(dryRunV4Migration(source.root));
     expect(sourceAfter.sourceHeadRevision).toBe(dryRun.sourceHeadRevision);
