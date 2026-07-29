@@ -229,7 +229,6 @@ async function importTranscript(
           `transcript:${transcriptId}`,
         ],
       },
-      ["transcripts", "transcript_segments", "transcript_words"],
       (_operationId, now) => {
         if (state === "current") {
           context.store.db

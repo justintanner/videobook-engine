@@ -90,6 +90,9 @@ export class EngineContext {
       workspaceDir: this.config.workspaceDir,
       initialBook,
       semanticCommitBoundary: config.semanticCommitBoundary,
+      ...(config.identity
+        ? { author: `${config.identity.name} <${config.identity.email}>` }
+        : {}),
       ...(config.catalogBackup
         ? { catalogBackup: config.catalogBackup }
         : {}),

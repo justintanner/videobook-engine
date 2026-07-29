@@ -73,7 +73,6 @@ async function recordPrompt(
         details: { surface },
         writeSet: [`prompt:${promptId}`],
       },
-      ["prompt_entries"],
       (_operationId, now) => {
         context.store.db
           .prepare(
@@ -148,7 +147,6 @@ async function appendMessage<T extends Record<string, unknown>>(
         details: { messageId, role },
         writeSet: [`message:${messageId}`],
       },
-      ["messages"],
       (_operationId, now) => {
         context.store.db
           .prepare(

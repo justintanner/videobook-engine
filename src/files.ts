@@ -125,7 +125,6 @@ async function writeFile(
           `file:${artifact.artifact_id}:${relativePath}`,
         ],
       },
-      ["objects", "artifact_files"],
       (_operationId, now) => {
         linkObject(
           context,
@@ -174,7 +173,6 @@ async function writeFromPath(
           `file:${artifact.artifact_id}:${relativePath}`,
         ],
       },
-      ["objects", "artifact_files"],
       (_operationId, now) => {
         linkObject(
           context,
@@ -230,7 +228,6 @@ async function deleteFile(
         details: { path: relativePath },
         writeSet: [`file:${artifact.artifact_id}:${relativePath}`],
       },
-      ["artifact_files"],
       () => {
         context.store.db
           .prepare("DELETE FROM artifact_files WHERE artifact_id=? AND path=?")
@@ -274,7 +271,6 @@ async function renameFile(
           `file:${artifact.artifact_id}:${newRelative}`,
         ],
       },
-      ["artifact_files"],
       (_operationId, now) => {
         context.store.db
           .prepare(
@@ -323,7 +319,6 @@ async function copyFile(
         },
         writeSet: [`file:${destination.artifact_id}:${destinationPath}`],
       },
-      ["artifact_files"],
       (_operationId, now) => {
         context.store.db
           .prepare(
@@ -452,7 +447,6 @@ async function ingestWorkspace(
           (item) => `file:${artifact.artifact_id}:${item}`,
         ),
       },
-      ["objects", "artifact_files"],
       (_operationId, now) => {
         for (const file of prepared) linkObject(context, artifact.artifact_id, file, now);
         markWorkspaceReady(context, artifact.artifact_id, now);

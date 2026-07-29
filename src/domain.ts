@@ -163,7 +163,6 @@ async function createEntity(
         details: { entityId, type, name: normalizedName },
         writeSet: [`entity:${entityId}`],
       },
-      ["entities"],
       (_operationId, now) => {
         context.store.db
           .prepare(
@@ -216,7 +215,6 @@ async function writeEntity(
         details: { entityId: entity.id, type: entity.type },
         writeSet: [`entity:${entity.id}`],
       },
-      ["entities"],
       () => {
         context.store.db
           .prepare(
@@ -272,7 +270,6 @@ async function deleteEntity(
         details: { entityId },
         writeSet: [`entity:${entityId}`],
       },
-      ["entities"],
       () => {
         context.store.db
           .prepare("DELETE FROM entities WHERE entity_id=?")
@@ -296,7 +293,6 @@ async function createNotebook(
         details: { notebookId, name: normalizedName },
         writeSet: [`notebook:${notebookId}`],
       },
-      ["notebooks"],
       (_operationId, now) => {
         context.store.db
           .prepare(
@@ -340,13 +336,6 @@ async function writeNotebook(
           ...notebook.edges.map((edge) => `edge:${notebook.id}:${edge.id}`),
         ],
       },
-      [
-        "notebooks",
-        "cells",
-        "edges",
-        "cell_references",
-        "pinned_search_results",
-      ],
       () => {
         context.store.db
           .prepare(
@@ -378,7 +367,6 @@ async function deleteNotebook(
         details: { notebookId },
         writeSet: [`notebook:${notebookId}`],
       },
-      ["notebooks", "cells", "edges", "runs"],
       () => {
         context.store.db
           .prepare("DELETE FROM notebooks WHERE notebook_id=?")
@@ -412,7 +400,6 @@ async function recordNotebookRun(
         details: { notebookId: run.notebookId, runId: run.id },
         writeSet: [`run:${run.id}`],
       },
-      ["runs"],
       () => {
         context.store.db
           .prepare(

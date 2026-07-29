@@ -109,7 +109,6 @@ async function createArtifact(
           `artifact-slug:${slug}`,
         ],
       },
-      ["artifacts"],
       (_operationId, now) => {
         context.store.db
           .prepare(
@@ -178,7 +177,6 @@ async function renameArtifact(
           `artifact-slug:${slug}`,
         ],
       },
-      ["artifacts"],
       () => {
         context.store.db
           .prepare(
@@ -230,13 +228,6 @@ async function deleteArtifact(
           `artifact-slug:${artifact.slug}`,
         ],
       },
-      [
-        "artifacts",
-        "artifact_files",
-        "artifact_metadata",
-        "audio_waveforms",
-        "job_runs",
-      ],
       (_operationId, now) => {
         context.store.db
           .prepare("DELETE FROM artifacts WHERE artifact_id=?")

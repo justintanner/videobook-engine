@@ -79,6 +79,13 @@ export interface CatalogBackupConfig {
   url: string;
 }
 
+export interface EngineIdentity {
+  /** Name recorded as the author of semantic commits. */
+  name: string;
+  /** Email recorded as the author of semantic commits. */
+  email: string;
+}
+
 export type SemanticCommitBoundary =
   | "before-sql-commit"
   | "after-sql-commit"
@@ -90,6 +97,8 @@ interface EngineConfigBase {
   remoteObjects?: ContentStore;
   objectPrefix?: string;
   catalogBackup?: CatalogBackupConfig;
+  /** Commit author identity; defaults to a generic Videobook author. */
+  identity?: EngineIdentity;
   runtimeRetentionMs?: number;
   similarity?: SimilarityConfig;
   semanticCommitBoundary?: (

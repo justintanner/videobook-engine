@@ -578,7 +578,6 @@ async function writeFailure(
         details: { ...info },
         writeSet: [`artifact-runtime:${artifact.artifact_id}`],
       },
-      ["job_runs"],
       (_operationId, now) => {
         context.store.db
           .prepare(
@@ -654,7 +653,6 @@ async function clearFailure(
         artifactId: artifact.artifact_id,
         writeSet: [`artifact-runtime:${artifact.artifact_id}`],
       },
-      [],
       (_operationId, now) => {
         context.store.db
           .prepare("DELETE FROM runtime_generation_errors WHERE artifact_id=?")

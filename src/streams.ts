@@ -124,7 +124,6 @@ async function registerStream(
           `object:${objectHash}`,
         ],
       },
-      ["artifact_streams"],
       (_operationId, now) => {
         context.store.db
           .prepare(

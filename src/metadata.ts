@@ -90,7 +90,6 @@ async function deleteArtifactMetadata(
         details: { key: normalizedKey },
         writeSet: [`artifact-metadata:${artifact.artifact_id}:${normalizedKey}`],
       },
-      ["artifact_metadata"],
       () => {
         context.store.db
           .prepare("DELETE FROM artifact_metadata WHERE artifact_id=? AND key=?")
@@ -117,7 +116,6 @@ async function deleteBookMetadata(
         details: { key: normalizedKey },
         writeSet: [`book-metadata:${normalizedKey}`],
       },
-      ["book_metadata"],
       () => {
         context.store.db
           .prepare("DELETE FROM book_metadata WHERE key=?")
@@ -144,7 +142,6 @@ async function deleteWaveform(
         artifactId: artifact.artifact_id,
         writeSet: [`waveform:${artifact.artifact_id}`],
       },
-      ["audio_waveforms"],
       () => {
         context.store.db
           .prepare("DELETE FROM audio_waveforms WHERE artifact_id=?")
@@ -171,7 +168,6 @@ async function writeArtifactMetadata(
         details: { key: normalizedKey },
         writeSet: [`artifact-metadata:${artifact.artifact_id}:${normalizedKey}`],
       },
-      ["artifact_metadata"],
       () => {
         context.store.db
           .prepare(
@@ -262,7 +258,6 @@ async function writeBookMetadata(
         details: { key: normalizedKey },
         writeSet: [`book-metadata:${normalizedKey}`],
       },
-      ["book_metadata"],
       () => {
         context.store.db
           .prepare(
@@ -308,7 +303,6 @@ async function writeWaveform(
         artifactId: artifact.artifact_id,
         writeSet: [`waveform:${artifact.artifact_id}`],
       },
-      ["audio_waveforms"],
       () => {
         context.store.db
           .prepare(

@@ -57,10 +57,13 @@ flowchart LR
 - The only supported live Dolt branch is `main`.
 - Semantic mutations are SQL transactions followed by forward-only Dolt
   commits. A restore creates a new commit; it never rewinds the live branch.
-- `SEMANTIC_TABLES` is the staging allowlist. Every mutation also records an
-  `operations` row.
-- `runtime_%` and `sqlite_sequence` are ignored by Dolt. Runtime state can be
-  rebuilt, expired, or invalidated without changing semantic history.
+- `SEMANTIC_TABLES` is the staging allowlist. Commits stage every dirty
+  semantic table (not a caller-declared subset), assert a clean semantic
+  worktree afterwards, and are skipped when only runtime bookkeeping
+  changed. Every committed mutation also records an `operations` row.
+- `runtime_%`, `job_runs`, and `sqlite_sequence` are ignored by Dolt. Runtime
+  state can be rebuilt, expired, or invalidated without changing semantic
+  history.
 - Engine-generated surrogate identities are stable UUIDv7 strings; the SQL
   columns are `TEXT`, so UUID form is enforced by engine APIs rather than a
   database check. Content identity is a lowercase, 64-character SHA-256.
@@ -81,7 +84,7 @@ Notation used below:
 - `→` names the referenced column.
 - Defaults and checks are shown inline.
 
-There are 25 allowlisted semantic tables.
+There are 38 allowlisted semantic tables.
 
 ### Catalog, artifacts, and content
 
@@ -148,7 +151,12 @@ duration frames, but there is no catalog-level frame-rate/timebase row yet.
 | `action_parents` | `action_id TEXT`<br>`parent_action_id TEXT` | `(action_id, parent_action_id) PK`; child `FK → actions ON DELETE CASCADE`; parent `FK → actions ON DELETE RESTRICT`. Forms the action DAG. |
 | `action_artifacts` | `action_id TEXT`<br>`artifact_id TEXT`<br>`direction TEXT` | `(action_id, artifact_id, direction) PK`; action `FK → actions ON DELETE CASCADE`; `direction CHECK IN (input, output)`. Artifact ID is deliberately loose for durable lineage. |
 | `action_write_set` | `action_id TEXT`<br>`resource TEXT` | `(action_id, resource) PK`; action `FK → actions ON DELETE CASCADE`. Normalized resources used for overlap/conflict reasoning. |
-| `job_runs` | `run_id TEXT`<br>`artifact_id TEXT?`<br>`job_type TEXT`<br>`state TEXT`<br>`payload_json TEXT`<br>`result_json TEXT?`<br>`error_json TEXT?`<br>`started_at INTEGER?`<br>`finished_at INTEGER` | `run_id PK`; `state CHECK IN (done, failed, aborted)`. Terminal job audit. Artifact references are loose so completed history survives artifact deletion. |
+
+Terminal job audit rows live in `job_runs` (`run_id PK`; `state CHECK IN
+(done, failed, aborted)`), an ignored runtime table rather than a semantic
+one: job payload blobs are rebuildable bookkeeping, so recording a terminal
+job never mints a commit. Artifact references are loose so completed history
+survives artifact deletion.
 
 `actions.layout_json` currently maps to the public
 `HistoryLayout { stage: number; column: number }`. It is workflow layout
@@ -156,7 +164,7 @@ metadata, not spatial video composition.
 
 ### Committed Dolt policy table
 
-`dolt_ignore` is created and staged separately from the 25-table allowlist:
+`dolt_ignore` is created and staged separately from the 38-table allowlist:
 
 | Column | Constraint |
 | --- | --- |
@@ -168,6 +176,7 @@ Its committed rows are:
 | Pattern | Ignored | Meaning |
 | --- | ---: | --- |
 | `runtime_%` | `1` | Never version any engine runtime table. |
+| `job_runs` | `1` | Never version terminal job audit blobs. |
 | `sqlite_sequence` | `1` | Never version local AUTOINCREMENT counters. |
 
 ### Semantic indexes
@@ -255,12 +264,18 @@ to recover safely:
 3. Insert the mutation's `operations` row.
 4. Insert `runtime_commit_outbox(operation_id, tables_json, message, created_at)`.
 5. Commit the SQL transaction.
-6. Stage only changed names from `SEMANTIC_TABLES`.
-7. Create a Dolt commit on `main`.
-8. Delete the runtime outbox row in a runtime transaction.
+6. Stage every dirty table from `SEMANTIC_TABLES` (row-level diffs filter out
+   doltlite's phantom `modified` entries for tables with secondary indexes).
+7. Create a Dolt commit on `main` with the configured identity as `--author`;
+   when nothing semantic changed besides `operations`, erase the bookkeeping
+   rows instead of minting an empty commit.
+8. Assert no semantic table is still dirty, then delete the runtime outbox
+   row in a runtime transaction.
 
 On reopen, the engine drains any surviving outbox record. Runtime staging is
-checked before writes and after commits. Historical reads use
+checked before writes and after commits. Opening a catalog never creates a
+commit: terminal-job reconciliation writes the ignored `job_runs` table
+through a runtime transaction. Historical reads use
 `dolt_at_<semantic_table>(revision)`; history and conflict projections use
 Dolt log, status, and diff APIs. Remote catalog support is push-backup only.
 

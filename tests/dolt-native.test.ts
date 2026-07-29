@@ -980,7 +980,12 @@ describe("single-book Dolt engine", () => {
     expect(value(engine.history.action(action.action.id)).events).toHaveLength(1);
     expect(value(engine.history.actions()).actions).toHaveLength(1);
 
-    value(await engine.history.recordOperation("touch", artifact.artifactId));
+    value(
+      await engine.history.recordAction({
+        operation: "touch",
+        writeSet: [`artifact:${artifact.artifactId}`],
+      }),
+    );
     const conflict = await engine.history.recordAction({
       operation: "stale_action",
       baseRevision: base,
@@ -999,8 +1004,21 @@ describe("single-book Dolt engine", () => {
       initialBookSlug: "action-history",
     });
     const history = createHistoryApi(context);
-    value(await history.recordOperation("seed-one"));
-    value(await history.recordOperation("seed-two"));
+    // Seed two unrelated commits so naive revision scans would wander.
+    // recordOperation no longer mints commits, so seed through a direct
+    // semantic mutation instead.
+    const seed = async (operation: string): Promise<void> => {
+      await context.store.semantic({ operation }, () => {
+        context.store.db
+          .prepare(
+            `INSERT INTO book_metadata(key, value_json) VALUES (?, '{}')
+             ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json`,
+          )
+          .run(operation);
+      });
+    };
+    await seed("seed-one");
+    await seed("seed-two");
     const originalDiff = context.store.diff.bind(context.store);
     let diffCalls = 0;
     context.store.diff = (from, to, table) => {
@@ -1022,7 +1040,7 @@ describe("single-book Dolt engine", () => {
     context.store.close();
   });
 
-  it("copies terminal jobs into versioned audit rows", async () => {
+  it("copies terminal jobs into job_runs audit rows", async () => {
     const { engine, dataDir } = await setup();
     const artifact = value(
       await engine.artifacts.create({ kind: "image", slug: "img-job" }),

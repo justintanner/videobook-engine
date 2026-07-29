@@ -168,19 +168,6 @@ async function commitEdit(
         writeSet: initial.preview.writeSet,
         author: intent.actor,
       },
-      [
-        "sequence_clips",
-        "clip_links",
-        "clip_transforms",
-        "transitions",
-        "caption_cues",
-        "actions",
-        "action_events",
-        "action_parents",
-        "action_artifacts",
-        "action_write_set",
-        "edit_batches",
-      ],
       (operationId, now) => {
         const verified = project(context, intent);
         assertCommittable(verified.preview, suppliedPreviewHash);
@@ -260,18 +247,6 @@ async function restoreEdit(
         writeSet,
         author: request.actor,
       },
-      [
-        "sequence_clips",
-        "clip_links",
-        "clip_transforms",
-        "transitions",
-        "caption_cues",
-        "actions",
-        "action_events",
-        "action_parents",
-        "action_artifacts",
-        "action_write_set",
-      ],
       (operationId, now) => {
         if (context.store.head !== request.baseRevision) {
           throw new EngineFault({

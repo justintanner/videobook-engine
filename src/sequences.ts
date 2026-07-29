@@ -210,7 +210,6 @@ async function addTrack(
         details: { sequenceId, trackId, kind: input.kind, ordinal },
         writeSet: [`sequence:${sequenceId}`, `track:${trackId}`],
       },
-      ["sequence_tracks"],
       () => insertTracks(context, [track]),
     );
     return ok(
@@ -285,7 +284,6 @@ async function removeTrack(
         },
         writeSet: [`sequence:${row.sequence_id}`, `track:${trackId}`],
       },
-      ["sequence_tracks"],
       () => {
         context.store.db
           .prepare("DELETE FROM sequence_tracks WHERE track_id=?")
@@ -339,7 +337,6 @@ async function updateTrack(
         details: { trackId, sequenceId: row.sequence_id },
         writeSet: [`sequence:${row.sequence_id}`, `track:${trackId}`],
       },
-      ["sequence_tracks"],
       () => {
         context.store.db
           .prepare(
@@ -399,7 +396,6 @@ async function createSequence(
           ...tracks.map((track) => `track:${track.trackId}`),
         ],
       },
-      ["sequences", "sequence_tracks"],
       (_operationId, now) => {
         insertSequence(context, sequenceId, bookId, normalized, now);
         insertTracks(context, tracks);
@@ -427,7 +423,6 @@ async function renameSequence(
         details: { sequenceId, oldName: current.name, newName: name },
         writeSet: [`sequence:${sequenceId}`],
       },
-      ["sequences"],
       () => {
         context.store.db
           .prepare("UPDATE sequences SET name=? WHERE sequence_id=?")
@@ -481,15 +476,6 @@ async function deleteSequence(
         details: { sequenceId },
         writeSet: [`sequence:${sequenceId}`],
       },
-      [
-        "caption_cues",
-        "transitions",
-        "clip_transforms",
-        "clip_links",
-        "sequence_clips",
-        "sequence_tracks",
-        "sequences",
-      ],
       () => {
         context.store.db
           .prepare("DELETE FROM sequences WHERE sequence_id=?")

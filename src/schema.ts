@@ -102,7 +102,6 @@ export const SEMANTIC_TABLES = [
   "action_artifacts",
   "action_write_set",
   "edit_batches",
-  "job_runs",
 ] as const;
 
 export type SemanticTable = (typeof SEMANTIC_TABLES)[number];
@@ -110,6 +109,7 @@ export type SemanticTable = (typeof SEMANTIC_TABLES)[number];
 export const RUNTIME_TABLES = [
   "runtime_meta",
   "runtime_jobs",
+  "job_runs",
   "runtime_resource_leases",
   "runtime_object_publications",
   "runtime_workspace_entries",
@@ -709,18 +709,6 @@ export const SEMANTIC_SCHEMA_SQL = `
     created_at INTEGER NOT NULL
   );
 
-  CREATE TABLE IF NOT EXISTS job_runs (
-    run_id TEXT PRIMARY KEY,
-    artifact_id TEXT,
-    job_type TEXT NOT NULL,
-    state TEXT NOT NULL CHECK (state IN ('done','failed','aborted')),
-    payload_json TEXT NOT NULL,
-    result_json TEXT,
-    error_json TEXT,
-    started_at INTEGER,
-    finished_at INTEGER NOT NULL
-  );
-
   CREATE INDEX IF NOT EXISTS artifacts_created
     ON artifacts(created_at, artifact_id);
   CREATE INDEX IF NOT EXISTS artifact_files_object
@@ -845,6 +833,18 @@ export const RUNTIME_SCHEMA_SQL = `
   CREATE UNIQUE INDEX IF NOT EXISTS runtime_jobs_external
     ON runtime_jobs(type, external_task_id)
     WHERE external_task_id IS NOT NULL;
+
+  CREATE TABLE IF NOT EXISTS job_runs (
+    run_id TEXT PRIMARY KEY,
+    artifact_id TEXT,
+    job_type TEXT NOT NULL,
+    state TEXT NOT NULL CHECK (state IN ('done','failed','aborted')),
+    payload_json TEXT NOT NULL,
+    result_json TEXT,
+    error_json TEXT,
+    started_at INTEGER,
+    finished_at INTEGER NOT NULL
+  );
 
   CREATE TABLE IF NOT EXISTS runtime_resource_leases (
     lease_id TEXT PRIMARY KEY,

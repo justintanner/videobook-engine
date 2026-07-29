@@ -419,7 +419,6 @@ async function recordOperation(
           ? [`artifact:${artifact.artifact_id}`]
           : ["book"],
       },
-      [],
       () => undefined,
     );
     return ok(revisionForHash(context, mutation.revision), mutation.revision);
@@ -493,12 +492,6 @@ async function restoreArtifact(
           `artifact-slug:${desiredSlug}`,
         ],
       },
-      [
-        "artifacts",
-        "artifact_files",
-        "artifact_metadata",
-        "audio_waveforms",
-      ],
       (_operationId, now) => {
         context.store.db
           .prepare(
@@ -689,25 +682,6 @@ async function restoreBook(
         details: { fromRevision: revision.hash },
         writeSet: ["book"],
       },
-      [
-        "book",
-        "artifacts",
-        "artifact_files",
-        "book_metadata",
-        "artifact_metadata",
-        "audio_waveforms",
-        "entities",
-        "notebooks",
-        "cells",
-        "edges",
-        "runs",
-        "timeline",
-        "timeline_slots",
-        "timeline_audio",
-        "prompt_entries",
-        "messages",
-        "job_runs",
-      ],
       (_operationId, now) => {
         context.store.db.prepare("DELETE FROM timeline_slots").run();
         context.store.db.prepare("DELETE FROM timeline_audio").run();
@@ -1023,13 +997,6 @@ async function recordAction(
         ...(input.baseRevision ? { baseRevision: input.baseRevision } : {}),
         writeSet: input.writeSet ?? [],
       },
-      [
-        "actions",
-        "action_events",
-        "action_parents",
-        "action_artifacts",
-        "action_write_set",
-      ],
       (operationId, now) => {
         context.store.db
           .prepare(

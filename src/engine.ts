@@ -144,41 +144,31 @@ export class Engine {
 
   private async recordTerminalJob(job: Job): Promise<void> {
     if (!isTerminal(job.state)) return;
-    await this.context.store.semantic(
-      {
-        operation: `job_${job.state}`,
-        artifactId: job.artifactId ?? undefined,
-        details: {
-          jobOperationId: job.operationId,
-          jobId: job.id,
-          jobType: job.type,
-          state: job.state,
-        },
-        writeSet: [`job-run:${job.operationId}`],
-      },
-      ["job_runs"],
-      (_operationId, now) => {
-        this.context.store.db
-          .prepare(
-            `INSERT OR IGNORE INTO job_runs(
-              run_id, artifact_id, job_type, state,
-              payload_json, result_json, error_json,
-              started_at, finished_at
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-          )
-          .run(
-            job.operationId,
-            job.artifactId,
-            job.type,
-            job.state,
-            canonicalJson(job.payload),
-            job.result === null ? null : canonicalJson(job.result),
-            job.error === null ? null : canonicalJson(job.error),
-            job.startedAt,
-            job.finishedAt ?? now,
-          );
-      },
-    );
+    // job_runs rows are ignored runtime bookkeeping, not semantic history,
+    // so recording a terminal job must never mint a commit. In particular,
+    // reconciling terminal jobs when a catalog is opened keeps open
+    // read-only: a freshly cloned fork no longer diverges just by opening.
+    this.context.store.runtime((now) => {
+      this.context.store.db
+        .prepare(
+          `INSERT OR IGNORE INTO job_runs(
+            run_id, artifact_id, job_type, state,
+            payload_json, result_json, error_json,
+            started_at, finished_at
+          ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          job.operationId,
+          job.artifactId,
+          job.type,
+          job.state,
+          canonicalJson(job.payload),
+          job.result === null ? null : canonicalJson(job.result),
+          job.error === null ? null : canonicalJson(job.error),
+          job.startedAt,
+          job.finishedAt ?? now,
+        );
+    });
   }
 }
 

@@ -88,7 +88,6 @@ async function setTimeline(
           ...audio.map((item) => `timeline-audio:${item.id}`),
         ],
       },
-      ["timeline", "timeline_slots", "timeline_audio"],
       () => {
         context.store.db
           .prepare("UPDATE timeline SET render=? WHERE book_id=?")
@@ -111,7 +110,6 @@ async function resetTimeline(
         operation: "reset_timeline",
         writeSet: ["timeline"],
       },
-      ["timeline", "timeline_slots", "timeline_audio"],
       () => {
         context.store.db.prepare("DELETE FROM timeline_slots").run();
         context.store.db.prepare("DELETE FROM timeline_audio").run();

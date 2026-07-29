@@ -29,7 +29,6 @@ interface SchemaRow {
 
 interface OutboxRow {
   operation_id: string;
-  tables_json: string;
   message: string;
 }
 
@@ -41,6 +40,10 @@ interface RemoteRow {
   name: string;
   url: string;
 }
+
+const DEFAULT_COMMIT_AUTHOR = "Videobook <videobook@localhost>";
+
+const IGNORE_PATTERNS = ["runtime_%", "sqlite_sequence", "job_runs"] as const;
 
 export class EngineFault extends Error {
   readonly error: EngineError;
@@ -66,6 +69,7 @@ export class DoltStore {
   readonly workspaceDir: string;
 
   private writeChain: Promise<void> = Promise.resolve();
+  private readonly author: string;
   private readonly semanticCommitBoundary:
     | ((boundary: SemanticCommitBoundary, operationId: string) => void)
     | undefined;
@@ -75,6 +79,7 @@ export class DoltStore {
     workspaceDir: string;
     initialBook?: { bookId: string; slug: string };
     catalogBackup?: CatalogBackupConfig;
+    author?: string;
     semanticCommitBoundary?: (
       boundary: SemanticCommitBoundary,
       operationId: string,
@@ -83,6 +88,7 @@ export class DoltStore {
     this.dataDir = path.resolve(input.dataDir);
     this.workspaceDir = path.resolve(input.workspaceDir);
     this.databasePath = path.join(this.dataDir, "videobook.db");
+    this.author = input.author ?? DEFAULT_COMMIT_AUTHOR;
     this.semanticCommitBoundary = input.semanticCommitBoundary;
     this.objectsDir = path.join(this.dataDir, "objects", "sha256");
     mkdirSync(this.dataDir, { recursive: true });
@@ -110,13 +116,11 @@ export class DoltStore {
 
   async semantic<T>(
     input: OperationInput,
-    tables: readonly SemanticTable[],
     mutate: (operationId: string, now: number) => T,
   ): Promise<SemanticMutation<T>> {
     return this.serial(async () => {
       const operationId = uuidv7();
       const now = Date.now();
-      const touched = uniqueSemanticTables([...tables, "operations"]);
       this.assertRuntimeUnstaged();
       this.begin();
       let value: T;
@@ -147,7 +151,7 @@ export class DoltStore {
           )
           .run(
             operationId,
-            canonicalJson(touched),
+            "[]",
             commitMessage(input, operationId),
             now,
           );
@@ -234,13 +238,12 @@ export class DoltStore {
           PRIMARY KEY(pattern)
         )`,
       );
-      this.db
-        .prepare(
-          `INSERT INTO dolt_ignore(pattern, ignored)
-           VALUES ('runtime_%', 1), ('sqlite_sequence', 1)
-           ON CONFLICT(pattern) DO UPDATE SET ignored=excluded.ignored`,
-        )
-        .run();
+      const insertIgnorePattern = this.db.prepare(
+        `INSERT INTO dolt_ignore(pattern, ignored)
+         VALUES (?, 1)
+         ON CONFLICT(pattern) DO UPDATE SET ignored=excluded.ignored`,
+      );
+      for (const pattern of IGNORE_PATTERNS) insertIgnorePattern.run(pattern);
       const now = Date.now();
       this.db
         .prepare(
@@ -302,6 +305,7 @@ export class DoltStore {
           message: "Videobook only supports the main branch",
         });
       }
+      this.ensureIgnorePatterns();
     }
 
     this.db.exec(RUNTIME_SCHEMA_SQL);
@@ -316,6 +320,17 @@ export class DoltStore {
       .run(String(SCHEMA_VERSION), Date.now());
     this.assertRuntimeUnstaged();
     this.recoverOutbox();
+  }
+
+  private ensureIgnorePatterns(): void {
+    const insert = this.db.prepare(
+      `INSERT INTO dolt_ignore(pattern, ignored)
+       SELECT ?, 1
+       WHERE NOT EXISTS(
+         SELECT 1 FROM dolt_ignore WHERE pattern = ?
+       )`,
+    );
+    for (const pattern of IGNORE_PATTERNS) insert.run(pattern, pattern);
   }
 
   private configureRemote(remote: CatalogBackupConfig): void {
@@ -385,7 +400,7 @@ export class DoltStore {
   private recoverOutbox(): void {
     const rows = this.db
       .prepare(
-        `SELECT operation_id, tables_json, message
+        `SELECT operation_id, message
          FROM runtime_commit_outbox
          ORDER BY created_at, operation_id`,
       )
@@ -398,38 +413,47 @@ export class DoltStore {
   private commitOutbox(operationId: string): string {
     const row = this.db
       .prepare(
-        `SELECT operation_id, tables_json, message
+        `SELECT operation_id, message
          FROM runtime_commit_outbox
          WHERE operation_id = ?`,
       )
       .get(operationId) as unknown as OutboxRow | undefined;
     if (!row) return this.head;
-    const tables = parseStringArray(row.tables_json);
-    const changedTables: SemanticTable[] = [];
-    for (const table of tables) {
-      if (!isSemanticTable(table)) {
-        throw new EngineFault({
-          code: "STORAGE_ERROR",
-          message: `Commit outbox contains non-semantic table: ${table}`,
-        });
-      }
-      const changed = this.db
-        .doltStatus()
-        .some(
-          (entry) =>
-            entry.table_name === table &&
-            entry.staged === 0 &&
-            entry.status !== "ignored",
-        );
-      if (changed) changedTables.push(table);
+    const dirty = this.dirtySemanticTables();
+    if (dirty.length === 0) {
+      // Recovery after a crash that followed the dolt commit: the operation
+      // is already part of HEAD, so only the outbox row is left to clear.
+      this.runtime(() => {
+        this.db
+          .prepare(
+            "DELETE FROM runtime_commit_outbox WHERE operation_id = ?",
+          )
+          .run(operationId);
+      });
+      return this.head;
     }
-    this.stageTables(changedTables);
+    if (dirty.every((table) => table === "operations")) {
+      // The mutation only touched ignored runtime tables, so committing
+      // would mint a revision whose only payload is the bookkeeping row in
+      // operations. Erase the bookkeeping instead of committing.
+      this.runtime(() => {
+        this.db
+          .prepare(
+            "DELETE FROM runtime_commit_outbox WHERE operation_id = ?",
+          )
+          .run(operationId);
+        this.db
+          .prepare("DELETE FROM operations WHERE operation_id = ?")
+          .run(operationId);
+      });
+      return this.head;
+    }
+    this.stageTables(dirty);
+    this.stageIgnoreFenceIfDirty();
     this.assertOnlyVersionedStaged();
-    const hasStaged = this.db
-      .doltStatus()
-      .some((entry) => entry.staged === 1);
-    const revision = hasStaged ? this.sqlCommit(row.message) : this.head;
+    const revision = this.sqlCommit(row.message);
     this.semanticCommitBoundary?.("after-dolt-commit", operationId);
+    this.assertCleanSemanticWorktree();
     this.runtime(() => {
       this.db
         .prepare(
@@ -442,8 +466,8 @@ export class DoltStore {
 
   private sqlCommit(message: string): string {
     const row = this.db
-      .prepare("SELECT dolt_commit('-m', ?) AS hash")
-      .get(message) as unknown as CommitRow | undefined;
+      .prepare("SELECT dolt_commit('-m', ?, '--author', ?) AS hash")
+      .get(message, this.author) as unknown as CommitRow | undefined;
     const hash = row?.hash;
     if (!hash) {
       throw new EngineFault({
@@ -461,6 +485,42 @@ export class DoltStore {
       this.db
         .prepare("SELECT dolt_add(?) AS result")
         .get(table);
+    }
+  }
+
+  private stageIgnoreFenceIfDirty(): void {
+    const dirty = this.db
+      .doltStatus()
+      .some(
+        (entry) => entry.table_name === "dolt_ignore" && entry.staged === 0,
+      );
+    if (dirty) {
+      this.db.prepare("SELECT dolt_add('dolt_ignore') AS result").get();
+    }
+  }
+
+  private dirtySemanticTables(): SemanticTable[] {
+    const dirty: SemanticTable[] = [];
+    for (const entry of this.db.doltStatus()) {
+      if (entry.staged !== 0 || entry.status === "ignored") continue;
+      if (!isSemanticTable(entry.table_name)) continue;
+      // doltlite reports tables with secondary indexes as modified even when
+      // their rows are unchanged, so confirm against the row-level diff.
+      if (this.db.doltDiff("HEAD", "WORKING", entry.table_name).length > 0) {
+        dirty.push(entry.table_name);
+      }
+    }
+    return dirty;
+  }
+
+  private assertCleanSemanticWorktree(): void {
+    const dirty = this.dirtySemanticTables();
+    if (dirty.length > 0) {
+      throw new EngineFault({
+        code: "STORAGE_ERROR",
+        message:
+          "Semantic worktree is dirty after commit: " + dirty.join(", "),
+      });
     }
   }
 
@@ -566,13 +626,6 @@ function sortJson(value: unknown): unknown {
 function commitMessage(input: OperationInput, operationId: string): string {
   const target = input.artifactId ? ` artifact:${input.artifactId}` : "";
   return `${input.operation}${target}\n\nop-id: ${operationId}`;
-}
-
-function parseStringArray(text: string): string[] {
-  const parsed = parseJson<unknown>(text, []);
-  return Array.isArray(parsed)
-    ? parsed.filter((item): item is string => typeof item === "string")
-    : [];
 }
 
 function isSemanticTable(table: string): table is SemanticTable {

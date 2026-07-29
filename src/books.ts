@@ -28,7 +28,6 @@ async function renameBook(
         details: { oldSlug: current.slug, newSlug: slug },
         writeSet: ["book", `book-slug:${current.slug}`, `book-slug:${slug}`],
       },
-      ["book"],
       () => {
         context.store.db
           .prepare("UPDATE book SET slug=? WHERE book_id=?")
