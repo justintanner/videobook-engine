@@ -162,6 +162,23 @@ graphs remain available separately through `engine.notebooks`.
 All APIs operate in the engine's one book. No method accepts or returns a
 project ID.
 
+### Full API benchmark
+
+The deterministic benchmark exercises every top-level `Engine` API group,
+reports latency distributions per operation, and identifies the smallest set
+of operations responsible for at least 80% of measured time:
+
+```bash
+npm run benchmark:api
+npm run benchmark:api -- --json --output /tmp/videobook-api-benchmark.json
+npm run benchmark:api:smoke
+```
+
+The default workload creates 40 artifacts, indexes 2,000 temporal moments, and
+repeats the read paths 100 times. Use `--artifacts`, `--moments`, and `--reads`
+to select a different workload; use `--retain-fixture` to keep the generated
+engine root for inspection.
+
 Deleting an artifact or entity that is referenced by a live cell or clip
 returns `IN_USE` with `details.references`. Deleting a notebook cascades
 its owned cells, edges, and terminal runs. There are no tombstone rows.

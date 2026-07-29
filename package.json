@@ -31,11 +31,13 @@
     "fixtures"
   ],
   "scripts": {
+    "benchmark:api": "tsx benchmarks/run-api-benchmark.ts",
+    "benchmark:api:smoke": "tsx benchmarks/run-api-benchmark.ts --quick",
     "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
     "build": "npm run clean && tsc",
     "prepare": "npm run build",
     "prepack": "npm run build",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.benchmarks.json",
     "lint": "knip",
     "test": "vitest run",
     "test:watch": "vitest",
