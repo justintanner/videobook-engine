@@ -1051,14 +1051,17 @@ describe("single-book Dolt engine", () => {
     const history = createHistoryApi(context);
     // Seed three unrelated commits so naive revision scans would wander.
     const seed = async (operation: string): Promise<void> => {
-      await context.store.semantic({ operation }, () => {
-        context.store.db
-          .prepare(
-            `INSERT INTO book_metadata(key, value_json) VALUES (?, '{}')
-             ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json`,
-          )
-          .run(operation);
-      });
+      await context.store.semantic(
+        { operation, tables: ["book_metadata"] },
+        () => {
+          context.store.db
+            .prepare(
+              `INSERT INTO book_metadata(key, value_json) VALUES (?, '{}')
+               ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json`,
+            )
+            .run(operation);
+        },
+      );
     };
     await seed("seed-one");
     await seed("seed-two");

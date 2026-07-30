@@ -143,6 +143,13 @@ async function commitEdit(
     const mutation = await context.store.semantic(
       {
         operation: "commit_edit",
+        tables: [
+          "sequence_clips",
+          "clip_links",
+          "clip_transforms",
+          "transitions",
+          "caption_cues",
+        ],
         details: {
           commandId: intent.commandId,
           actionId,
@@ -224,6 +231,13 @@ async function restoreEdit(
     const mutation = await context.store.semantic(
       {
         operation: "restore_edit",
+        tables: [
+          "sequence_clips",
+          "clip_links",
+          "clip_transforms",
+          "transitions",
+          "caption_cues",
+        ],
         details: {
           actionId,
           sequenceId: target.sequenceId,

@@ -226,6 +226,7 @@ async function recordOperation(
     const mutation = await context.store.semantic(
       {
         operation,
+        tables: [],
         ...(artifact ? { artifactId: artifact.artifact_id } : {}),
         details: {
           ...(details ?? {}),
@@ -299,6 +300,12 @@ async function restoreArtifact(
     const mutation = await context.store.semantic(
       {
         operation: "restore_artifact",
+        tables: [
+          "artifacts",
+          "artifact_files",
+          "artifact_metadata",
+          "audio_waveforms",
+        ],
         artifactId,
         details: { fromRevision: revision.hash, slug: desiredSlug },
         writeSet: [`artifact:${artifactId}`, `artifact-slug:${desiredSlug}`],
@@ -403,6 +410,7 @@ async function restoreBook(
     const mutation = await context.store.semantic(
       {
         operation: "restore",
+        tables: SEMANTIC_TABLES,
         details: { fromRevision: revision.hash },
         writeSet: ["book"],
       },

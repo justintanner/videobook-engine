@@ -574,6 +574,7 @@ async function writeFailure(
     const mutation = await context.store.semantic<number>(
       {
         operation: "artifact_failed",
+        tables: [],
         artifactId: artifact.artifact_id,
         details: { ...info },
         writeSet: [`artifact-runtime:${artifact.artifact_id}`],
@@ -650,6 +651,7 @@ async function clearFailure(
     const mutation = await context.store.semantic(
       {
         operation: "clear_artifact_failure",
+        tables: [],
         artifactId: artifact.artifact_id,
         writeSet: [`artifact-runtime:${artifact.artifact_id}`],
       },

@@ -85,6 +85,7 @@ async function deleteArtifactMetadata(
     await context.store.semantic(
       {
         operation: "delete_artifact_metadata",
+        tables: ["artifact_metadata"],
         artifactId: artifact.artifact_id,
         details: { key: normalizedKey },
         writeSet: [`artifact-metadata:${artifact.artifact_id}:${normalizedKey}`],
@@ -112,6 +113,7 @@ async function deleteBookMetadata(
     await context.store.semantic(
       {
         operation: "delete_book_metadata",
+        tables: ["book_metadata"],
         details: { key: normalizedKey },
         writeSet: [`book-metadata:${normalizedKey}`],
       },
@@ -138,6 +140,7 @@ async function deleteWaveform(
     await context.store.semantic(
       {
         operation: "delete_audio_waveform",
+        tables: ["audio_waveforms"],
         artifactId: artifact.artifact_id,
         writeSet: [`waveform:${artifact.artifact_id}`],
       },
@@ -163,6 +166,7 @@ async function writeArtifactMetadata(
     const mutation = await context.store.semantic(
       {
         operation: "write_artifact_metadata",
+        tables: ["artifact_metadata"],
         artifactId: artifact.artifact_id,
         details: { key: normalizedKey },
         writeSet: [`artifact-metadata:${artifact.artifact_id}:${normalizedKey}`],
@@ -254,6 +258,7 @@ async function writeBookMetadata(
     const mutation = await context.store.semantic(
       {
         operation: "write_book_metadata",
+        tables: ["book_metadata"],
         details: { key: normalizedKey },
         writeSet: [`book-metadata:${normalizedKey}`],
       },
@@ -299,6 +304,7 @@ async function writeWaveform(
     const mutation = await context.store.semantic(
       {
         operation: "write_audio_waveform",
+        tables: ["audio_waveforms"],
         artifactId: artifact.artifact_id,
         writeSet: [`waveform:${artifact.artifact_id}`],
       },

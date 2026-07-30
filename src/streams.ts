@@ -110,6 +110,7 @@ async function registerStream(
     const mutation = await context.store.semantic(
       {
         operation: "register_artifact_stream",
+        tables: ["artifact_streams"],
         artifactId: artifact.artifact_id,
         details: {
           streamId,

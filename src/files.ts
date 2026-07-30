@@ -112,6 +112,7 @@ async function writeFile(
     const mutation = await context.store.semantic(
       {
         operation: "write_file",
+        tables: ["objects", "artifact_files"],
         artifactId: artifact.artifact_id,
         details: {
           path: relativePath,
@@ -159,6 +160,7 @@ async function writeFromPath(
     const mutation = await context.store.semantic(
       {
         operation: "write_file",
+        tables: ["objects", "artifact_files"],
         artifactId: artifact.artifact_id,
         details: {
           path: relativePath,
@@ -220,6 +222,7 @@ async function deleteFile(
     const mutation = await context.store.semantic(
       {
         operation: "delete_file",
+        tables: ["artifact_files"],
         artifactId: artifact.artifact_id,
         details: { path: relativePath },
         writeSet: [`file:${artifact.artifact_id}:${relativePath}`],
@@ -260,6 +263,7 @@ async function renameFile(
     const mutation = await context.store.semantic(
       {
         operation: "rename_file",
+        tables: ["artifact_files"],
         artifactId: artifact.artifact_id,
         details: { oldPath: oldRelative, newPath: newRelative },
         writeSet: [
@@ -306,6 +310,7 @@ async function copyFile(
     const mutation = await context.store.semantic(
       {
         operation: "copy_file",
+        tables: ["artifact_files"],
         artifactId: destination.artifact_id,
         details: {
           sourceArtifactId: source.artifact_id,
@@ -432,6 +437,7 @@ async function ingestWorkspace(
     const mutation = await context.store.semantic(
       {
         operation,
+        tables: ["objects", "artifact_files"],
         artifactId: artifact.artifact_id,
         details: { ...details, paths: expandedPaths },
         writeSet: expandedPaths.map(

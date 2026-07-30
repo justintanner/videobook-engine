@@ -25,6 +25,7 @@ async function renameBook(
     const mutation = await context.store.semantic(
       {
         operation: "rename_book",
+        tables: ["book"],
         details: { oldSlug: current.slug, newSlug: slug },
         writeSet: ["book", `book-slug:${current.slug}`, `book-slug:${slug}`],
       },

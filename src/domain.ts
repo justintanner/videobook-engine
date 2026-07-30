@@ -242,6 +242,7 @@ async function createEntity(
     const mutation = await context.store.semantic(
       {
         operation: "create_entity",
+        tables: ["entities"],
         details: { entityId, type, name: normalizedName },
         writeSet: [`entity:${entityId}`],
       },
@@ -297,6 +298,7 @@ async function writeEntity(
     const mutation = await context.store.semantic(
       {
         operation: "write_entity",
+        tables: ["entities"],
         details: { entityId: entity.id, type: entity.type },
         writeSet: [`entity:${entity.id}`],
       },
@@ -352,6 +354,7 @@ async function deleteEntity(
     const mutation = await context.store.semantic(
       {
         operation: "delete_entity",
+        tables: ["entities"],
         details: { entityId },
         writeSet: [`entity:${entityId}`],
       },
@@ -375,6 +378,7 @@ async function createNotebook(
     const mutation = await context.store.semantic(
       {
         operation: "create_notebook",
+        tables: ["notebooks"],
         details: { notebookId, name: normalizedName },
         writeSet: [`notebook:${notebookId}`],
       },
@@ -410,6 +414,19 @@ async function writeNotebook(
     const mutation = await context.store.semantic(
       {
         operation: "write_notebook",
+        tables: [
+          "notebooks",
+          "notebook_fields",
+          "cells",
+          "notebook_cell_executions",
+          "notebook_generation_plans",
+          "notebook_run_plans",
+          "notebook_transcript_edits",
+          "notebook_transcript_attachments",
+          "edges",
+          "cell_references",
+          "pinned_search_results",
+        ],
         details: { notebookId: notebook.id },
         writeSet: [
           `notebook:${notebook.id}`,
@@ -447,6 +464,7 @@ async function insertNotebookCell(
     const mutation = await context.store.semantic(
       {
         operation: "insert_cell",
+        tables: ["cells", "cell_references", "pinned_search_results"],
         details: { notebookId, cellId: cell.id },
         writeSet: [`notebook:${notebookId}`, `cell:${notebookId}:${cell.id}`],
       },
@@ -485,6 +503,7 @@ async function updateNotebookCell(
     const mutation = await context.store.semantic(
       {
         operation: "update_cell",
+        tables: ["cells", "cell_references", "pinned_search_results"],
         details: { notebookId, cellId: cell.id },
         writeSet: [`notebook:${notebookId}`, `cell:${notebookId}:${cell.id}`],
       },
@@ -541,6 +560,14 @@ async function removeNotebookCell(
     const mutation = await context.store.semantic(
       {
         operation: "remove_cell",
+        tables: [
+          "cells",
+          "notebook_cell_executions",
+          "notebook_generation_plans",
+          "edges",
+          "cell_references",
+          "pinned_search_results",
+        ],
         details: { notebookId, cellId },
         writeSet: [`notebook:${notebookId}`, `cell:${notebookId}:${cellId}`],
       },
@@ -737,6 +764,20 @@ async function deleteNotebook(
     const mutation = await context.store.semantic(
       {
         operation: "delete_notebook",
+        tables: [
+          "notebooks",
+          "notebook_fields",
+          "cells",
+          "notebook_cell_executions",
+          "notebook_generation_plans",
+          "notebook_run_plans",
+          "notebook_transcript_edits",
+          "notebook_transcript_attachments",
+          "edges",
+          "runs",
+          "cell_references",
+          "pinned_search_results",
+        ],
         details: { notebookId },
         writeSet: [`notebook:${notebookId}`],
       },
@@ -770,6 +811,7 @@ async function recordNotebookRun(
     const mutation = await context.store.semantic(
       {
         operation: "record_notebook_run",
+        tables: ["runs"],
         details: { notebookId: run.notebookId, runId: run.id },
         writeSet: [`run:${run.id}`],
       },

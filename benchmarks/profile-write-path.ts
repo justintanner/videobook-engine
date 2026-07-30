@@ -1,14 +1,13 @@
 // Attribution profiler for the semantic write path.
 //
-// The API benchmark shows artifacts.create / files.write /
-// metadata.artifacts.write all costing ~55-60ms, with a long tail of unrelated
-// single-write operations at the same ~60ms. That uniformity points at one
-// shared per-operation cost rather than three slow features.
-//
-// A doltlite-level micro-benchmark ruled out the storage layer: a dolt_commit
-// costs ~0.4ms and `PRAGMA synchronous` FULL/NORMAL/OFF makes no measurable
-// difference. So the cost lives in the engine. This script times DoltStore's
-// own methods to find which phase of a semantic write actually burns the time.
+// History: writes once cost ~40-60ms because doltStatus over-reports (~25 of
+// 34 semantic tables flagged modified on a one-table write) and the store
+// row-probed every candidate twice per write, thrashing a doltlite-internal
+// cache (~0.6ms per distinct table vs ~0.01ms repeated). Declared write sets
+// (OperationInput.tables) removed the sweeps: writes now probe and stage only
+// the tables their operation declared, and the full-catalog sweep runs once
+// per open (verifyCleanSemanticWorktree). A healthy write is ~5-10ms,
+// dominated by dolt_add + dolt_commit.
 //
 // Times are INCLUSIVE (a method's total includes its callees), so read
 // `semantic` as the whole operation and the rest as its breakdown.
@@ -49,11 +48,11 @@ const METHODS = [
   "commitOutbox",
   "sqlCommit",
   "stageTables",
-  "stageIgnoreFenceIfDirty",
-  "dirtySemanticTables",
-  "assertCleanSemanticWorktree",
+  "hasWorkingDiff",
+  "assertCommittedTablesClean",
   "assertOnlyVersionedStaged",
   "assertRuntimeUnstaged",
+  "verifyCleanSemanticWorktree",
   "clearOutboxRow",
   "recoverOutbox",
   "runtime",
@@ -65,8 +64,7 @@ function patch(): void {
   const proto = DoltStore.prototype as unknown as Record<string, unknown>;
   for (const name of METHODS) {
     const original = proto[name] as
-      | ((...args: unknown[]) => unknown)
-      | undefined;
+      ((...args: unknown[]) => unknown) | undefined;
     if (typeof original !== "function") continue;
     Object.defineProperty(proto, name, {
       configurable: true,
@@ -136,21 +134,24 @@ async function main(): Promise<void> {
 
   const operations = iterations * 2;
   console.log(
-    `${iterations} iterations = ${operations} write operations in `
-      + `${wall.toFixed(1)}ms (${(wall / operations).toFixed(2)}ms per operation)`,
+    `${iterations} iterations = ${operations} write operations in ` +
+      `${wall.toFixed(1)}ms (${(wall / operations).toFixed(2)}ms per operation)`,
   );
   console.log("(inclusive times: `semantic` is the whole write)\n");
   console.log(
-    "DoltStore method".padEnd(32) + "calls".padStart(8) + "total".padStart(12)
-      + "per-op".padStart(11) + "share".padStart(9),
+    "DoltStore method".padEnd(32) +
+      "calls".padStart(8) +
+      "total".padStart(12) +
+      "per-op".padStart(11) +
+      "share".padStart(9),
   );
   for (const row of rows) {
     console.log(
-      row.name.padEnd(32)
-        + String(row.calls).padStart(8)
-        + `${row.totalMs.toFixed(1)}ms`.padStart(12)
-        + `${(row.totalMs / operations).toFixed(2)}ms`.padStart(11)
-        + `${((row.totalMs / wall) * 100).toFixed(1)}%`.padStart(9),
+      row.name.padEnd(32) +
+        String(row.calls).padStart(8) +
+        `${row.totalMs.toFixed(1)}ms`.padStart(12) +
+        `${(row.totalMs / operations).toFixed(2)}ms`.padStart(11) +
+        `${((row.totalMs / wall) * 100).toFixed(1)}%`.padStart(9),
     );
   }
 
@@ -158,9 +159,9 @@ async function main(): Promise<void> {
   if (semantic) {
     const outside = wall - semantic.totalMs;
     console.log(
-      `\nOutside DoltStore.semantic: ${outside.toFixed(1)}ms `
-        + `(${((outside / wall) * 100).toFixed(1)}% of wall) — engine-layer work `
-        + "before/after the store call.",
+      `\nOutside DoltStore.semantic: ${outside.toFixed(1)}ms ` +
+        `(${((outside / wall) * 100).toFixed(1)}% of wall) — engine-layer work ` +
+        "before/after the store call.",
     );
   }
 

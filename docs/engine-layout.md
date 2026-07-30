@@ -58,12 +58,16 @@ flowchart LR
 - The only supported live Dolt branch is `main`.
 - Semantic mutations are SQL transactions followed by forward-only Dolt
   commits. A restore creates a new commit; it never rewinds the live branch.
-- `SEMANTIC_TABLES` is the staging allowlist. Commits stage every dirty
-  semantic table (not a caller-declared subset), assert a clean semantic
-  worktree afterwards, and are skipped when only runtime bookkeeping
-  changed. The commit itself is the provenance record: the operation, its
-  parameters, write set, and base revision ride in a structured commit
-  message under the configured identity as `--author`.
+- `SEMANTIC_TABLES` is the staging allowlist. Every operation declares the
+  semantic tables it may write (`OperationInput.tables`, including ON DELETE
+  CASCADE targets); a commit probes exactly that set with row-level diffs,
+  stages the truly dirty tables, asserts them clean afterwards, and is
+  skipped when only runtime bookkeeping changed. A full-catalog sweep runs
+  once per open and faults on rows no operation attributed (doltStatus
+  itself over-reports and is never trusted for dirtiness). The commit itself
+  is the provenance record: the operation, its parameters, write set, and
+  base revision ride in a structured commit message under the configured
+  identity as `--author`.
 - `runtime_%`, `job_runs`, and `sqlite_sequence` are ignored by Dolt. Runtime
   state can be rebuilt, expired, or invalidated without changing semantic
   history.
@@ -423,19 +427,27 @@ to recover safely:
 
 1. Start `BEGIN IMMEDIATE`.
 2. Change the requested semantic rows.
-3. Insert `runtime_commit_outbox(operation_id, tables_json, message, created_at)`
-   with the structured commit message described above.
+3. Insert `runtime_commit_outbox(operation_id, tables_json, message, created_at)`;
+   `tables_json` carries the operation's declared write set alongside the
+   allow-empty flag, so the declaration commits atomically with the mutation
+   and recovery stages the same tables.
 4. Commit the SQL transaction.
-5. Stage every dirty table from `SEMANTIC_TABLES` (row-level diffs filter out
-   doltlite's phantom `modified` entries for tables with secondary indexes).
+5. Probe each declared table with a row-level diff (`dolt_diff_<table>`,
+   which also sees staged-but-uncommitted rows during recovery) and stage
+   the dirty ones one `dolt_add` at a time — doltlite's multi-argument
+   `dolt_add` over-stages, and its `doltStatus` phantom `modified` entries
+   are why status is never consulted for dirtiness.
 6. Create a Dolt commit on `main` with the configured identity as `--author`;
    when nothing semantic changed, clear the outbox row instead of minting an
    empty commit.
-7. Assert no semantic table is still dirty, then delete the runtime outbox
-   row in a runtime transaction.
+7. Assert the committed tables are no longer dirty, then delete the runtime
+   outbox row.
 
-On reopen, the engine drains any surviving outbox record. Runtime staging is
-checked before writes and after commits. Opening a catalog never creates a
+On reopen, the engine drains any surviving outbox record (legacy rows
+without a declared table list fall back to probing the full allowlist) and
+then sweeps the whole catalog: any semantic table with unattributed
+uncommitted rows faults the open with `STORAGE_ERROR`. Staged tables are
+asserted against the allowlist before every commit. Opening a catalog never creates a
 commit: terminal-job reconciliation writes the ignored `job_runs` table
 through a runtime transaction. Historical reads use
 `dolt_at_<semantic_table>(revision)`; history and conflict projections use

@@ -217,6 +217,7 @@ async function addTrack(
     const mutation = await context.store.semantic(
       {
         operation: "add_sequence_track",
+        tables: ["sequence_tracks"],
         details: { sequenceId, trackId, kind: input.kind, ordinal },
         writeSet: [`sequence:${sequenceId}`, `track:${trackId}`],
       },
@@ -289,6 +290,7 @@ async function moveTrack(
     const mutation = await context.store.semantic(
       {
         operation: "move_sequence_track",
+        tables: ["sequence_tracks"],
         details: {
           sequenceId: row.sequence_id,
           trackId,
@@ -351,6 +353,14 @@ async function removeTrack(
     const mutation = await context.store.semantic(
       {
         operation: "remove_sequence_track",
+        tables: [
+          "sequence_tracks",
+          "sequence_clips",
+          "clip_links",
+          "clip_transforms",
+          "transitions",
+          "caption_cues",
+        ],
         details: {
           sequenceId: row.sequence_id,
           trackId,
@@ -395,6 +405,7 @@ async function updateTrack(
     const mutation = await context.store.semantic(
       {
         operation: "update_sequence_track",
+        tables: ["sequence_tracks"],
         details: { trackId, sequenceId: row.sequence_id },
         writeSet: [`sequence:${row.sequence_id}`, `track:${trackId}`],
       },
@@ -448,6 +459,7 @@ async function createSequence(
     const mutation = await context.store.semantic(
       {
         operation: "create_sequence",
+        tables: ["sequences", "sequence_tracks"],
         details: {
           sequenceId,
           name: normalized.name,
@@ -485,6 +497,7 @@ async function renameSequence(
     const mutation = await context.store.semantic(
       {
         operation: "rename_sequence",
+        tables: ["sequences"],
         details: { sequenceId, oldName: current.name, newName: name },
         writeSet: [`sequence:${sequenceId}`],
       },
@@ -516,6 +529,7 @@ async function updateSequenceCanvas(
     const mutation = await context.store.semantic(
       {
         operation: "update_sequence_canvas",
+        tables: ["sequences"],
         details: {
           sequenceId,
           oldWidth: current.width,
@@ -575,6 +589,15 @@ async function deleteSequence(
     const mutation = await context.store.semantic(
       {
         operation: "delete_sequence",
+        tables: [
+          "sequences",
+          "sequence_tracks",
+          "sequence_clips",
+          "clip_links",
+          "clip_transforms",
+          "transitions",
+          "caption_cues",
+        ],
         details: { sequenceId },
         writeSet: [`sequence:${sequenceId}`],
       },

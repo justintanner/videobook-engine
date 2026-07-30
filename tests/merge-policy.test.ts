@@ -639,8 +639,9 @@ describe("engine-level merge policy behavior", () => {
     const original = engine.sequences.getPrimary();
     engine.close();
 
-    // Simulate a merge that left a second primary row: a raw write to the
-    // working set, the state a post-merge reconcile would clean up.
+    // Simulate a merge that landed a second primary row. The duplicate is
+    // committed, as a real integration commit would be — the engine refuses
+    // to open over uncommitted semantic dirt (verifyCleanSemanticWorktree).
     const db = new DatabaseSync(path.join(dataDir, "videobook.db"));
     db.prepare(
       `INSERT INTO sequences(
@@ -651,6 +652,10 @@ describe("engine-level merge policy behavior", () => {
         created_at
       ) VALUES (?, ?, 'Merged cut', 1, 1920, 1080, 1, 1, 30, 1, 48000, 'stereo', '[0,0,0,255]', ?)`,
     ).run(uuidv7(), bookId, original.createdAt + 1);
+    db.prepare("SELECT dolt_add('sequences') AS result").get();
+    db.prepare(
+      "SELECT dolt_commit('-m', 'merge fallout: duplicate primary', '--author', 'Test <test@localhost>') AS hash",
+    ).get();
     db.close();
 
     const reopened = createEngine({

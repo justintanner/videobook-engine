@@ -111,6 +111,7 @@ async function createArtifact(
     const mutation = await context.store.semantic(
       {
         operation: "create_artifact",
+        tables: ["artifacts"],
         artifactId,
         details,
         writeSet,
@@ -178,6 +179,7 @@ async function renameArtifact(
     const mutation = await context.store.semantic(
       {
         operation: "rename_artifact",
+        tables: ["artifacts"],
         artifactId: current.artifact_id,
         details: { oldSlug: current.slug, newSlug: slug },
         writeSet: [
@@ -227,6 +229,12 @@ async function deleteArtifact(
     const mutation = await context.store.semantic(
       {
         operation: "delete_artifact",
+        tables: [
+          "artifacts",
+          "artifact_files",
+          "artifact_metadata",
+          "audio_waveforms",
+        ],
         artifactId: artifact.artifact_id,
         details: {
           slug: artifact.slug,

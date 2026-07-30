@@ -70,6 +70,7 @@ async function recordPrompt(
     const mutation = await context.store.semantic(
       {
         operation: "record_prompt",
+        tables: ["prompt_entries"],
         details: { surface },
         writeSet: [`prompt:${promptId}`],
       },
@@ -144,6 +145,7 @@ async function appendMessage<T extends Record<string, unknown>>(
     const mutation = await context.store.semantic(
       {
         operation: "append_message",
+        tables: ["messages"],
         details: { messageId, role },
         writeSet: [`message:${messageId}`],
       },

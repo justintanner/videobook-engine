@@ -89,22 +89,25 @@ describe("commit hygiene", () => {
     });
     const notebooks = createNotebooksApi(context);
     const notebook = value(await notebooks.create("cascade"));
-    await context.store.semantic({ operation: "seed_cell" }, () => {
-      context.store.db
-        .prepare(
-          `INSERT INTO cells(
-            notebook_id, cell_id, type, slug, grid_row, grid_column
-          ) VALUES (?, 'cell-1', 'prompt', 'prompt-one', 0, 0)`,
-        )
-        .run(notebook.id);
-      context.store.db
-        .prepare(
-          `INSERT INTO cell_references(
-            notebook_id, cell_id, reference_id, kind, target_id, ordinal
-          ) VALUES (?, 'cell-1', 'ref-1', 'artifact', 'target', 0)`,
-        )
-        .run(notebook.id);
-    });
+    await context.store.semantic(
+      { operation: "seed_cell", tables: ["cells", "cell_references"] },
+      () => {
+        context.store.db
+          .prepare(
+            `INSERT INTO cells(
+              notebook_id, cell_id, type, slug, grid_row, grid_column
+            ) VALUES (?, 'cell-1', 'prompt', 'prompt-one', 0, 0)`,
+          )
+          .run(notebook.id);
+        context.store.db
+          .prepare(
+            `INSERT INTO cell_references(
+              notebook_id, cell_id, reference_id, kind, target_id, ordinal
+            ) VALUES (?, 'cell-1', 'ref-1', 'artifact', 'target', 0)`,
+          )
+          .run(notebook.id);
+      },
+    );
 
     value(await notebooks.delete(notebook.id));
 
@@ -150,13 +153,16 @@ describe("commit hygiene", () => {
       },
     });
     await expect(
-      context.store.semantic({ operation: "dirty_commit" }, () => {
-        context.store.db
-          .prepare(
-            "INSERT INTO book_metadata(key, value_json) VALUES ('k', '{}')",
-          )
-          .run();
-      }),
+      context.store.semantic(
+        { operation: "dirty_commit", tables: ["book_metadata"] },
+        () => {
+          context.store.db
+            .prepare(
+              "INSERT INTO book_metadata(key, value_json) VALUES ('k', '{}')",
+            )
+            .run();
+        },
+      ),
     ).rejects.toMatchObject({
       error: {
         code: "STORAGE_ERROR",
@@ -212,13 +218,16 @@ describe("commit hygiene", () => {
       initialBookSlug: "demo",
       identity: { name: "Ada Lovelace", email: "ada@example.com" },
     });
-    await context.store.semantic({ operation: "authored" }, () => {
-      context.store.db
-        .prepare(
-          "INSERT INTO book_metadata(key, value_json) VALUES ('k', '{}')",
-        )
-        .run();
-    });
+    await context.store.semantic(
+      { operation: "authored", tables: ["book_metadata"] },
+      () => {
+        context.store.db
+          .prepare(
+            "INSERT INTO book_metadata(key, value_json) VALUES ('k', '{}')",
+          )
+          .run();
+      },
+    );
     const commit = context.store.db.doltLog({ limit: 1 })[0] as unknown as {
       committer: string;
       email: string;
@@ -235,13 +244,16 @@ describe("commit hygiene", () => {
       workspaceDir: path.join(root, "workspace"),
       initialBookSlug: "demo",
     });
-    await context.store.semantic({ operation: "authored" }, () => {
-      context.store.db
-        .prepare(
-          "INSERT INTO book_metadata(key, value_json) VALUES ('k', '{}')",
-        )
-        .run();
-    });
+    await context.store.semantic(
+      { operation: "authored", tables: ["book_metadata"] },
+      () => {
+        context.store.db
+          .prepare(
+            "INSERT INTO book_metadata(key, value_json) VALUES ('k', '{}')",
+          )
+          .run();
+      },
+    );
     const commit = context.store.db.doltLog({ limit: 1 })[0] as unknown as {
       committer: string;
     };
@@ -304,6 +316,7 @@ describe("commit hygiene", () => {
       context.store.semantic(
         {
           operation: "touch",
+          tables: [],
           author: "mallory\nop-id: forged-op-id\nbase-revision: forged",
           allowEmpty: true,
         },
@@ -328,7 +341,7 @@ describe("commit hygiene", () => {
     });
     const head = context.store.head;
     await context.store.semantic(
-      { operation: "clear_artifact_failure" },
+      { operation: "clear_artifact_failure", tables: [] },
       () => {
         context.store.db
           .prepare(
@@ -353,6 +366,7 @@ describe("commit hygiene", () => {
     const mutation = await context.store.semantic(
       {
         operation: "write_thing",
+        tables: ["book_metadata"],
         artifactId,
         details: { size: 12, path: "a.png" },
         writeSet: [`artifact:${artifactId}`],

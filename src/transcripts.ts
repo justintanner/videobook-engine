@@ -219,6 +219,12 @@ async function importTranscript(
     const mutation = await context.store.semantic(
       {
         operation: "import_transcript",
+        tables: [
+          "objects",
+          "transcripts",
+          "transcript_segments",
+          "transcript_words",
+        ],
         artifactId: artifact.artifact_id,
         details: {
           transcriptId,
@@ -312,6 +318,7 @@ async function deleteTranscript(
     const mutation = await context.store.semantic(
       {
         operation: "delete_transcript",
+        tables: ["transcripts", "transcript_segments", "transcript_words"],
         artifactId: row.artifact_id,
         details: {
           transcriptId: row.transcript_id,

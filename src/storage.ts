@@ -182,6 +182,7 @@ async function deleteObject(
       const mutation = await context.store.semantic(
         {
           operation: "delete_object",
+          tables: ["objects"],
           details,
           writeSet: [`object:${row.object_hash}`],
         },
@@ -275,7 +276,7 @@ async function collectGarbage(
     const details: Record<string, unknown> = {};
     const writeSet: string[] = [];
     const mutation = await context.store.semantic(
-      { operation: "gc_objects", details, writeSet },
+      { operation: "gc_objects", tables: ["objects"], details, writeSet },
       (_operationId, now) => {
         // Scanning inside the serialized semantic section: no concurrent
         // commit can add a reference between the scan and the tombstones.

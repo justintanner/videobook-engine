@@ -1,3 +1,5 @@
+import type { SemanticTable } from "./schema.js";
+
 export type ArtifactKind =
   | "video"
   | "image"
@@ -358,6 +360,15 @@ export interface Revision {
 
 export interface OperationInput {
   operation: string;
+  /**
+   * Every semantic table the mutation may INSERT, UPDATE, or DELETE,
+   * including tables reached through ON DELETE CASCADE. The store probes
+   * and stages exactly this set, and persists it in the commit outbox so
+   * crash recovery stages the same set. Omitting a written table strands
+   * its rows in the working set until the open-time integrity sweep
+   * faults; declaring an unwritten table costs one cheap probe.
+   */
+  tables: readonly SemanticTable[];
   artifactId?: string;
   details?: Record<string, unknown>;
   author?: string;

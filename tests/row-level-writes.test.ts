@@ -191,15 +191,18 @@ describe("row-level notebook cell writes", () => {
       slot: { row: 0, column: 0 },
     });
     // Simulate merge fallout: two cells land on the same grid slot.
-    await context.store.semantic({ operation: "seed_collision" }, () => {
-      const insert = context.store.db.prepare(
-        `INSERT INTO cells(
-          notebook_id, cell_id, type, slug, grid_row, grid_column
-        ) VALUES (?, ?, ?, ?, 0, 0)`,
-      );
-      insert.run(notebook.id, first.id, first.type, first.slug);
-      insert.run(notebook.id, second.id, second.type, second.slug);
-    });
+    await context.store.semantic(
+      { operation: "seed_collision", tables: ["cells"] },
+      () => {
+        const insert = context.store.db.prepare(
+          `INSERT INTO cells(
+            notebook_id, cell_id, type, slug, grid_row, grid_column
+          ) VALUES (?, ?, ?, ?, 0, 0)`,
+        );
+        insert.run(notebook.id, first.id, first.type, first.slug);
+        insert.run(notebook.id, second.id, second.type, second.slug);
+      },
+    );
 
     const third = notebooks.createCell({
       type: "image",

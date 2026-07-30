@@ -128,7 +128,6 @@ export class DoltStore {
     return this.serial(async () => {
       const operationId = uuidv7();
       const now = Date.now();
-      this.assertRuntimeUnstaged();
       this.begin();
       let value: T;
       try {
@@ -141,7 +140,12 @@ export class DoltStore {
           )
           .run(
             operationId,
-            canonicalJson(input.allowEmpty ? [OUTBOX_ALLOW_EMPTY_FLAG] : []),
+            // The declared write set commits atomically with the mutation,
+            // so recovery after a crash stages exactly the same tables.
+            canonicalJson({
+              tables: uniqueSemanticTables(input.tables),
+              ...(input.allowEmpty ? { allowEmpty: true } : {}),
+            }),
             commitMessage(input, operationId),
             now,
           );
@@ -311,6 +315,7 @@ export class DoltStore {
       .run(String(SCHEMA_VERSION), Date.now());
     this.assertRuntimeUnstaged();
     this.recoverOutbox();
+    this.verifyCleanSemanticWorktree();
   }
 
   private ensureIgnorePatterns(): void {
@@ -430,36 +435,54 @@ export class DoltStore {
       )
       .get(operationId) as unknown as OutboxRow | undefined;
     if (!row) return this.head;
-    const allowEmpty = parseJson<string[]>(row.tables_json, []).includes(
-      OUTBOX_ALLOW_EMPTY_FLAG,
-    );
-    const dirty = this.dirtySemanticTables();
-    if (dirty.length === 0 && !allowEmpty) {
+    const declared = parseOutboxTables(row.tables_json);
+    const dirty = declared.tables.filter((table) => this.hasWorkingDiff(table));
+    if (dirty.length === 0 && !declared.allowEmpty) {
       // Either the mutation only touched ignored runtime tables (bookkeeping
       // mints no commit), or this is recovery after a crash that followed the
       // dolt commit. Either way only the outbox row is left to clear.
       this.clearOutboxRow(operationId);
       return this.head;
     }
+    // One status scan guards the staging boundary: anything already staged
+    // must be on the allowlist (a runtime table here is corruption), and a
+    // dirty dolt_ignore rides along with the commit. Our own dolt_add calls
+    // below stage allowlisted tables only, so the pre-staging snapshot
+    // covers the post-staging assertion too.
+    const status = this.db.doltStatus();
+    this.assertOnlyVersionedStaged(status);
     this.stageTables(dirty);
-    this.stageIgnoreFenceIfDirty();
-    this.assertOnlyVersionedStaged();
+    if (
+      status.some(
+        (entry) => entry.table_name === "dolt_ignore" && entry.staged === 0,
+      )
+    ) {
+      this.db.prepare("SELECT dolt_add('dolt_ignore') AS result").get();
+    }
     const revision = this.sqlCommit(row.message, dirty.length === 0);
     this.semanticCommitBoundary?.("after-dolt-commit", operationId);
     // The commit is durable at this point: clear the outbox row before
     // asserting, so a failed assertion can neither strand the row nor
     // re-attribute this operation's rows to a later commit at recovery.
     this.clearOutboxRow(operationId);
-    this.assertCleanSemanticWorktree(revision);
+    this.assertCommittedTablesClean(dirty, revision);
     return revision;
   }
 
   private clearOutboxRow(operationId: string): void {
-    this.runtime(() => {
+    // A single-statement delete on a runtime table; the full runtime()
+    // pre-flight would re-scan doltStatus on every semantic write for no
+    // added safety.
+    this.begin();
+    try {
       this.db
         .prepare("DELETE FROM runtime_commit_outbox WHERE operation_id = ?")
         .run(operationId);
-    });
+      this.commitSql();
+    } catch (error) {
+      this.rollback();
+      throw error;
+    }
   }
 
   private sqlCommit(message: string, allowEmpty = false): string {
@@ -476,56 +499,68 @@ export class DoltStore {
         message: "Dolt commit did not return a revision hash",
       });
     }
-    this.assertRuntimeUnstaged();
     return hash;
   }
 
   private stageTables(tables: readonly SemanticTable[]): void {
+    // One dolt_add per table: the multi-argument form silently falls back
+    // to staging every table doltStatus over-reports as modified, which
+    // would commit unrelated storage noise (and, worse, ride over the
+    // runtime-table fence).
     const unique = uniqueSemanticTables(tables);
     for (const table of unique) {
       this.db.prepare("SELECT dolt_add(?) AS result").get(table);
     }
   }
 
-  private stageIgnoreFenceIfDirty(): void {
-    const dirty = this.db
-      .doltStatus()
-      .some(
-        (entry) => entry.table_name === "dolt_ignore" && entry.staged === 0,
-      );
-    if (dirty) {
-      this.db.prepare("SELECT dolt_add('dolt_ignore') AS result").get();
-    }
-  }
-
-  private dirtySemanticTables(): SemanticTable[] {
+  /**
+   * Full-catalog integrity sweep, run once per open (after outbox
+   * recovery). Semantic writes only probe and stage the tables their
+   * operation declared, so rows written to an undeclared table would sit
+   * in the working set indefinitely; this sweep turns that engine bug into
+   * a loud fault at the next open instead of silent attribution drift.
+   *
+   * doltStatus over-reports (doltlite flags index-bearing tables as
+   * modified while any untracked table exists), so every candidate is
+   * confirmed against the row-level diff probe before faulting.
+   */
+  private verifyCleanSemanticWorktree(): void {
     const dirty: SemanticTable[] = [];
     for (const entry of this.db.doltStatus()) {
       if (entry.staged !== 0 || entry.status === "ignored") continue;
       if (!isSemanticTable(entry.table_name)) continue;
-      // doltlite reports tables with secondary indexes as modified even when
-      // their rows are unchanged, so confirm against the row-level diff.
       if (this.hasWorkingDiff(entry.table_name)) {
         dirty.push(entry.table_name);
       }
     }
-    return dirty;
+    if (dirty.length > 0) {
+      this.db.close();
+      throw new EngineFault({
+        code: "STORAGE_ERROR",
+        message:
+          "Semantic worktree has uncommitted changes not attributed to any operation: " +
+          dirty.join(", "),
+        details: { dirtyTables: dirty },
+      });
+    }
   }
 
   /**
    * True when `table` still has uncommitted working-set rows.
    *
-   * This is the hot path of every semantic write. Because doltStatus
-   * over-reports, ~25 of the 34 semantic tables come back `modified` on a
-   * write that really touched one or two, and each survivor needs a real
-   * check — twice per write, since the pre-commit staging scan and the
-   * post-commit cleanliness assertion both call it.
+   * This is the hot path of every semantic write: each declared table is
+   * probed once before staging and once after the commit. Staged-but-
+   * uncommitted rows also report `to_commit = 'WORKING'`, which is what
+   * makes the same probe correct during outbox recovery.
    *
    * The direct check, `doltDiff("HEAD","WORKING",t).length > 0`, materialises
    * every changed row just to test emptiness. Asking the `dolt_diff_<table>`
    * system table for a single row answers the identical question about 4x
    * faster and allocates nothing. The statement is cached per table because
-   * preparing it each time cost more than running it.
+   * preparing it each time cost more than running it, and repeated probes of
+   * the same table hit a doltlite-internal cache (~0.01ms) while probing
+   * many distinct tables in sequence thrashes it (~0.6ms each) — another
+   * reason writes probe only their declared tables.
    *
    * `table` is a SemanticTable, i.e. a member of the SEMANTIC_TABLES
    * allowlist, so interpolating it into the statement cannot inject SQL.
@@ -542,8 +577,11 @@ export class DoltStore {
     return Boolean(probe.get());
   }
 
-  private assertCleanSemanticWorktree(committedRevision: string): void {
-    const dirty = this.dirtySemanticTables();
+  private assertCommittedTablesClean(
+    tables: readonly SemanticTable[],
+    committedRevision: string,
+  ): void {
+    const dirty = tables.filter((table) => this.hasWorkingDiff(table));
     if (dirty.length > 0) {
       throw new EngineFault({
         code: "STORAGE_ERROR",
@@ -553,8 +591,10 @@ export class DoltStore {
     }
   }
 
-  private assertOnlyVersionedStaged(): void {
-    for (const entry of this.db.doltStatus()) {
+  private assertOnlyVersionedStaged(
+    status: DoltStatusEntry[] = this.db.doltStatus(),
+  ): void {
+    for (const entry of status) {
       if (entry.staged !== 1) continue;
       if (
         !isSemanticTable(entry.table_name) &&
@@ -797,6 +837,37 @@ export function parseCommitMessage(message: string): CommitOperation | null {
 
 function isSemanticTable(table: string): table is SemanticTable {
   return (SEMANTIC_TABLES as readonly string[]).includes(table);
+}
+
+interface OutboxTables {
+  tables: SemanticTable[];
+  allowEmpty: boolean;
+}
+
+/**
+ * Decodes the declared write set persisted with an outbox row. Rows written
+ * before write sets were declared carried a bare array (empty, or holding
+ * only the allow-empty flag); recovering one of those probes the full
+ * allowlist because the written tables are unknown.
+ */
+function parseOutboxTables(text: string): OutboxTables {
+  const parsed = parseJson<unknown>(text, []);
+  if (Array.isArray(parsed)) {
+    return {
+      tables: [...SEMANTIC_TABLES],
+      allowEmpty: parsed.includes(OUTBOX_ALLOW_EMPTY_FLAG),
+    };
+  }
+  const record = parsed as { tables?: unknown; allowEmpty?: unknown };
+  return {
+    tables: Array.isArray(record.tables)
+      ? record.tables.filter(
+          (table): table is SemanticTable =>
+            typeof table === "string" && isSemanticTable(table),
+        )
+      : [...SEMANTIC_TABLES],
+    allowEmpty: record.allowEmpty === true,
+  };
 }
 
 function uniqueSemanticTables(
