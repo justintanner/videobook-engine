@@ -46,7 +46,7 @@ explicitly with `await engine.book.rename("new-name")`.
 ## MVP contracts
 
 Contract version 1, introduced with schema v5 and carried by the current
-schema v18 catalog, defines the media-time, stream, transcript, sequence,
+schema v19 catalog, defines the media-time, stream, transcript, sequence,
 temporal-search, edit-intent, job, and copy-forward migration boundary:
 
 ```ts
@@ -87,8 +87,9 @@ versioned `runtime_%` ignore policy, and are never staged. Semantic surrogate
 identities are UUIDv7 values. Artifact slugs are human-facing names and can be
 reused after hard deletion; immutable CAS objects remain available to history.
 
-The current catalog format is schema version 18. It intentionally rejects
-older catalogs rather than migrating them; create a fresh engine root.
+The current catalog format is schema version 19. Schema version 18 catalogs
+upgrade in place; older catalogs require an explicit migration or a fresh
+engine root.
 
 The 34 versioned semantic tables are `engine_schema`, `book`, `artifacts`,
 `objects`, `artifact_files`, `artifact_streams`, `book_metadata`,

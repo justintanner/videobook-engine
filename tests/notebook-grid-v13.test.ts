@@ -43,13 +43,90 @@ async function setup() {
   return { root, engine };
 }
 
+function rewriteCellsAsSchema18(database: DatabaseSync): void {
+  const columns = CELLS_TABLE_COLUMNS.join(", ");
+  database.exec("PRAGMA foreign_keys = OFF");
+  database.exec("BEGIN IMMEDIATE");
+  try {
+    database.exec(`
+      CREATE TABLE cells_schema_18 (
+        notebook_id TEXT NOT NULL
+          REFERENCES notebooks(notebook_id) ON DELETE CASCADE,
+        cell_id TEXT NOT NULL,
+        type TEXT NOT NULL CHECK (
+          type IN (
+            'audio','image','video','extract_audio','split_video',
+            'prompt','character',
+            'analyze','analysis','generate_video','generate_image',
+            'generate_audio','concat','splice'
+          )
+        ),
+        slug TEXT NOT NULL CHECK (
+          slug GLOB '[a-z0-9]*'
+          AND slug NOT GLOB '*[^a-z0-9-]*'
+          AND slug NOT GLOB '*--*'
+          AND slug NOT LIKE '-%'
+          AND slug NOT LIKE '%-'
+          AND instr(slug, '-') > 0
+        ),
+        grid_row INTEGER NOT NULL CHECK (grid_row >= 0),
+        grid_column INTEGER NOT NULL,
+        output_entity_id TEXT
+          REFERENCES entities(entity_id) ON DELETE RESTRICT,
+        prompt TEXT,
+        provider TEXT,
+        model TEXT,
+        operation TEXT,
+        tool TEXT,
+        inputs_json TEXT NOT NULL DEFAULT '{}',
+        output_artifact_id TEXT
+          REFERENCES artifacts(artifact_id) ON DELETE RESTRICT,
+        PRIMARY KEY(notebook_id, cell_id),
+        UNIQUE(notebook_id, slug),
+        CHECK (
+          (type = 'audio' AND slug LIKE 'aud-%')
+          OR (type = 'image' AND slug LIKE 'img-%')
+          OR (type = 'video' AND slug LIKE 'vid-%')
+          OR (type = 'extract_audio' AND slug LIKE 'extract-audio-%')
+          OR (type = 'split_video' AND slug LIKE 'split-video-%')
+          OR (type = 'prompt' AND slug LIKE 'prompt-%')
+          OR (type = 'character' AND slug LIKE 'char-%')
+          OR (type = 'analyze' AND slug LIKE 'analyze-%')
+          OR (type = 'analysis' AND slug LIKE 'analysis-%')
+          OR (type = 'generate_video' AND slug LIKE 'generate-video-%')
+          OR (type = 'generate_image' AND slug LIKE 'generate-image-%')
+          OR (type = 'generate_audio' AND slug LIKE 'generate-audio-%')
+          OR (type = 'concat' AND slug LIKE 'concat-%')
+          OR (type = 'splice' AND slug LIKE 'splice-%')
+        )
+      );
+      INSERT INTO cells_schema_18(${columns})
+        SELECT ${columns} FROM cells;
+      DROP TABLE cells;
+      ALTER TABLE cells_schema_18 RENAME TO cells;
+      CREATE INDEX cells_output_entity ON cells(output_entity_id);
+      CREATE INDEX cells_grid
+        ON cells(notebook_id, grid_row, grid_column, cell_id);
+      CREATE INDEX cells_output_artifact ON cells(output_artifact_id);
+      UPDATE engine_schema SET version=18 WHERE singleton=1;
+      COMMIT;
+    `);
+  } catch (error) {
+    if (database.inTransaction) database.exec("ROLLBACK");
+    throw error;
+  } finally {
+    database.exec("PRAGMA foreign_keys = ON");
+  }
+}
+
 describe("centered notebook grid schema v13", () => {
-  it("exports signed cell slots and the fourteen explicit cell types", () => {
+  it("exports signed cell slots and the fifteen explicit cell types", () => {
     expect(NOTEBOOK_CELL_TYPES).toEqual([
       "audio",
       "image",
       "video",
       "extract_audio",
+      "extract_frame",
       "split_video",
       "prompt",
       "character",
@@ -77,7 +154,7 @@ describe("centered notebook grid schema v13", () => {
       "inputs_json",
       "output_artifact_id",
     ]);
-    expect(SCHEMA_VERSION).toBe(18);
+    expect(SCHEMA_VERSION).toBe(19);
   });
 
   it("round-trips every cell type at arbitrary signed columns", async () => {
@@ -118,8 +195,8 @@ describe("centered notebook grid schema v13", () => {
     expect(
       reloaded.cells.find((cell) => cell.type === "analyze")?.slot,
     ).toEqual({
-      row: 49,
-      column: -77,
+      row: 56,
+      column: 88,
     });
     expect(
       reloaded.cells.find((cell) => cell.type === "analyze"),
@@ -143,7 +220,7 @@ describe("centered notebook grid schema v13", () => {
       .get(notebook.id) as Record<string, unknown>;
     expect(Object.keys(raw)).toHaveLength(14);
     expect(raw.grid_row).toBeGreaterThan(0);
-    expect(raw.grid_column).toBe(-77);
+    expect(raw.grid_column).toBe(88);
     expect(raw.provider).toBe("kie");
     database.close();
   });
@@ -419,7 +496,7 @@ describe("centered notebook grid schema v13", () => {
     database.close();
   });
 
-  it.each([11, 12])(
+  it.each([11, 12, 17])(
     "rejects schema-v%s catalogs without migration",
     async (version) => {
       const { root, engine } = await setup();
@@ -433,10 +510,87 @@ describe("centered notebook grid schema v13", () => {
       database.close();
 
       expect(() => createEngine({ rootDir: root })).toThrow(
-        `Database schema ${version} is not supported by engine schema 18`,
+        `Database schema ${version} is not supported by engine schema 19`,
       );
     },
   );
+
+  it("upgrades schema 18 cells without losing notebook graph state", async () => {
+    const { root, engine } = await setup();
+    const notebook = value(await engine.notebooks.create("Upgrade"));
+    const source = engine.notebooks.createCell({
+      type: "video",
+      slug: "vid-source",
+      slot: { row: 0, column: 0 },
+    });
+    const analysis = engine.notebooks.createCell({
+      type: "analysis",
+      slug: "analysis-result",
+      slot: { row: 1, column: 0 },
+    });
+    const edge = engine.notebooks.createEdge({
+      source: source.id,
+      target: analysis.id,
+      targetInput: "input",
+    });
+    value(await engine.notebooks.write({
+      ...notebook,
+      cells: [source, analysis],
+      edges: [edge],
+      execution: {
+        [source.id]: {
+          status: "completed",
+          fingerprint: "source-fingerprint",
+        },
+      },
+    }));
+    engine.close();
+
+    const database = new DatabaseSync(
+      path.join(root, "data", "videobook.db"),
+    );
+    rewriteCellsAsSchema18(database);
+    database.close();
+
+    const upgraded = createEngine({ rootDir: root });
+    await upgraded.ready;
+    const reloaded = value(upgraded.notebooks.read(notebook.id));
+    expect(reloaded.cells).toMatchObject([
+      { id: source.id, type: "video", slug: "vid-source" },
+      { id: analysis.id, type: "analysis", slug: "analysis-result" },
+    ]);
+    expect(reloaded.edges).toEqual([edge]);
+    expect(reloaded.execution?.[source.id]).toMatchObject({
+      status: "completed",
+      fingerprint: "source-fingerprint",
+    });
+
+    const extractFrame = upgraded.notebooks.createCell({
+      type: "extract_frame",
+      slug: "extract-frame-source",
+      slot: { row: 2, column: 0 },
+    });
+    value(await upgraded.notebooks.write({
+      ...reloaded,
+      cells: [...reloaded.cells, extractFrame],
+    }));
+    expect(value(upgraded.notebooks.read(notebook.id)).cells).toContainEqual(
+      expect.objectContaining(extractFrame),
+    );
+    upgraded.close();
+
+    const verified = new DatabaseSync(
+      path.join(root, "data", "videobook.db"),
+      { readOnly: true },
+    );
+    expect(
+      (verified
+        .prepare("SELECT version FROM engine_schema WHERE singleton=1")
+        .get() as { version: number }).version,
+    ).toBe(19);
+    expect(verified.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+    verified.close();
+  });
 
   it("rejects duplicate, negative-row, and fractional slots without horizontal edges", async () => {
     const { engine } = await setup();
@@ -633,7 +787,7 @@ describe("centered notebook grid schema v13", () => {
     database.close();
 
     expect(() => createEngine({ rootDir: root })).toThrow(
-      "Database schema 10 is not supported by engine schema 18",
+      "Database schema 10 is not supported by engine schema 19",
     );
   });
 

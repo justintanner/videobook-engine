@@ -15,11 +15,13 @@ import type {
   OperationInput,
   SemanticCommitBoundary,
 } from "./engine-types.js";
+import { CELLS_TABLE_COLUMNS } from "./catalog-metadata.js";
 import { initialOrderKeys } from "./order-keys.js";
 import {
   RUNTIME_SCHEMA_SQL,
   RUNTIME_TABLES,
   SCHEMA_VERSION,
+  SCHEMA_19_CELLS_TABLE_SQL,
   SEMANTIC_SCHEMA_SQL,
   SEMANTIC_TABLES,
   type SemanticTable,
@@ -276,7 +278,9 @@ export class DoltStore {
             `${SCHEMA_VERSION}`,
         });
       }
-      if (row.version !== SCHEMA_VERSION) {
+      if (row.version === 18 && SCHEMA_VERSION === 19) {
+        this.upgradeSchema18To19();
+      } else if (row.version !== SCHEMA_VERSION) {
         this.db.close();
         throw new EngineFault({
           code: "SCHEMA_INCOMPATIBLE",
@@ -316,6 +320,61 @@ export class DoltStore {
     this.assertRuntimeUnstaged();
     this.recoverOutbox();
     this.verifyCleanSemanticWorktree();
+  }
+
+  private upgradeSchema18To19(): void {
+    this.assertRuntimeUnstaged();
+    const columns = CELLS_TABLE_COLUMNS.join(", ");
+    const before = this.db
+      .prepare("SELECT COUNT(*) AS count FROM cells")
+      .get() as unknown as { count: number };
+    this.db.exec("PRAGMA foreign_keys = OFF");
+    this.begin();
+    try {
+      this.db.exec(SCHEMA_19_CELLS_TABLE_SQL);
+      this.db
+        .prepare(
+          `INSERT INTO cells_schema_19(${columns})
+           SELECT ${columns} FROM cells`,
+        )
+        .run();
+      const copied = this.db
+        .prepare("SELECT COUNT(*) AS count FROM cells_schema_19")
+        .get() as unknown as { count: number };
+      if (copied.count !== before.count) {
+        throw new Error(
+          `Schema 19 cell migration copied ${copied.count} of ${before.count} rows`,
+        );
+      }
+      this.db.exec(`
+        DROP TABLE cells;
+        ALTER TABLE cells_schema_19 RENAME TO cells;
+        CREATE INDEX cells_output_entity ON cells(output_entity_id);
+        CREATE INDEX cells_grid
+          ON cells(notebook_id, grid_row, grid_column, cell_id);
+        CREATE INDEX cells_output_artifact ON cells(output_artifact_id);
+      `);
+      this.db
+        .prepare("UPDATE engine_schema SET version=? WHERE singleton=1")
+        .run(SCHEMA_VERSION);
+      const violations = this.db
+        .prepare("PRAGMA foreign_key_check")
+        .all() as unknown[];
+      if (violations.length > 0) {
+        throw new Error(
+          `Schema 19 migration found ${violations.length} foreign key violations`,
+        );
+      }
+      this.commitSql();
+    } catch (error) {
+      this.rollback();
+      throw error;
+    } finally {
+      this.db.exec("PRAGMA foreign_keys = ON");
+    }
+    this.stageTables(["engine_schema", "cells"]);
+    this.assertOnlyVersionedStaged();
+    this.sqlCommit("Upgrade catalog schema to version 19");
   }
 
   private ensureIgnorePatterns(): void {
