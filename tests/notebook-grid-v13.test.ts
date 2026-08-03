@@ -8,8 +8,16 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import {
   CELLS_TABLE_COLUMNS,
+  firstEmptyNotebookGridSlot,
+  firstEmptyNotebookGridSlots,
   NOTEBOOK_CELL_SLUG_PREFIXES,
   NOTEBOOK_CELL_TYPES,
+  NOTEBOOK_GRID_CAPACITY,
+  NOTEBOOK_GRID_COLUMN_COUNT,
+  NOTEBOOK_GRID_ROW_COUNT,
+  notebookGridAddress,
+  notebookGridTag,
+  parseNotebookGridAddress,
   SCHEMA_VERSION,
   createEngine,
 } from "../src/index.js";
@@ -43,19 +51,19 @@ async function setup() {
   return { root, engine };
 }
 
-function rewriteCellsAsSchema18(database: DatabaseSync): void {
+function rewriteCellsAsSchema19(database: DatabaseSync): void {
   const columns = CELLS_TABLE_COLUMNS.join(", ");
   database.exec("PRAGMA foreign_keys = OFF");
   database.exec("BEGIN IMMEDIATE");
   try {
     database.exec(`
-      CREATE TABLE cells_schema_18 (
+      CREATE TABLE cells_schema_19 (
         notebook_id TEXT NOT NULL
           REFERENCES notebooks(notebook_id) ON DELETE CASCADE,
         cell_id TEXT NOT NULL,
         type TEXT NOT NULL CHECK (
           type IN (
-            'audio','image','video','extract_audio','split_video',
+            'audio','image','video','extract_audio','extract_frame','split_video',
             'prompt','character',
             'analyze','analysis','generate_video','generate_image',
             'generate_audio','concat','splice'
@@ -88,6 +96,7 @@ function rewriteCellsAsSchema18(database: DatabaseSync): void {
           OR (type = 'image' AND slug LIKE 'img-%')
           OR (type = 'video' AND slug LIKE 'vid-%')
           OR (type = 'extract_audio' AND slug LIKE 'extract-audio-%')
+          OR (type = 'extract_frame' AND slug LIKE 'extract-frame-%')
           OR (type = 'split_video' AND slug LIKE 'split-video-%')
           OR (type = 'prompt' AND slug LIKE 'prompt-%')
           OR (type = 'character' AND slug LIKE 'char-%')
@@ -100,15 +109,15 @@ function rewriteCellsAsSchema18(database: DatabaseSync): void {
           OR (type = 'splice' AND slug LIKE 'splice-%')
         )
       );
-      INSERT INTO cells_schema_18(${columns})
+      INSERT INTO cells_schema_19(${columns})
         SELECT ${columns} FROM cells;
       DROP TABLE cells;
-      ALTER TABLE cells_schema_18 RENAME TO cells;
+      ALTER TABLE cells_schema_19 RENAME TO cells;
       CREATE INDEX cells_output_entity ON cells(output_entity_id);
       CREATE INDEX cells_grid
         ON cells(notebook_id, grid_row, grid_column, cell_id);
       CREATE INDEX cells_output_artifact ON cells(output_artifact_id);
-      UPDATE engine_schema SET version=18 WHERE singleton=1;
+      UPDATE engine_schema SET version=19 WHERE singleton=1;
       COMMIT;
     `);
   } catch (error) {
@@ -119,8 +128,8 @@ function rewriteCellsAsSchema18(database: DatabaseSync): void {
   }
 }
 
-describe("centered notebook grid schema v13", () => {
-  it("exports signed cell slots and the fifteen explicit cell types", () => {
+describe("fixed notebook grid schema 20", () => {
+  it("exports the bounded address contract and the fifteen explicit cell types", () => {
     expect(NOTEBOOK_CELL_TYPES).toEqual([
       "audio",
       "image",
@@ -154,10 +163,42 @@ describe("centered notebook grid schema v13", () => {
       "inputs_json",
       "output_artifact_id",
     ]);
-    expect(SCHEMA_VERSION).toBe(19);
+    expect(SCHEMA_VERSION).toBe(20);
+    expect(NOTEBOOK_GRID_ROW_COUNT).toBe(26);
+    expect(NOTEBOOK_GRID_COLUMN_COUNT).toBe(13);
+    expect(NOTEBOOK_GRID_CAPACITY).toBe(338);
+    expect(parseNotebookGridAddress("@A13")).toEqual({ row: 0, column: 12 });
+    expect(parseNotebookGridAddress("z13")).toEqual({ row: 25, column: 12 });
+    expect(parseNotebookGridAddress("@a14")).toBeUndefined();
+    expect(parseNotebookGridAddress("@aa1")).toBeUndefined();
+    expect(notebookGridAddress({ row: 25, column: 12 })).toBe("z13");
+    expect(notebookGridTag({ row: 0, column: 0 })).toBe("@a1");
   });
 
-  it("round-trips every cell type at arbitrary signed columns", async () => {
+  it("allocates empty slots in address order and reports a full grid", () => {
+    expect(
+      firstEmptyNotebookGridSlots(
+        [
+          { row: 0, column: 0 },
+          { row: 0, column: 2 },
+        ],
+        3,
+      ),
+    ).toEqual([
+      { row: 0, column: 1 },
+      { row: 0, column: 3 },
+      { row: 0, column: 4 },
+    ]);
+    const full = Array.from({ length: NOTEBOOK_GRID_CAPACITY }, (_, index) => ({
+      row: Math.floor(index / NOTEBOOK_GRID_COLUMN_COUNT),
+      column: index % NOTEBOOK_GRID_COLUMN_COUNT,
+    }));
+    expect(() => firstEmptyNotebookGridSlot(full)).toThrow(
+      "Notebook grid is full",
+    );
+  });
+
+  it("round-trips every cell type in row-major grid slots", async () => {
     const { root, engine } = await setup();
     const notebook = value(await engine.notebooks.create("Workflow"));
     const cells = NOTEBOOK_CELL_TYPES.map((type, index) =>
@@ -165,8 +206,8 @@ describe("centered notebook grid schema v13", () => {
         type,
         slug: `${NOTEBOOK_CELL_SLUG_PREFIXES[type]}-cell`,
         slot: {
-          row: index === 0 ? 0 : index * 7,
-          column: index === 0 ? 0 : index % 2 === 0 ? index * 11 : index * -11,
+          row: Math.floor(index / NOTEBOOK_GRID_COLUMN_COUNT),
+          column: index % NOTEBOOK_GRID_COLUMN_COUNT,
         },
         prompt: type === "analyze" ? "Analyze scenes" : undefined,
         provider: type === "analyze" ? "kie" : undefined,
@@ -195,8 +236,8 @@ describe("centered notebook grid schema v13", () => {
     expect(
       reloaded.cells.find((cell) => cell.type === "analyze")?.slot,
     ).toEqual({
-      row: 56,
-      column: 88,
+      row: 0,
+      column: 8,
     });
     expect(
       reloaded.cells.find((cell) => cell.type === "analyze"),
@@ -219,8 +260,8 @@ describe("centered notebook grid schema v13", () => {
       )
       .get(notebook.id) as Record<string, unknown>;
     expect(Object.keys(raw)).toHaveLength(14);
-    expect(raw.grid_row).toBeGreaterThan(0);
-    expect(raw.grid_column).toBe(88);
+    expect(raw.grid_row).toBe(0);
+    expect(raw.grid_column).toBe(8);
     expect(raw.provider).toBe("kie");
     database.close();
   });
@@ -496,7 +537,7 @@ describe("centered notebook grid schema v13", () => {
     database.close();
   });
 
-  it.each([11, 12, 17])(
+  it.each([11, 12, 18])(
     "rejects schema-v%s catalogs without migration",
     async (version) => {
       const { root, engine } = await setup();
@@ -510,12 +551,12 @@ describe("centered notebook grid schema v13", () => {
       database.close();
 
       expect(() => createEngine({ rootDir: root })).toThrow(
-        `Database schema ${version} is not supported by engine schema 19`,
+        `Database schema ${version} is not supported by engine schema 20`,
       );
     },
   );
 
-  it("upgrades schema 18 cells without losing notebook graph state", async () => {
+  it("upgrades valid schema 19 cells without losing notebook graph state", async () => {
     const { root, engine } = await setup();
     const notebook = value(await engine.notebooks.create("Upgrade"));
     const source = engine.notebooks.createCell({
@@ -549,7 +590,7 @@ describe("centered notebook grid schema v13", () => {
     const database = new DatabaseSync(
       path.join(root, "data", "videobook.db"),
     );
-    rewriteCellsAsSchema18(database);
+    rewriteCellsAsSchema19(database);
     database.close();
 
     const upgraded = createEngine({ rootDir: root });
@@ -587,12 +628,59 @@ describe("centered notebook grid schema v13", () => {
       (verified
         .prepare("SELECT version FROM engine_schema WHERE singleton=1")
         .get() as { version: number }).version,
-    ).toBe(19);
+    ).toBe(20);
     expect(verified.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
     verified.close();
   });
 
-  it("rejects duplicate, negative-row, and fractional slots without horizontal edges", async () => {
+  it("rejects off-grid schema 19 catalogs without mutating them", async () => {
+    const { root, engine } = await setup();
+    const notebook = value(await engine.notebooks.create("Invalid upgrade"));
+    const cell = engine.notebooks.createCell({
+      type: "prompt",
+      slug: "prompt-invalid-upgrade",
+      slot: { row: 0, column: 0 },
+    });
+    value(
+      await engine.notebooks.write({
+        ...notebook,
+        cells: [cell],
+        edges: [],
+      }),
+    );
+    engine.close();
+
+    const database = new DatabaseSync(
+      path.join(root, "data", "videobook.db"),
+    );
+    rewriteCellsAsSchema19(database);
+    database
+      .prepare("UPDATE cells SET grid_column=-1 WHERE cell_id=?")
+      .run(cell.id);
+    database.close();
+
+    expect(() => createEngine({ rootDir: root })).toThrow(
+      `Database schema 19 contains off-grid cell ${cell.id} at 0:-1`,
+    );
+
+    const unchanged = new DatabaseSync(
+      path.join(root, "data", "videobook.db"),
+      { readOnly: true },
+    );
+    expect(
+      unchanged
+        .prepare("SELECT version FROM engine_schema WHERE singleton=1")
+        .get(),
+    ).toEqual({ version: 19 });
+    expect(
+      unchanged
+        .prepare("SELECT grid_row, grid_column FROM cells WHERE cell_id=?")
+        .get(cell.id),
+    ).toEqual({ grid_row: 0, grid_column: -1 });
+    unchanged.close();
+  });
+
+  it("rejects duplicate, fractional, and out-of-bounds slots", async () => {
     const { engine } = await setup();
     const notebook = value(await engine.notebooks.create("Validation"));
     const first = engine.notebooks.createCell({
@@ -638,25 +726,24 @@ describe("centered notebook grid schema v13", () => {
 
     const left = await engine.notebooks.write({
       ...notebook,
-      cells: [{ ...first, slot: { row: 12_345, column: -67_890 } }],
+      cells: [{ ...first, slot: { row: 0, column: -1 } }],
       edges: [],
     });
-    expect(left.ok).toBe(true);
-    expect(value(engine.notebooks.read(notebook.id)).cells[0]?.slot).toEqual({
-      row: 12_345,
-      column: -67_890,
-    });
+    expect(left.ok).toBe(false);
 
     const wide = await engine.notebooks.write({
       ...notebook,
-      cells: [{ ...first, slot: { row: 12_345, column: 67_890 } }],
+      cells: [{ ...first, slot: { row: 0, column: 13 } }],
       edges: [],
     });
-    expect(wide.ok).toBe(true);
-    expect(value(engine.notebooks.read(notebook.id)).cells[0]?.slot).toEqual({
-      row: 12_345,
-      column: 67_890,
+    expect(wide.ok).toBe(false);
+
+    const low = await engine.notebooks.write({
+      ...notebook,
+      cells: [{ ...first, slot: { row: 26, column: 0 } }],
+      edges: [],
     });
+    expect(low.ok).toBe(false);
 
     const removedType = {
       ...first,
@@ -787,7 +874,7 @@ describe("centered notebook grid schema v13", () => {
     database.close();
 
     expect(() => createEngine({ rootDir: root })).toThrow(
-      "Database schema 10 is not supported by engine schema 19",
+      "Database schema 10 is not supported by engine schema 20",
     );
   });
 

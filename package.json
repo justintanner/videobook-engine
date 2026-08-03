@@ -1,6 +1,6 @@
 {
   "name": "videobook-engine",
-  "version": "4.2.0",
+  "version": "5.0.0",
   "description": "Dolt-native local-first storage engine for Videobook",
   "type": "module",
   "exports": {
@@ -19,6 +19,10 @@
     "./edit-policy": {
       "import": "./dist/edit-policy.js",
       "types": "./dist/edit-policy.d.ts"
+    },
+    "./notebook-grid": {
+      "import": "./dist/notebook-grid.js",
+      "types": "./dist/notebook-grid.d.ts"
     },
     "./package.json": "./package.json",
     "./fixtures/v5": "./fixtures/v5/contract-fixtures.json"

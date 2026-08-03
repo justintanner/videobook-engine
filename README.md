@@ -87,9 +87,10 @@ versioned `runtime_%` ignore policy, and are never staged. Semantic surrogate
 identities are UUIDv7 values. Artifact slugs are human-facing names and can be
 reused after hard deletion; immutable CAS objects remain available to history.
 
-The current catalog format is schema version 19. Schema version 18 catalogs
-upgrade in place; older catalogs require an explicit migration or a fresh
-engine root.
+The current catalog format is schema version 20. Valid schema version 19
+catalogs upgrade in place. Catalogs with cells outside the fixed 26-by-13
+notebook grid are rejected, and older catalogs require an explicit migration
+or a fresh engine root.
 
 The 34 versioned semantic tables are `engine_schema`, `book`, `artifacts`,
 `objects`, `artifact_files`, `artifact_streams`, `book_metadata`,

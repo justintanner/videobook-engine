@@ -1,6 +1,6 @@
 import type { NotebookCell } from "./notebook/types.js";
 
-export const SCHEMA_VERSION = 19;
+export const SCHEMA_VERSION = 20;
 
 export const CELLS_TABLE_SCHEMA = [
   { column: "notebook_id", type: "TEXT" },

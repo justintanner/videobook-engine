@@ -22,6 +22,10 @@ import { normalizeSearchLocation } from "./mvp-time.js";
 import { EngineContext, resultOf, syncResultOf } from "./context.js";
 import { assertUuidV7, newUuidV7 } from "./ids.js";
 import { isValidNotebookCellSlug, NOTEBOOK_CELL_TYPES } from "./schema.js";
+import {
+  firstEmptyNotebookGridSlots,
+  isNotebookGridSlot,
+} from "./notebook-grid.js";
 import { canonicalJson, parseJson } from "./store.js";
 import { EngineFault } from "./store.js";
 
@@ -618,13 +622,6 @@ function assertCellSlotFree(
   }
 }
 
-/**
- * Repairs grid-slot collisions left behind by a merge (the schema no longer
- * enforces slot uniqueness so two forks can land cells on the same slot).
- * Within each colliding slot the protected cell wins when present, otherwise
- * the lowest cell id; losers keep their column and move to fresh rows below
- * the current grid, in cell-id order.
- */
 function repairCellSlots(
   context: EngineContext,
   notebookId: string,
@@ -641,33 +638,39 @@ function repairCellSlots(
     grid_row: number;
     grid_column: number;
   }>;
-  const slots = new Map<
-    string,
-    Array<{ cell_id: string; grid_column: number }>
-  >();
-  let maxRow = -1;
+  const slots = new Map<string, typeof rows>();
   for (const row of rows) {
-    maxRow = Math.max(maxRow, row.grid_row);
     const key = `${row.grid_row}:${row.grid_column}`;
     const group = slots.get(key) ?? [];
-    group.push({ cell_id: row.cell_id, grid_column: row.grid_column });
+    group.push(row);
     slots.set(key, group);
   }
-  let nextRow = maxRow + 1;
-  const move = context.store.db.prepare(
-    "UPDATE cells SET grid_row=? WHERE notebook_id=? AND cell_id=?",
-  );
+  const occupied: NotebookCell["slot"][] = [];
+  const losers: string[] = [];
   for (const group of slots.values()) {
-    if (group.length < 2) continue;
     const winner =
       protectedCellId && group.some((row) => row.cell_id === protectedCellId)
         ? protectedCellId
         : group[0]!.cell_id;
-    for (const row of group) {
-      if (row.cell_id === winner) continue;
-      move.run(nextRow, notebookId, row.cell_id);
-      nextRow += 1;
-    }
+    const winnerRow = group.find((row) => row.cell_id === winner)!;
+    occupied.push({
+      row: winnerRow.grid_row,
+      column: winnerRow.grid_column,
+    });
+    losers.push(
+      ...group
+        .filter((row) => row.cell_id !== winner)
+        .map((row) => row.cell_id),
+    );
+  }
+  const destinations = firstEmptyNotebookGridSlots(occupied, losers.length);
+  const move = context.store.db.prepare(
+    `UPDATE cells SET grid_row=?, grid_column=?
+     WHERE notebook_id=? AND cell_id=?`,
+  );
+  for (const [index, cellId] of losers.entries()) {
+    const slot = destinations[index]!;
+    move.run(slot.row, slot.column, notebookId, cellId);
   }
 }
 
@@ -1070,13 +1073,9 @@ function validateCellFields(
   if (slug !== cell.slug || !isValidNotebookCellSlug(cell.type, slug)) {
     throw new Error(`Invalid ${cell.type} cell slug: ${cell.slug}`);
   }
-  if (
-    !Number.isInteger(cell.slot.row) ||
-    cell.slot.row < 0 ||
-    !Number.isInteger(cell.slot.column)
-  ) {
+  if (!isNotebookGridSlot(cell.slot)) {
     throw new Error(
-      `Cell slot row must be nonnegative and column must be an integer: ${cell.id}`,
+      `Cell slot must be within @a1-@z13: ${cell.id}`,
     );
   }
   if (cell.outputEntityId) {

@@ -118,7 +118,7 @@ export const RUNTIME_TABLES = [
   "runtime_text_similarity_chunks",
 ] as const;
 
-function cellsTableSql(tableName: "cells" | "cells_schema_19"): string {
+function cellsTableSql(tableName: "cells" | "cells_schema_20"): string {
   return `
   CREATE TABLE IF NOT EXISTS ${tableName} (
     notebook_id TEXT NOT NULL
@@ -140,8 +140,8 @@ function cellsTableSql(tableName: "cells" | "cells_schema_19"): string {
       AND slug NOT LIKE '%-'
       AND instr(slug, '-') > 0
     ),
-    grid_row INTEGER NOT NULL CHECK (grid_row >= 0),
-    grid_column INTEGER NOT NULL,
+    grid_row INTEGER NOT NULL CHECK (grid_row BETWEEN 0 AND 25),
+    grid_column INTEGER NOT NULL CHECK (grid_column BETWEEN 0 AND 12),
     output_entity_id TEXT
       REFERENCES entities(entity_id) ON DELETE RESTRICT,
     prompt TEXT,
@@ -175,7 +175,7 @@ function cellsTableSql(tableName: "cells" | "cells_schema_19"): string {
 }
 
 const CELLS_TABLE_SQL = cellsTableSql("cells");
-export const SCHEMA_19_CELLS_TABLE_SQL = cellsTableSql("cells_schema_19");
+export const SCHEMA_20_CELLS_TABLE_SQL = cellsTableSql("cells_schema_20");
 
 export const SEMANTIC_SCHEMA_SQL = `
   CREATE TABLE IF NOT EXISTS engine_schema (

@@ -21,7 +21,7 @@ import {
   RUNTIME_SCHEMA_SQL,
   RUNTIME_TABLES,
   SCHEMA_VERSION,
-  SCHEMA_19_CELLS_TABLE_SQL,
+  SCHEMA_20_CELLS_TABLE_SQL,
   SEMANTIC_SCHEMA_SQL,
   SEMANTIC_TABLES,
   type SemanticTable,
@@ -278,8 +278,8 @@ export class DoltStore {
             `${SCHEMA_VERSION}`,
         });
       }
-      if (row.version === 18 && SCHEMA_VERSION === 19) {
-        this.upgradeSchema18To19();
+      if (row.version === 19 && SCHEMA_VERSION === 20) {
+        this.upgradeSchema19To20();
       } else if (row.version !== SCHEMA_VERSION) {
         this.db.close();
         throw new EngineFault({
@@ -322,8 +322,28 @@ export class DoltStore {
     this.verifyCleanSemanticWorktree();
   }
 
-  private upgradeSchema18To19(): void {
+  private upgradeSchema19To20(): void {
     this.assertRuntimeUnstaged();
+    const invalid = this.db
+      .prepare(
+        `SELECT cell_id, grid_row, grid_column FROM cells
+         WHERE grid_row NOT BETWEEN 0 AND 25
+            OR grid_column NOT BETWEEN 0 AND 12
+         ORDER BY notebook_id, cell_id
+         LIMIT 1`,
+      )
+      .get() as unknown as
+      | { cell_id: string; grid_row: number; grid_column: number }
+      | undefined;
+    if (invalid) {
+      this.db.close();
+      throw new EngineFault({
+        code: "SCHEMA_INCOMPATIBLE",
+        message:
+          `Database schema 19 contains off-grid cell ${invalid.cell_id} `
+          + `at ${invalid.grid_row}:${invalid.grid_column}`,
+      });
+    }
     const columns = CELLS_TABLE_COLUMNS.join(", ");
     const before = this.db
       .prepare("SELECT COUNT(*) AS count FROM cells")
@@ -331,24 +351,24 @@ export class DoltStore {
     this.db.exec("PRAGMA foreign_keys = OFF");
     this.begin();
     try {
-      this.db.exec(SCHEMA_19_CELLS_TABLE_SQL);
+      this.db.exec(SCHEMA_20_CELLS_TABLE_SQL);
       this.db
         .prepare(
-          `INSERT INTO cells_schema_19(${columns})
+          `INSERT INTO cells_schema_20(${columns})
            SELECT ${columns} FROM cells`,
         )
         .run();
       const copied = this.db
-        .prepare("SELECT COUNT(*) AS count FROM cells_schema_19")
+        .prepare("SELECT COUNT(*) AS count FROM cells_schema_20")
         .get() as unknown as { count: number };
       if (copied.count !== before.count) {
         throw new Error(
-          `Schema 19 cell migration copied ${copied.count} of ${before.count} rows`,
+          `Schema 20 cell migration copied ${copied.count} of ${before.count} rows`,
         );
       }
       this.db.exec(`
         DROP TABLE cells;
-        ALTER TABLE cells_schema_19 RENAME TO cells;
+        ALTER TABLE cells_schema_20 RENAME TO cells;
         CREATE INDEX cells_output_entity ON cells(output_entity_id);
         CREATE INDEX cells_grid
           ON cells(notebook_id, grid_row, grid_column, cell_id);
@@ -362,7 +382,7 @@ export class DoltStore {
         .all() as unknown[];
       if (violations.length > 0) {
         throw new Error(
-          `Schema 19 migration found ${violations.length} foreign key violations`,
+          `Schema 20 migration found ${violations.length} foreign key violations`,
         );
       }
       this.commitSql();
@@ -374,7 +394,7 @@ export class DoltStore {
     }
     this.stageTables(["engine_schema", "cells"]);
     this.assertOnlyVersionedStaged();
-    this.sqlCommit("Upgrade catalog schema to version 19");
+    this.sqlCommit("Upgrade catalog schema to version 20");
   }
 
   private ensureIgnorePatterns(): void {

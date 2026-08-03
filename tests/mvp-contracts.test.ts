@@ -33,10 +33,10 @@ import {
 describe("v19 MVP public contracts", () => {
   it("fixes one compatibility envelope without replacing v4 in place", () => {
     expect(MVP_CONTRACT_VERSION).toBe(1);
-    expect(MVP_SCHEMA_VERSION).toBe(19);
+    expect(MVP_SCHEMA_VERSION).toBe(20);
     expect(MVP_CONTRACT_COMPATIBILITY).toEqual({
       contractVersion: 1,
-      schemaVersion: 19,
+      schemaVersion: 20,
       minimumReaderContractVersion: 1,
       legacySchemaVersions: [4, 5],
       legacyTimelineApi: "compile-to-sequence",
@@ -69,7 +69,7 @@ describe("v19 MVP public contracts", () => {
     expect(intent.sequenceId).toBe(sequence.sequenceId);
     expect(searchPage.hits[0]?.location.kind).toBe("timed");
     expect(migration.sourceSchemaVersion).toBe(4);
-    expect(migration.destinationSchemaVersion).toBe(19);
+    expect(migration.destinationSchemaVersion).toBe(20);
   });
 
   it("pins the checked-in JSON fixture to the typed fixture", async () => {

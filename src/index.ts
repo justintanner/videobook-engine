@@ -90,6 +90,20 @@ export type {
 } from "./notebook/types.js";
 
 export {
+  assertNotebookGridSlot,
+  firstEmptyNotebookGridSlot,
+  firstEmptyNotebookGridSlots,
+  isNotebookGridSlot,
+  NOTEBOOK_GRID_CAPACITY,
+  NOTEBOOK_GRID_COLUMN_COUNT,
+  NOTEBOOK_GRID_FULL_ERROR,
+  NOTEBOOK_GRID_ROW_COUNT,
+  notebookGridAddress,
+  notebookGridTag,
+  parseNotebookGridAddress,
+} from "./notebook-grid.js";
+
+export {
   findAudioFile,
   findPrimaryMediaFile,
   findVideoFile,
