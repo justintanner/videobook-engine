@@ -103,6 +103,27 @@ export {
   parseNotebookGridAddress,
 } from "./notebook-grid.js";
 
+export type {
+  NotebookMention,
+  NotebookMentionKind,
+  NotebookMentionReplacement,
+} from "./notebook-mentions.js";
+export {
+  classifyNotebookReference,
+  normalizeNotebookReference,
+  NOTEBOOK_ASSET_SLUG_PATTERN,
+  NOTEBOOK_ASSET_SLUG_SOURCE,
+  NOTEBOOK_CELL_REFERENCE_SOURCE,
+  NOTEBOOK_GRID_ADDRESS_PATTERN,
+  NOTEBOOK_GRID_ADDRESS_SOURCE,
+  NOTEBOOK_MENTION_PATTERN,
+  NOTEBOOK_REFERENCE_SOURCE,
+  notebookMentionPrefixAtEnd,
+  replaceNotebookMentions,
+  scanNotebookMentions,
+  stripNotebookMentions,
+} from "./notebook-mentions.js";
+
 export {
   findAudioFile,
   findPrimaryMediaFile,

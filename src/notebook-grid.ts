@@ -1,12 +1,11 @@
 import type { NotebookGridSlot } from "./notebook/types.js";
+import { NOTEBOOK_GRID_ADDRESS_PATTERN } from "./notebook-mentions.js";
 
 export const NOTEBOOK_GRID_ROW_COUNT = 26;
 export const NOTEBOOK_GRID_COLUMN_COUNT = 13;
 export const NOTEBOOK_GRID_CAPACITY =
   NOTEBOOK_GRID_ROW_COUNT * NOTEBOOK_GRID_COLUMN_COUNT;
 export const NOTEBOOK_GRID_FULL_ERROR = "Notebook grid is full";
-
-const NOTEBOOK_GRID_ADDRESS_PATTERN = /^@?([a-z])(1[0-3]|[1-9])$/i;
 
 export function isNotebookGridSlot(
   slot: NotebookGridSlot,
@@ -42,9 +41,10 @@ export function parseNotebookGridAddress(
 ): NotebookGridSlot | undefined {
   const match = NOTEBOOK_GRID_ADDRESS_PATTERN.exec(value.trim());
   if (!match) return undefined;
+  const address = match[1]!;
   return {
-    row: match[1]!.toLowerCase().charCodeAt(0) - 97,
-    column: Number(match[2]) - 1,
+    row: address[0]!.toLowerCase().charCodeAt(0) - 97,
+    column: Number(address.slice(1)) - 1,
   };
 }
 

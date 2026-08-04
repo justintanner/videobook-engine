@@ -9,8 +9,8 @@ import { ok } from "./engine-types.js";
 import { EngineContext, resultOf } from "./context.js";
 import { createFilesApi } from "./files.js";
 import { findPrimaryMediaFile } from "./media.js";
+import { scanNotebookMentions } from "./notebook-mentions.js";
 
-const TAG_PATTERN = /@([a-zA-Z0-9]+-[a-zA-Z0-9_-]+)/g;
 const SLOT_PATTERN = /@s(\d{2})/g;
 
 export function createResolverApi(context: EngineContext) {
@@ -29,11 +29,11 @@ export function createResolverApi(context: EngineContext) {
 }
 
 export function parseArtifactTags(text: string): string[] {
-  const tags: string[] = [];
-  for (const match of text.matchAll(TAG_PATTERN)) {
-    if (match[1]) tags.push(match[1]);
-  }
-  return [...new Set(tags)];
+  return [...new Set(
+    scanNotebookMentions(text)
+      .filter((mention) => mention.kind === "asset-slug")
+      .map((mention) => mention.reference),
+  )];
 }
 
 export function expandSlotRefs(
