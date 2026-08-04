@@ -21,7 +21,7 @@ import { ok } from "./engine-types.js";
 import { normalizeSearchLocation } from "./mvp-time.js";
 import { EngineContext, resultOf, syncResultOf } from "./context.js";
 import { assertUuidV7, newUuidV7 } from "./ids.js";
-import { isValidNotebookCellSlug, NOTEBOOK_CELL_TYPES } from "./schema.js";
+import { NOTEBOOK_CELL_TYPES } from "./schema.js";
 import {
   firstEmptyNotebookGridSlots,
   isNotebookGridSlot,
@@ -114,7 +114,7 @@ interface NotebookTranscriptAttachmentRow {
 interface NotebookCellRow {
   cell_id: string;
   type: string;
-  slug: string;
+  label: string | null;
   grid_row: number;
   grid_column: number;
   output_entity_id: string | null;
@@ -463,7 +463,6 @@ async function insertNotebookCell(
     }
     const prospective = { ...notebook, cells: [...notebook.cells, cell] };
     validateCellFields(context, prospective, cell);
-    assertCellSlugFree(context, notebookId, cell);
     assertCellSlotFree(context, notebookId, cell);
     const mutation = await context.store.semantic(
       {
@@ -502,7 +501,6 @@ async function updateNotebookCell(
       ),
     };
     validateCellFields(context, prospective, cell);
-    assertCellSlugFree(context, notebookId, cell);
     assertCellSlotFree(context, notebookId, cell);
     const mutation = await context.store.semantic(
       {
@@ -586,23 +584,6 @@ async function removeNotebookCell(
   });
 }
 
-function assertCellSlugFree(
-  context: EngineContext,
-  notebookId: string,
-  cell: NotebookCell,
-): void {
-  const found = context.store.db
-    .prepare(
-      `SELECT cell_id FROM cells
-       WHERE notebook_id=? AND slug=? AND cell_id<>?`,
-    )
-    .get(notebookId, cell.slug, cell.id) as unknown as
-    { cell_id: string } | undefined;
-  if (found) {
-    throw new Error(`Duplicate cell slug: ${cell.slug}`);
-  }
-}
-
 function assertCellSlotFree(
   context: EngineContext,
   notebookId: string,
@@ -674,42 +655,6 @@ function repairCellSlots(
   }
 }
 
-/**
- * `UNIQUE(notebook_id, slug)` is immediate and the upsert loop writes cells
- * one at a time, so a document that validly swaps or rotates slugs between
- * surviving cells would collide mid-loop. Every surviving cell whose slug is
- * about to change is first parked on a unique temporary slug derived from
- * its current one — same type prefix, so the slug/type CHECK holds — and
- * the upsert pass then assigns the final slugs.
- */
-function evacuateChangedCellSlugs(
-  context: EngineContext,
-  notebook: NotebookDocument,
-): void {
-  const existing = context.store.db
-    .prepare("SELECT cell_id, slug FROM cells WHERE notebook_id=?")
-    .all(notebook.id) as unknown as Array<{ cell_id: string; slug: string }>;
-  if (existing.length === 0) return;
-  const incomingSlugs = new Map(
-    notebook.cells.map((cell) => [
-      cell.id,
-      normalizeCellForWrite(cell).slug ?? "",
-    ]),
-  );
-  const evacuate = context.store.db.prepare(
-    "UPDATE cells SET slug=? WHERE notebook_id=? AND cell_id=?",
-  );
-  for (const row of existing) {
-    const nextSlug = incomingSlugs.get(row.cell_id);
-    if (nextSlug === undefined || nextSlug === row.slug) continue;
-    evacuate.run(
-      `${row.slug}-evac-${newUuidV7().replace(/-/g, "")}`,
-      notebook.id,
-      row.cell_id,
-    );
-  }
-}
-
 function upsertNotebookCell(
   context: EngineContext,
   notebookId: string,
@@ -719,13 +664,13 @@ function upsertNotebookCell(
   context.store.db
     .prepare(
       `INSERT INTO cells(
-        notebook_id, cell_id, type, slug, grid_row, grid_column,
+        notebook_id, cell_id, type, label, grid_row, grid_column,
         output_entity_id, prompt, provider, model, operation, tool,
         inputs_json, output_artifact_id
       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       ON CONFLICT(notebook_id, cell_id) DO UPDATE SET
         type=excluded.type,
-        slug=excluded.slug,
+        label=excluded.label,
         grid_row=excluded.grid_row,
         grid_column=excluded.grid_column,
         output_entity_id=excluded.output_entity_id,
@@ -741,7 +686,7 @@ function upsertNotebookCell(
       notebookId,
       normalized.id,
       normalized.type,
-      requiredText(normalized.slug, "Cell slug"),
+      normalized.label?.trim() || null,
       normalized.slot.row,
       normalized.slot.column,
       normalized.outputEntityId ?? null,
@@ -889,7 +834,7 @@ function notebookFromRows(
     .all(row.notebook_id) as unknown as NotebookFieldRow[];
   const cells = context.store.db
     .prepare(
-      `SELECT cell_id, type, slug, grid_row, grid_column, output_entity_id,
+      `SELECT cell_id, type, label, grid_row, grid_column, output_entity_id,
               prompt, provider, model, operation, tool,
               inputs_json, output_artifact_id
        FROM cells WHERE notebook_id=?
@@ -1027,15 +972,10 @@ function validateNotebook(
   notebook: NotebookDocument,
 ): void {
   const cellIds = new Set<string>();
-  const cellSlugs = new Set<string>();
   const occupiedSlots = new Set<string>();
   for (const cell of notebook.cells) {
     if (cellIds.has(cell.id)) throw new Error(`Duplicate cell ID: ${cell.id}`);
     cellIds.add(cell.id);
-    if (cellSlugs.has(cell.slug)) {
-      throw new Error(`Duplicate cell slug: ${cell.slug}`);
-    }
-    cellSlugs.add(cell.slug);
     const slot = `${cell.slot.row}:${cell.slot.column}`;
     if (occupiedSlots.has(slot))
       throw new Error(`Duplicate cell slot: ${slot}`);
@@ -1068,10 +1008,6 @@ function validateCellFields(
   assertUuidV7(cell.id, "Cell ID");
   if (!NOTEBOOK_CELL_TYPE_SET.has(cell.type)) {
     throw new Error(`Invalid cell type: ${cell.type}`);
-  }
-  const slug = requiredText(cell.slug, "Cell slug");
-  if (slug !== cell.slug || !isValidNotebookCellSlug(cell.type, slug)) {
-    throw new Error(`Invalid ${cell.type} cell slug: ${cell.slug}`);
   }
   if (!isNotebookGridSlot(cell.slot)) {
     throw new Error(
@@ -1108,7 +1044,6 @@ function synchronizeNotebookChildren(
     notebook.id,
     notebook.cells.map((cell) => cell.id),
   );
-  evacuateChangedCellSlugs(context, notebook);
   for (const cell of notebook.cells) {
     upsertNotebookCell(context, notebook.id, cell);
   }
@@ -1738,7 +1673,7 @@ function rowToCell(
   return {
     id: row.cell_id,
     type: notebookCellType(row.type),
-    slug: row.slug,
+    ...(row.label ? { label: row.label } : {}),
     slot: { row: row.grid_row, column: row.grid_column },
     ...(row.output_entity_id ? { outputEntityId: row.output_entity_id } : {}),
     ...(row.prompt ? { prompt: row.prompt } : {}),

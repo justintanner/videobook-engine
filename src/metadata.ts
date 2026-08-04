@@ -216,15 +216,11 @@ async function readArtifactMetadataAtRevision<T>(
     const artifact = context.store.db
       .prepare(
         `SELECT artifact_id FROM dolt_at_artifacts(?)
-         WHERE artifact_id=? OR slug=?
-         ORDER BY CASE WHEN artifact_id=? THEN 0 ELSE 1 END LIMIT 1`,
+         WHERE artifact_id=? LIMIT 1`,
       )
-      .get(
-        revision,
-        artifactReference,
-        artifactReference,
-        artifactReference,
-      ) as unknown as { artifact_id: string } | undefined;
+      .get(revision, artifactReference) as unknown as
+      | { artifact_id: string }
+      | undefined;
     if (!artifact) {
       throw new Error(
         `Artifact not found: ${artifactReference} at ${revision}`,

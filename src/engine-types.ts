@@ -13,7 +13,6 @@ export type ArtifactKind =
 export const ENGINE_ERROR_CODES = [
   "NOT_FOUND",
   "ALREADY_EXISTS",
-  "SLUG_CONFLICT",
   "IN_USE",
   "INVALID_INPUT",
   "INVALID_RANGE",
@@ -99,7 +98,7 @@ export type SemanticCommitBoundary =
 
 interface EngineConfigBase {
   /** Required only when initializing an empty engine root. */
-  initialBookSlug?: string;
+  initialBookName?: string;
   remoteObjects?: ContentStore;
   objectPrefix?: string;
   catalogBackup?: CatalogBackupConfig;
@@ -230,7 +229,7 @@ export interface SimilarityStatus {
 
 export interface SimilarityMatch {
   artifactId: string;
-  slug: string;
+  label?: string;
   kind: SimilarityKind;
   score: number;
   exactBytes: boolean;
@@ -300,13 +299,14 @@ export interface SimilarityApi {
 
 export interface Book {
   bookId: string;
-  slug: string;
+  name: string;
   createdAt: number;
 }
 
 export interface Artifact {
   artifactId: string;
-  slug: string;
+  /** Free-text display label; never a reference handle. */
+  label?: string;
   kind: ArtifactKind;
   createdAt: number;
   path: string;
@@ -314,18 +314,14 @@ export interface Artifact {
 
 export interface CreateArtifactInput {
   kind: ArtifactKind | string;
-  /** Name used to derive a canonical kind-prefixed slug. */
-  name?: string;
-  /** Explicit slug; the canonical kind prefix is added when omitted. */
-  slug?: string;
+  /** Free-text display label; never parsed or referenced. */
+  label?: string;
 }
 
 export interface RenameArtifactInput {
   artifact: string;
-  /** Name used to derive the artifact's new canonical slug. */
-  name?: string;
-  /** Explicit new slug; the canonical kind prefix is added when omitted. */
-  slug?: string;
+  /** New free-text display label. */
+  label: string;
 }
 
 export interface ArtifactManifestFile {
@@ -338,7 +334,7 @@ export interface ArtifactManifestFile {
 
 export interface ArtifactManifest {
   artifactId: string;
-  slug: string;
+  label?: string;
   path: string;
   fileCount: number;
   files: ArtifactManifestFile[];
@@ -354,7 +350,7 @@ export interface Revision {
   operationId?: string;
   operation?: string;
   artifactId?: string;
-  artifactSlug?: string;
+  artifactLabel?: string;
   details?: Record<string, unknown>;
 }
 
@@ -636,7 +632,7 @@ export type BeginAssetWorkInput = BeginArtifactWorkInput;
 
 export interface ArtifactView {
   artifactId: string;
-  slug: string;
+  label?: string;
   status: ArtifactRuntimeStatus;
   meta: ArtifactRuntimeMeta;
   ownerId: string | null;
@@ -652,7 +648,6 @@ export const QUEUED_TASK_ID = "queued";
 
 export interface PendingTask {
   artifactId: string;
-  artifactSlug: string;
   taskId: string;
   taskType: TaskType;
   workspacePath: string;
@@ -670,7 +665,6 @@ export interface FailureInfo {
 
 export interface GenerationError {
   artifactId: string;
-  artifactSlug: string;
   message: string;
   failCode?: string;
   prompt?: string | null;
@@ -720,7 +714,7 @@ export type ArtifactStatus =
 export type AssetStatus = ArtifactStatus;
 
 export interface ArtifactStatusInput {
-  artifactSlug: string;
+  kind: ArtifactKind;
   fileNames: ReadonlySet<string>;
   primaryMediaName: string | null;
   hasOriginalMetadata: boolean;
@@ -768,15 +762,6 @@ export interface Message<T = Record<string, unknown>> {
 export interface AppendMessageInput<T = Record<string, unknown>> {
   role: string;
   body: T;
-}
-
-export interface ResolvedArtifact {
-  tag: string;
-  artifactId: string;
-  artifactSlug: string;
-  artifactType: ArtifactKind;
-  filePath: string | null;
-  workspacePath: string;
 }
 
 export interface VersionCheckResult {

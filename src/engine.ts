@@ -22,7 +22,6 @@ import {
 import { createHistoryApi } from "./history.js";
 import { createRuntimeApi, createLogsApi } from "./runtime-services.js";
 import { createStatusApi } from "./status.js";
-import { createResolverApi } from "./resolver.js";
 import { createStorageApi } from "./storage.js";
 import { EngineContext } from "./context.js";
 import { JobQueue } from "./job-queue.js";
@@ -51,7 +50,6 @@ export class Engine {
   readonly messages;
   readonly history;
   readonly status;
-  readonly resolver;
   readonly storage;
   readonly logs;
   readonly settings;
@@ -80,7 +78,6 @@ export class Engine {
     this.messages = createMessagesApi(this.context);
     this.history = createHistoryApi(this.context);
     this.status = createStatusApi(this.context);
-    this.resolver = createResolverApi(this.context);
     this.storage = createStorageApi(this.context);
     this.logs = createLogsApi(this.context);
 

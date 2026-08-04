@@ -15,13 +15,11 @@ import type {
   OperationInput,
   SemanticCommitBoundary,
 } from "./engine-types.js";
-import { CELLS_TABLE_COLUMNS } from "./catalog-metadata.js";
 import { initialOrderKeys } from "./order-keys.js";
 import {
   RUNTIME_SCHEMA_SQL,
   RUNTIME_TABLES,
   SCHEMA_VERSION,
-  SCHEMA_20_CELLS_TABLE_SQL,
   SEMANTIC_SCHEMA_SQL,
   SEMANTIC_TABLES,
   type SemanticTable,
@@ -86,7 +84,7 @@ export class DoltStore {
   constructor(input: {
     dataDir: string;
     workspaceDir: string;
-    initialBook?: { bookId: string; slug: string };
+    initialBook?: { bookId: string; name: string };
     catalogBackup?: CatalogBackupConfig;
     author?: string;
     semanticCommitBoundary?: (
@@ -212,7 +210,7 @@ export class DoltStore {
 
   private initialize(
     existed: boolean,
-    initialBook?: { bookId: string; slug: string },
+    initialBook?: { bookId: string; name: string },
   ): void {
     const schemaExists = this.tableExists("engine_schema");
     if (existed && !schemaExists) {
@@ -234,7 +232,7 @@ export class DoltStore {
         throw new EngineFault({
           code: "INVALID_INPUT",
           message:
-            "initialBookSlug is required when creating a new engine root",
+            "initialBookName is required when creating a new engine root",
         });
       }
       this.db.exec(SEMANTIC_SCHEMA_SQL);
@@ -258,8 +256,8 @@ export class DoltStore {
         )
         .run(SCHEMA_VERSION, now);
       this.db
-        .prepare("INSERT INTO book(book_id, slug, created_at) VALUES (?, ?, ?)")
-        .run(initialBook.bookId, initialBook.slug, now);
+        .prepare("INSERT INTO book(book_id, name, created_at) VALUES (?, ?, ?)")
+        .run(initialBook.bookId, initialBook.name, now);
       this.initializePrimarySequence(initialBook.bookId, now);
       this.stageTables(SEMANTIC_TABLES);
       this.db.prepare("SELECT dolt_add('dolt_ignore') AS result").get();
@@ -278,9 +276,7 @@ export class DoltStore {
             `${SCHEMA_VERSION}`,
         });
       }
-      if (row.version === 19 && SCHEMA_VERSION === 20) {
-        this.upgradeSchema19To20();
-      } else if (row.version !== SCHEMA_VERSION) {
+      if (row.version !== SCHEMA_VERSION) {
         this.db.close();
         throw new EngineFault({
           code: "SCHEMA_INCOMPATIBLE",
@@ -320,81 +316,6 @@ export class DoltStore {
     this.assertRuntimeUnstaged();
     this.recoverOutbox();
     this.verifyCleanSemanticWorktree();
-  }
-
-  private upgradeSchema19To20(): void {
-    this.assertRuntimeUnstaged();
-    const invalid = this.db
-      .prepare(
-        `SELECT cell_id, grid_row, grid_column FROM cells
-         WHERE grid_row NOT BETWEEN 0 AND 25
-            OR grid_column NOT BETWEEN 0 AND 12
-         ORDER BY notebook_id, cell_id
-         LIMIT 1`,
-      )
-      .get() as unknown as
-      | { cell_id: string; grid_row: number; grid_column: number }
-      | undefined;
-    if (invalid) {
-      this.db.close();
-      throw new EngineFault({
-        code: "SCHEMA_INCOMPATIBLE",
-        message:
-          `Database schema 19 contains off-grid cell ${invalid.cell_id} `
-          + `at ${invalid.grid_row}:${invalid.grid_column}`,
-      });
-    }
-    const columns = CELLS_TABLE_COLUMNS.join(", ");
-    const before = this.db
-      .prepare("SELECT COUNT(*) AS count FROM cells")
-      .get() as unknown as { count: number };
-    this.db.exec("PRAGMA foreign_keys = OFF");
-    this.begin();
-    try {
-      this.db.exec(SCHEMA_20_CELLS_TABLE_SQL);
-      this.db
-        .prepare(
-          `INSERT INTO cells_schema_20(${columns})
-           SELECT ${columns} FROM cells`,
-        )
-        .run();
-      const copied = this.db
-        .prepare("SELECT COUNT(*) AS count FROM cells_schema_20")
-        .get() as unknown as { count: number };
-      if (copied.count !== before.count) {
-        throw new Error(
-          `Schema 20 cell migration copied ${copied.count} of ${before.count} rows`,
-        );
-      }
-      this.db.exec(`
-        DROP TABLE cells;
-        ALTER TABLE cells_schema_20 RENAME TO cells;
-        CREATE INDEX cells_output_entity ON cells(output_entity_id);
-        CREATE INDEX cells_grid
-          ON cells(notebook_id, grid_row, grid_column, cell_id);
-        CREATE INDEX cells_output_artifact ON cells(output_artifact_id);
-      `);
-      this.db
-        .prepare("UPDATE engine_schema SET version=? WHERE singleton=1")
-        .run(SCHEMA_VERSION);
-      const violations = this.db
-        .prepare("PRAGMA foreign_key_check")
-        .all() as unknown[];
-      if (violations.length > 0) {
-        throw new Error(
-          `Schema 20 migration found ${violations.length} foreign key violations`,
-        );
-      }
-      this.commitSql();
-    } catch (error) {
-      this.rollback();
-      throw error;
-    } finally {
-      this.db.exec("PRAGMA foreign_keys = ON");
-    }
-    this.stageTables(["engine_schema", "cells"]);
-    this.assertOnlyVersionedStaged();
-    this.sqlCommit("Upgrade catalog schema to version 20");
   }
 
   private ensureIgnorePatterns(): void {

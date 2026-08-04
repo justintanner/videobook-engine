@@ -86,7 +86,7 @@ one stable UUIDv7 row; it does not use a synthetic singleton column.
 - Backup publishes referenced CAS objects before pushing the Dolt `main` branch.
 - An open engine never pulls or merges a live catalog; `main` is the only
   live branch. The per-constraint merge policy (same-schema precondition,
-  slug conflicts, RESTRICT verification, derived singleton flags) lives in
+  RESTRICT verification, derived singleton flags) lives in
   `src/merge-policy.ts` and docs/engine-layout.md ("Merge policy per
   constraint class"). Fork bootstrap (`bootstrapFork`) and the dedicated
   merge-back integration flow (`mergeBack`) live in `src/fork.ts`: forks

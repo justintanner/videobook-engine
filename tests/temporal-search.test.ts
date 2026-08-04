@@ -83,7 +83,7 @@ async function setup(): Promise<Engine> {
   const engine = createEngine({
     dataDir: path.join(root, "data"),
     workspaceDir: path.join(root, "workspace"),
-    initialBookSlug: "temporal-search",
+    initialBookName: "temporal-search",
   });
   value(engine.temporalSearch.manifests.register(manifest));
   engine.temporalSearch.providers.register(new QueryProvider());
@@ -93,12 +93,12 @@ async function setup(): Promise<Engine> {
 async function media(
   engine: Engine,
   kind: "video" | "audio",
-  slug: string,
+  label: string,
 ): Promise<{ artifact: Artifact; stream: ArtifactStream }> {
-  const artifact = value(await engine.artifacts.create({ kind, slug }));
+  const artifact = value(await engine.artifacts.create({ kind, label }));
   const extension = kind === "video" ? "mp4" : "wav";
   const sourcePath = `original.${extension}`;
-  value(await engine.files.write(artifact.artifactId, sourcePath, slug));
+  value(await engine.files.write(artifact.artifactId, sourcePath, label));
   const objectHash = value(await engine.files.manifest(artifact.artifactId))
     .files[0]?.objectHash;
   if (!objectHash) throw new Error("Object hash is missing");
@@ -138,10 +138,12 @@ async function media(
 
 async function still(
   engine: Engine,
-  slug: string,
+  label: string,
 ): Promise<{ artifact: Artifact; objectHash: string }> {
-  const artifact = value(await engine.artifacts.create({ kind: "image", slug }));
-  value(await engine.files.write(artifact.artifactId, "original.jpg", slug));
+  const artifact = value(
+    await engine.artifacts.create({ kind: "image", label }),
+  );
+  value(await engine.files.write(artifact.artifactId, "original.jpg", label));
   const objectHash = value(await engine.files.manifest(artifact.artifactId))
     .files[0]?.objectHash;
   if (!objectHash) throw new Error("Object hash is missing");
@@ -798,7 +800,7 @@ describe("progressive temporal multimodal search", () => {
           1_000,
           vectors[vectorIndex]!,
           [],
-          `${item.artifact.slug}-${index}`,
+          `${item.artifact.artifactId}-${index}`,
         ),
       );
     commit(

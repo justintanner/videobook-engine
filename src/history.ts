@@ -8,7 +8,6 @@ import type {
 } from "./engine-types.js";
 import { ok } from "./engine-types.js";
 import { EngineContext, resultOf, type ArtifactRow } from "./context.js";
-import { artifactSlug } from "./artifacts.js";
 import { materializeArtifact } from "./files.js";
 import { assertUuidV7, isUuidV7, newUuidV7 } from "./ids.js";
 import { SCHEMA_VERSION, SEMANTIC_TABLES } from "./schema.js";
@@ -64,9 +63,8 @@ export function createHistoryApi(context: EngineContext) {
     restoreArtifact: (
       artifactId: string,
       revision: string,
-      slug?: string,
     ): Promise<Result<Revision, EngineError>> =>
-      restoreArtifact(context, artifactId, revision, slug),
+      restoreArtifact(context, artifactId, revision),
     restore: (revision: string): Promise<Result<Revision, EngineError>> =>
       restoreBook(context, revision),
     logAction: (
@@ -111,23 +109,8 @@ function artifactHistory(
   limit: number,
 ): Revision[] {
   const revisions = commitRevisions(context);
-  let artifactId: string;
-  if (isUuidV7(artifactReference)) {
-    artifactId = artifactReference;
-  } else {
-    try {
-      artifactId = context.artifactRow(artifactReference).artifact_id;
-    } catch {
-      const historical = revisions.find(
-        (revision) =>
-          revision.artifactSlug === artifactReference ||
-          revision.details?.slug === artifactReference ||
-          revision.details?.oldSlug === artifactReference,
-      );
-      if (!historical?.artifactId) return [];
-      artifactId = historical.artifactId;
-    }
-  }
+  if (!isUuidV7(artifactReference)) return [];
+  const artifactId = artifactReference;
   return revisions
     .filter((revision) => revision.artifactId === artifactId)
     .slice(0, Math.max(0, limit));
@@ -156,8 +139,8 @@ function revisionFromCommit(
   },
   parsed: CommitOperation,
 ): Revision {
-  const artifactSlugAtRevision = parsed.artifactId
-    ? artifactSlugAt(context, parsed.artifactId, commit.commit_hash)
+  const artifactLabelAtRevision = parsed.artifactId
+    ? artifactLabelAt(context, parsed.artifactId, commit.commit_hash)
     : undefined;
   return {
     hash: commit.commit_hash,
@@ -167,7 +150,7 @@ function revisionFromCommit(
     operationId: parsed.operationId,
     operation: parsed.operation,
     ...(parsed.artifactId ? { artifactId: parsed.artifactId } : {}),
-    ...(artifactSlugAtRevision ? { artifactSlug: artifactSlugAtRevision } : {}),
+    ...(artifactLabelAtRevision ? { artifactLabel: artifactLabelAtRevision } : {}),
     details: {
       ...parsed.details,
       ...(parsed.writeSet.length > 0 ? { writeSet: parsed.writeSet } : {}),
@@ -230,7 +213,7 @@ async function recordOperation(
         ...(artifact ? { artifactId: artifact.artifact_id } : {}),
         details: {
           ...(details ?? {}),
-          ...(artifact ? { artifactSlug: artifact.slug } : {}),
+          ...(artifact?.label ? { artifactLabel: artifact.label } : {}),
         },
         writeSet: artifact ? [`artifact:${artifact.artifact_id}`] : ["book"],
         // Provenance-only operations change no semantic rows; the commit
@@ -247,14 +230,13 @@ async function restoreArtifact(
   context: EngineContext,
   artifactId: string,
   revisionReference: string,
-  replacementSlug?: string,
 ): Promise<Result<Revision, EngineError>> {
   return resultOf(async () => {
     assertUuidV7(artifactId, "Artifact ID");
     const revision = requiredRevision(context, revisionReference);
     const target = context.store.db
       .prepare(
-        `SELECT artifact_id, slug, kind, created_at
+        `SELECT artifact_id, label, kind, created_at
          FROM dolt_at_artifacts(?)
          WHERE artifact_id=?`,
       )
@@ -264,23 +246,6 @@ async function restoreArtifact(
       throw new EngineFault({
         code: "NOT_FOUND",
         message: `Artifact ${artifactId} did not exist at ${revision.hash}`,
-      });
-    }
-    const desiredSlug = replacementSlug
-      ? artifactSlug(target.kind, replacementSlug)
-      : target.slug;
-    const owner = context.store.db
-      .prepare(
-        `SELECT artifact_id FROM artifacts
-         WHERE slug=? AND artifact_id<>?`,
-      )
-      .get(desiredSlug, artifactId) as unknown as
-      { artifact_id: string } | undefined;
-    if (owner) {
-      throw new EngineFault({
-        code: "SLUG_CONFLICT",
-        message: `Slug ${desiredSlug} is owned by active artifact ${owner.artifact_id}`,
-        ownerId: owner.artifact_id,
       });
     }
     const files = filesAt(context, revision.hash, artifactId);
@@ -307,20 +272,20 @@ async function restoreArtifact(
           "audio_waveforms",
         ],
         artifactId,
-        details: { fromRevision: revision.hash, slug: desiredSlug },
-        writeSet: [`artifact:${artifactId}`, `artifact-slug:${desiredSlug}`],
+        details: { fromRevision: revision.hash },
+        writeSet: [`artifact:${artifactId}`],
       },
       (_operationId, now) => {
         context.store.db
           .prepare(
             `INSERT INTO artifacts(
-              artifact_id, slug, kind, created_at
+              artifact_id, label, kind, created_at
             ) VALUES (?, ?, ?, ?)
             ON CONFLICT(artifact_id) DO UPDATE SET
-              slug=excluded.slug,
+              label=excluded.label,
               kind=excluded.kind`,
           )
-          .run(target.artifact_id, desiredSlug, target.kind, target.created_at);
+          .run(target.artifact_id, target.label, target.kind, target.created_at);
         context.store.db
           .prepare("DELETE FROM artifact_files WHERE artifact_id=?")
           .run(artifactId);
@@ -366,9 +331,9 @@ async function restoreBook(
   return resultOf(async () => {
     const revision = requiredRevision(context, revisionReference);
     const targetBook = context.store.db
-      .prepare("SELECT book_id, slug, created_at FROM dolt_at_book(?)")
+      .prepare("SELECT book_id, name, created_at FROM dolt_at_book(?)")
       .get(revision.hash) as unknown as
-      { book_id: string; slug: string; created_at: number } | undefined;
+      { book_id: string; name: string; created_at: number } | undefined;
     if (!targetBook) {
       throw new EngineFault({
         code: "NOT_FOUND",
@@ -396,7 +361,7 @@ async function restoreBook(
 
     const targetArtifacts = context.store.db
       .prepare(
-        `SELECT artifact_id, slug, kind, created_at
+        `SELECT artifact_id, label, kind, created_at
          FROM dolt_at_artifacts(?)
          ORDER BY artifact_id`,
       )
@@ -700,13 +665,14 @@ function insertFiles(
   }
 }
 
-function artifactSlugAt(
+function artifactLabelAt(
   context: EngineContext,
   artifactId: string,
   revision: string,
 ): string | undefined {
   const row = context.store.db
-    .prepare(`SELECT slug FROM dolt_at_artifacts(?) WHERE artifact_id=?`)
-    .get(revision, artifactId) as unknown as { slug: string } | undefined;
-  return row?.slug;
+    .prepare(`SELECT label FROM dolt_at_artifacts(?) WHERE artifact_id=?`)
+    .get(revision, artifactId) as unknown as
+    { label: string | null } | undefined;
+  return row?.label ?? undefined;
 }

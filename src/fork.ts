@@ -14,7 +14,6 @@ import { ObjectStore } from "./cas.js";
 import { createEngine, type Engine } from "./engine.js";
 import {
   assertSameSchemaVersion,
-  findSlugConflicts,
   reconcileSingletonFlags,
   verifyConstraintHealth,
 } from "./merge-policy.js";
@@ -223,8 +222,9 @@ export async function bootstrapFork(
  *
  * Runs entirely in a throwaway copy of the upstream catalog inside a temp
  * directory: fetches the fork, merges under the engine merge policy
- * (same-schema precondition, user-facing slug conflicts, constraint
- * verification, deterministic singleton reconcile), uploads the fork's new
+ * (same-schema precondition, constraint verification, deterministic
+ * singleton reconcile; artifact identity is artifact_id, so there is no
+ * name-conflict class to check), uploads the fork's new
  * objects to the upstream object store BEFORE the catalog ref moves — the
  * same objects-before-push ordering as engine.storage.backup — lands one
  * forward integration commit on main, and pushes it.
@@ -328,7 +328,7 @@ async function mergeBackIn(
     let alreadyIntegrated =
       baseRevision === theirsRevision || oursRevision === theirsRevision;
     if (!alreadyIntegrated) {
-      const integration = integrate(db, localForkRef, theirsRef, {
+      const integration = integrate(db, localForkRef, {
         baseRevision,
         oursRevision,
         theirsRevision,
@@ -381,9 +381,9 @@ async function mergeBackIn(
 /**
  * Merges `theirsRef` into main under the engine merge policy and Dolt-
  * commits the result as one forward integration commit. The policy wrapper
- * is identical to `mergeWithPolicy` (same-schema precondition, slug
- * conflicts as user-facing MERGE_CONFLICT, constraint verification,
- * deterministic singleton-flag reconcile); only the merge mechanism
+ * is identical to `mergeWithPolicy` (same-schema precondition, constraint
+ * verification, deterministic singleton-flag reconcile); only the merge
+ * mechanism
  * differs — a projection-level three-way merge instead of `dolt_merge`,
  * which ve-wsu makes unusable on full engine catalogs (see the module
  * comment). Returns null when the fork's net changes are already present
@@ -392,7 +392,6 @@ async function mergeBackIn(
 function integrate(
   db: DatabaseSync,
   forkRef: string,
-  displayRef: string,
   context: {
     baseRevision: string;
     oursRevision: string;
@@ -406,16 +405,6 @@ function integrate(
   reconciled: { transcripts: number; sequences: number };
 } | null {
   assertSameSchemaVersion(db, "HEAD", forkRef);
-  const slugConflicts = findSlugConflicts(db, "HEAD", forkRef);
-  if (slugConflicts.length > 0) {
-    throw new EngineFault({
-      code: "MERGE_CONFLICT",
-      message:
-        `Merge-back of ${displayRef} conflicts on artifact slug(s): ` +
-        slugConflicts.map((conflict) => conflict.slug).join(", "),
-      details: { branch: displayRef, slugConflicts },
-    });
-  }
   const merge = mergeRefs(db, "HEAD", forkRef, context.baseRevision);
   if (!merge) {
     // The fork's net changes are already present on main (for example a
@@ -470,9 +459,10 @@ function integrate(
  * changed on only one side takes that side's value, identical changes
  * resolve to the same row, and incompatible changes (both sides changed a
  * row differently, or one side modified a row the other deleted) are
- * conflicts and abort before anything is written. Same-row-different-slug
- * situations reachable here are already covered by findSlugConflicts; this
- * layer is the backstop for every other table.
+ * conflicts and abort before anything is written. Artifact rows are keyed
+ * by artifact_id (UUIDv7, collision-free across forks), so independently
+ * minted artifacts never collide on identity; labels are non-unique
+ * display text and merge like any other column.
  *
  * The rewrite reuses the restore idiom (src/history.ts
  * reloadSemanticTables): `SEMANTIC_TABLES` is ordered parent-before-child,

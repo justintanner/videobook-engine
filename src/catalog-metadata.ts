@@ -1,12 +1,12 @@
 import type { NotebookCell } from "./notebook/types.js";
 
-export const SCHEMA_VERSION = 20;
+export const SCHEMA_VERSION = 21;
 
 export const CELLS_TABLE_SCHEMA = [
   { column: "notebook_id", type: "TEXT" },
   { column: "cell_id", type: "TEXT" },
   { column: "type", type: "TEXT" },
-  { column: "slug", type: "TEXT" },
+  { column: "label", type: "TEXT" },
   { column: "grid_row", type: "INTEGER" },
   { column: "grid_column", type: "INTEGER" },
   { column: "output_entity_id", type: "TEXT" },
@@ -40,7 +40,7 @@ export function notebookCellTableRows(
     notebook_id: notebookId,
     cell_id: cell.id,
     type: cell.type,
-    slug: cell.slug,
+    label: cell.label ?? null,
     grid_row: cell.slot.row,
     grid_column: cell.slot.column,
     output_entity_id: cell.outputEntityId ?? null,

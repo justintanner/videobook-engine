@@ -41,12 +41,12 @@ const MERGE_SCHEMA_SQL = `
   );
   CREATE TABLE book (
     book_id TEXT PRIMARY KEY,
-    slug TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
     created_at INTEGER NOT NULL
   );
   CREATE TABLE artifacts (
     artifact_id TEXT PRIMARY KEY,
-    slug TEXT NOT NULL UNIQUE,
+    label TEXT,
     kind TEXT NOT NULL,
     created_at INTEGER NOT NULL
   );
@@ -68,7 +68,7 @@ const MERGE_SCHEMA_SQL = `
     notebook_id TEXT NOT NULL,
     cell_id TEXT NOT NULL,
     type TEXT NOT NULL,
-    slug TEXT NOT NULL,
+    label TEXT,
     grid_row INTEGER NOT NULL,
     grid_column INTEGER NOT NULL,
     output_entity_id TEXT,
@@ -91,7 +91,7 @@ afterEach(async () => {
   await Promise.all(roots.splice(0).map(removeRoot));
 });
 
-async function setup(initialBookSlug = "demo"): Promise<{
+async function setup(initialBookName = "demo"): Promise<{
   engine: Engine;
   root: string;
   dataDir: string;
@@ -103,7 +103,7 @@ async function setup(initialBookSlug = "demo"): Promise<{
     engine: createEngine({
       dataDir,
       workspaceDir: path.join(root, "workspace"),
-      initialBookSlug,
+      initialBookName,
     }),
     root,
     dataDir,
@@ -181,15 +181,15 @@ describe("single-book Dolt engine", () => {
 
     expect(() =>
       createEngine({ dataDir, workspaceDir }),
-    ).toThrow("initialBookSlug is required");
+    ).toThrow("initialBookName is required");
 
     const engine = createEngine({
       dataDir,
       workspaceDir,
-      initialBookSlug: "My First Book",
+      initialBookName: "My First Book",
     });
     const first = engine.book.get();
-    expect(first.slug).toBe("my-first-book");
+    expect(first.name).toBe("My First Book");
     expect(first.bookId).toMatch(/^[0-9a-f-]{36}$/);
     value(await engine.book.rename("Renamed Book"));
     engine.close();
@@ -198,13 +198,13 @@ describe("single-book Dolt engine", () => {
     const bookColumns = (
       catalog.prepare("PRAGMA table_info(book)").all() as Array<{ name: string }>
     ).map((column) => column.name);
-    expect(bookColumns).toEqual(["book_id", "slug", "created_at"]);
+    expect(bookColumns).toEqual(["book_id", "name", "created_at"]);
     catalog.close();
 
     const reopened = createEngine({ dataDir, workspaceDir });
     expect(reopened.book.get()).toEqual({
       bookId: first.bookId,
-      slug: "renamed-book",
+      name: "Renamed Book",
       createdAt: first.createdAt,
     });
     reopened.close();
@@ -212,15 +212,15 @@ describe("single-book Dolt engine", () => {
     const suppliedAgain = createEngine({
       dataDir,
       workspaceDir,
-      initialBookSlug: "ignored-on-reopen",
+      initialBookName: "ignored-on-reopen",
     });
-    expect(suppliedAgain.book.get().slug).toBe("renamed-book");
+    expect(suppliedAgain.book.get().name).toBe("Renamed Book");
     suppliedAgain.close();
   });
 
-  it("creates the exact normalized v19 semantic and runtime schema", async () => {
+  it("creates the exact normalized v21 semantic and runtime schema", async () => {
     const { engine, dataDir } = await setup();
-    expect(SCHEMA_VERSION).toBe(20);
+    expect(SCHEMA_VERSION).toBe(21);
     engine.close();
 
     const db = new DatabaseSync(path.join(dataDir, "videobook.db"));
@@ -248,7 +248,7 @@ describe("single-book Dolt engine", () => {
       ).map((column) => column.name);
     expect(columns("artifacts")).toEqual([
       "artifact_id",
-      "slug",
+      "label",
       "kind",
       "created_at",
     ]);
@@ -279,7 +279,7 @@ describe("single-book Dolt engine", () => {
       "notebook_id",
       "cell_id",
       "type",
-      "slug",
+      "label",
       "grid_row",
       "grid_column",
       "output_entity_id",
@@ -309,7 +309,7 @@ describe("single-book Dolt engine", () => {
       (db
         .prepare("SELECT version FROM engine_schema WHERE singleton=1")
         .get() as { version: number }).version,
-    ).toBe(20);
+    ).toBe(21);
     expect(
       db
         .prepare(
@@ -355,7 +355,7 @@ describe("single-book Dolt engine", () => {
   it("keeps semantic history and runtime state in one database without projects", async () => {
     const { engine, dataDir } = await setup();
     const artifact = value(
-      await engine.artifacts.create({ kind: "image", slug: "img-cat" }),
+      await engine.artifacts.create({ kind: "image", label: "img-cat" }),
     );
     expect((await stat(artifact.path)).isDirectory()).toBe(true);
     const semanticHead = engine.head;
@@ -416,7 +416,7 @@ describe("single-book Dolt engine", () => {
   it("rejects hard deletion of referenced records and cascades owned rows", async () => {
     const { engine, dataDir } = await setup();
     const artifact = value(
-      await engine.artifacts.create({ kind: "image", slug: "img-owned" }),
+      await engine.artifacts.create({ kind: "image", label: "img-owned" }),
     );
     const fileWrite = await engine.files.write(
       artifact.artifactId,
@@ -430,7 +430,6 @@ describe("single-book Dolt engine", () => {
     const notebook = value(await engine.notebooks.create("Graph"));
     const cell = engine.notebooks.createCell({
       type: "image",
-      slug: "img-image",
       slot: { row: 0, column: 0 },
       outputEntityId: entity.id,
       outputArtifactId: artifact.artifactId,
@@ -463,7 +462,6 @@ describe("single-book Dolt engine", () => {
     });
     expect(value(await engine.artifacts.delete(artifact.artifactId))).toEqual({
       artifactId: artifact.artifactId,
-      slug: artifact.slug,
     });
     expect(engine.history.artifact(artifact.artifactId)[0]?.operation).toBe(
       "delete_artifact",
@@ -501,7 +499,6 @@ describe("single-book Dolt engine", () => {
     const notebook = value(await engine.notebooks.create("IDs"));
     const generatedCell = engine.notebooks.createCell({
       type: "prompt",
-      slug: "prompt-generated",
       slot: { row: 1, column: 2 },
     });
     expect(generatedCell.id[14]).toBe("7");
@@ -537,10 +534,10 @@ describe("single-book Dolt engine", () => {
     db.prepare(
       "INSERT INTO engine_schema(singleton, version, created_at) VALUES (1, 5, 0)",
     ).run();
-    db.prepare("INSERT INTO book(book_id, slug, created_at) VALUES (?, 'merge-book', 0)")
+    db.prepare("INSERT INTO book(book_id, name, created_at) VALUES (?, 'merge-book', 0)")
       .run(bookId);
     db.prepare(
-      `INSERT INTO artifacts(artifact_id, slug, kind, created_at)
+      `INSERT INTO artifacts(artifact_id, label, kind, created_at)
        VALUES (?, 'vid-left', 'video', 0), (?, 'vid-right', 'video', 0)`,
     ).run(leftArtifact, rightArtifact);
     db.prepare(
@@ -570,7 +567,7 @@ describe("single-book Dolt engine", () => {
       .run(leftEntity);
     db.prepare(
       `INSERT INTO cells(
-        notebook_id, cell_id, type, slug, grid_row, grid_column,
+        notebook_id, cell_id, type, label, grid_row, grid_column,
         output_entity_id, inputs_json
       ) VALUES (?, ?, 'scene', 'scene-left', 0, 0, ?, '{}')`,
     ).run(notebookId, leftCell, leftEntity);
@@ -596,7 +593,7 @@ describe("single-book Dolt engine", () => {
     // deterministically by the row UUID tie-break.
     db.prepare(
       `INSERT INTO cells(
-        notebook_id, cell_id, type, slug, grid_row, grid_column,
+        notebook_id, cell_id, type, label, grid_row, grid_column,
         output_entity_id, inputs_json
       ) VALUES (?, ?, 'scene', 'scene-right', 0, 0, ?, '{}')`,
     ).run(notebookId, rightCell, rightEntity);
@@ -642,7 +639,7 @@ describe("single-book Dolt engine", () => {
 
     db.doltBranch("same-cell-left");
     db.doltCheckout("same-cell-left");
-    db.prepare("UPDATE cells SET slug='scene-left-edit' WHERE cell_id=?")
+    db.prepare("UPDATE cells SET label='scene-left-edit' WHERE cell_id=?")
       .run(leftCell);
     commitTables(db, ["cells"], "left edit");
     db.doltCheckout("main");
@@ -650,7 +647,7 @@ describe("single-book Dolt engine", () => {
     db.doltBranch("same-cell-right");
     db.doltCheckout("same-cell-right");
     db.doltReset("--hard");
-    db.prepare("UPDATE cells SET slug='scene-right-edit' WHERE cell_id=?")
+    db.prepare("UPDATE cells SET label='scene-right-edit' WHERE cell_id=?")
       .run(leftCell);
     commitTables(db, ["cells"], "right edit");
     db.doltCheckout("main");
@@ -676,7 +673,7 @@ describe("single-book Dolt engine", () => {
         notebook_id TEXT NOT NULL,
         cell_id TEXT NOT NULL,
         type TEXT NOT NULL,
-        slug TEXT NOT NULL,
+        label TEXT,
         grid_row INTEGER NOT NULL,
         grid_column INTEGER NOT NULL,
         inputs_json TEXT NOT NULL,
@@ -716,7 +713,7 @@ describe("single-book Dolt engine", () => {
       db.doltCheckout(branch);
       db.prepare(
         `INSERT INTO cells(
-          notebook_id, cell_id, type, slug, grid_row, grid_column, inputs_json
+          notebook_id, cell_id, type, label, grid_row, grid_column, inputs_json
         ) VALUES (?, ?, 'scene', ?, 0, 0, '{}')`,
       ).run(notebookId, cell, `scene-${branch}`);
       db.prepare(
@@ -753,7 +750,7 @@ describe("single-book Dolt engine", () => {
   it("projects queued work into an artifact runtime view", async () => {
     const { engine } = await setup();
     const artifact = value(
-      await engine.artifacts.create({ kind: "image", slug: "img-queued" }),
+      await engine.artifacts.create({ kind: "image", label: "img-queued" }),
     );
     const enqueued = engine.jobs.queue.enqueue({
       type: "generate_image",
@@ -813,28 +810,10 @@ describe("single-book Dolt engine", () => {
     engine.close();
   });
 
-  it("reuses a deleted slug with an isolated identity", async () => {
-    const { engine } = await setup();
-    const first = value(
-      await engine.artifacts.create({ kind: "video", slug: "vid-cat" }),
-    );
-    value(await engine.files.write(first.artifactId, "original.mp4", "old bytes"));
-    value(await engine.artifacts.delete(first.artifactId));
-    expect(engine.artifacts.isSlugAvailable("vid-cat")).toBe(true);
-
-    const second = value(
-      await engine.artifacts.create({ kind: "video", slug: "vid-cat" }),
-    );
-    expect(second.artifactId).not.toBe(first.artifactId);
-    expect(second.path).not.toBe(first.path);
-    expect(value(await engine.files.manifest(second.artifactId)).files).toEqual([]);
-    engine.close();
-  });
-
   it("restores artifact content forward without changing its identity", async () => {
     const { engine } = await setup();
     const artifact = value(
-      await engine.artifacts.create({ kind: "script", slug: "script-draft" }),
+      await engine.artifacts.create({ kind: "script", label: "script-draft" }),
     );
     const first = await engine.files.write(
       artifact.artifactId,
@@ -854,46 +833,10 @@ describe("single-book Dolt engine", () => {
     engine.close();
   });
 
-  it("reports the current owner when restoring a reused artifact slug", async () => {
-    const { engine } = await setup();
-    const original = value(
-      await engine.artifacts.create({ kind: "video", slug: "vid-cat" }),
-    );
-    const written = await engine.files.write(
-      original.artifactId,
-      "original.mp4",
-      "old cat",
-    );
-    if (!written.ok || !written.revision) throw new Error("missing write revision");
-    value(await engine.artifacts.delete(original.artifactId));
-    const current = value(
-      await engine.artifacts.create({ kind: "video", slug: "vid-cat" }),
-    );
-
-    const conflict = await engine.history.restoreArtifact(
-      original.artifactId,
-      written.revision,
-    );
-    expect(conflict).toMatchObject({ ok: false, error: { code: "SLUG_CONFLICT" } });
-    if (!conflict.ok) expect(conflict.error.ownerId).toBe(current.artifactId);
-
-    value(
-      await engine.history.restoreArtifact(
-        original.artifactId,
-        written.revision,
-        "vid-cat-restored",
-      ),
-    );
-    expect(value(engine.artifacts.get(original.artifactId)).slug).toBe(
-      "vid-cat-restored",
-    );
-    engine.close();
-  });
-
   it("restores all book-authored state forward", async () => {
     const { engine } = await setup();
     const artifact = value(
-      await engine.artifacts.create({ kind: "script", slug: "script-main" }),
+      await engine.artifacts.create({ kind: "script", label: "script-main" }),
     );
     value(await engine.files.write(artifact.artifactId, "original.md", "target"));
     value(
@@ -919,14 +862,14 @@ describe("single-book Dolt engine", () => {
     value(await engine.files.write(artifact.artifactId, "original.md", "later"));
     value(await engine.metadata.artifacts.write(artifact.artifactId, "caption", "later"));
     value(await engine.entities.delete(entity.id));
-    value(await engine.artifacts.create({ kind: "image", slug: "img-later" }));
+    value(await engine.artifacts.create({ kind: "image", label: "img-later" }));
     value(await engine.sequences.removeTrack(addedTrack.trackId));
     value(await engine.sequences.rename(sequence.sequenceId, "Later Cut"));
     value(await engine.prompts.record({ surface: "chat", prompt: "later prompt" }));
     value(await engine.messages.append({ role: "assistant", body: { text: "later message" } }));
 
     value(await engine.history.restore(target));
-    expect(engine.book.get().slug).toBe("demo");
+    expect(engine.book.get().name).toBe("demo");
     expect(
       value(await engine.files.read(artifact.artifactId, "original.md")).toString(),
     ).toBe("target");
@@ -958,7 +901,7 @@ describe("single-book Dolt engine", () => {
 
     // Dirty every table family the APIs can reach: sequences, tracks,
     // prompts, messages, metadata, entities, notebooks, and artifacts.
-    value(await engine.artifacts.create({ kind: "image", slug: "img-extra" }));
+    value(await engine.artifacts.create({ kind: "image", label: "img-extra" }));
     value(await engine.entities.create("scene", "Later Scene"));
     value(await engine.notebooks.create("Later Notebook"));
     value(await engine.metadata.book.write("theme", { mode: "dark" }));
@@ -1003,7 +946,7 @@ describe("single-book Dolt engine", () => {
   it("derives history listings from structured commit messages", async () => {
     const { engine } = await setup();
     const artifact = value(
-      await engine.artifacts.create({ kind: "image", slug: "img-action" }),
+      await engine.artifacts.create({ kind: "image", label: "img-action" }),
     );
     const written = await engine.files.write(
       artifact.artifactId,
@@ -1017,7 +960,7 @@ describe("single-book Dolt engine", () => {
     expect(latest.operation).toBe("write_file");
     expect(latest.hash).toBe(written.revision);
     expect(latest.artifactId).toBe(artifact.artifactId);
-    expect(latest.artifactSlug).toBe(artifact.slug);
+    expect(latest.artifactLabel).toBe(artifact.label);
     expect(latest.author).toBe("Videobook");
     expect(latest.operationId).toMatch(/^[0-9a-f-]{36}$/);
     expect(latest.details).toMatchObject({
@@ -1046,7 +989,7 @@ describe("single-book Dolt engine", () => {
     const context = new EngineContext({
       dataDir: path.join(root, "data"),
       workspaceDir: path.join(root, "workspace"),
-      initialBookSlug: "action-history",
+      initialBookName: "action-history",
     });
     const history = createHistoryApi(context);
     // Seed three unrelated commits so naive revision scans would wander.
@@ -1087,7 +1030,7 @@ describe("single-book Dolt engine", () => {
   it("copies terminal jobs into job_runs audit rows", async () => {
     const { engine, dataDir } = await setup();
     const artifact = value(
-      await engine.artifacts.create({ kind: "image", slug: "img-job" }),
+      await engine.artifacts.create({ kind: "image", label: "img-job" }),
     );
     const enqueued = engine.jobs.queue.enqueue({
       type: "generate",
@@ -1123,13 +1066,13 @@ describe("single-book Dolt engine", () => {
     const engine = createEngine({
       dataDir: path.join(root, "data"),
       workspaceDir: path.join(root, "workspace"),
-      initialBookSlug: "backup",
+      initialBookName: "backup",
       remoteObjects: fileContentStore(objectRoot),
       objectPrefix: "videobook",
       catalogBackup: { name: "backup", url: `file://${catalogRoot}` },
     });
     const artifact = value(
-      await engine.artifacts.create({ kind: "image", slug: "img-cat" }),
+      await engine.artifacts.create({ kind: "image", label: "img-cat" }),
     );
     value(await engine.files.write(artifact.artifactId, "original.png", "image bytes"));
     const manifest = value(await engine.files.manifest(artifact.artifactId));
@@ -1142,7 +1085,7 @@ describe("single-book Dolt engine", () => {
     engine.close();
   });
 
-  it("bootstraps an existing catalog snapshot without a new initial slug", async () => {
+  it("bootstraps an existing catalog snapshot without a new initial name", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "videobook-bootstrap-"));
     roots.push(root);
     const objectStore = fileContentStore(path.join(root, "remote-objects"));
@@ -1150,12 +1093,12 @@ describe("single-book Dolt engine", () => {
     const source = createEngine({
       dataDir: sourceData,
       workspaceDir: path.join(root, "source-workspace"),
-      initialBookSlug: "source",
+      initialBookName: "source",
       remoteObjects: objectStore,
       objectPrefix: "videobook",
     });
     const artifact = value(
-      await source.artifacts.create({ kind: "video", slug: "vid-cat" }),
+      await source.artifacts.create({ kind: "video", label: "vid-cat" }),
     );
     value(await source.files.write(artifact.artifactId, "original.mp4", "remote bytes"));
     value(await source.storage.backup());
@@ -1174,9 +1117,10 @@ describe("single-book Dolt engine", () => {
       objectPrefix: "videobook",
     });
     await restored.ready;
-    expect(value(restored.artifacts.get("vid-cat")).artifactId).toBe(
-      artifact.artifactId,
-    );
+    expect(value(restored.artifacts.get(artifact.artifactId))).toMatchObject({
+      artifactId: artifact.artifactId,
+      label: "vid-cat",
+    });
     expect(
       value(await restored.files.read(artifact.artifactId, "original.mp4")).toString(),
     ).toBe("remote bytes");

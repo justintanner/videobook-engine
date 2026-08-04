@@ -3,14 +3,12 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 
 import { DatabaseSync } from "@dolthub/doltlite";
-import { v7 as uuidv7 } from "uuid";
 import { afterEach, describe, expect, it } from "vitest";
 
 import {
   CELLS_TABLE_COLUMNS,
   firstEmptyNotebookGridSlot,
   firstEmptyNotebookGridSlots,
-  NOTEBOOK_CELL_SLUG_PREFIXES,
   NOTEBOOK_CELL_TYPES,
   NOTEBOOK_GRID_CAPACITY,
   NOTEBOOK_GRID_COLUMN_COUNT,
@@ -45,90 +43,44 @@ async function setup() {
   roots.push(root);
   const engine = createEngine({
     rootDir: root,
-    initialBookSlug: "grid-v13",
+    initialBookName: "grid-v13",
   });
   await engine.ready;
   return { root, engine };
 }
 
-function rewriteCellsAsSchema19(database: DatabaseSync): void {
-  const columns = CELLS_TABLE_COLUMNS.join(", ");
-  database.exec("PRAGMA foreign_keys = OFF");
-  database.exec("BEGIN IMMEDIATE");
-  try {
-    database.exec(`
-      CREATE TABLE cells_schema_19 (
-        notebook_id TEXT NOT NULL
-          REFERENCES notebooks(notebook_id) ON DELETE CASCADE,
-        cell_id TEXT NOT NULL,
-        type TEXT NOT NULL CHECK (
-          type IN (
-            'audio','image','video','extract_audio','extract_frame','split_video',
-            'prompt','character',
-            'analyze','analysis','generate_video','generate_image',
-            'generate_audio','concat','splice'
-          )
-        ),
-        slug TEXT NOT NULL CHECK (
-          slug GLOB '[a-z0-9]*'
-          AND slug NOT GLOB '*[^a-z0-9-]*'
-          AND slug NOT GLOB '*--*'
-          AND slug NOT LIKE '-%'
-          AND slug NOT LIKE '%-'
-          AND instr(slug, '-') > 0
-        ),
-        grid_row INTEGER NOT NULL CHECK (grid_row >= 0),
-        grid_column INTEGER NOT NULL,
-        output_entity_id TEXT
-          REFERENCES entities(entity_id) ON DELETE RESTRICT,
-        prompt TEXT,
-        provider TEXT,
-        model TEXT,
-        operation TEXT,
-        tool TEXT,
-        inputs_json TEXT NOT NULL DEFAULT '{}',
-        output_artifact_id TEXT
-          REFERENCES artifacts(artifact_id) ON DELETE RESTRICT,
-        PRIMARY KEY(notebook_id, cell_id),
-        UNIQUE(notebook_id, slug),
-        CHECK (
-          (type = 'audio' AND slug LIKE 'aud-%')
-          OR (type = 'image' AND slug LIKE 'img-%')
-          OR (type = 'video' AND slug LIKE 'vid-%')
-          OR (type = 'extract_audio' AND slug LIKE 'extract-audio-%')
-          OR (type = 'extract_frame' AND slug LIKE 'extract-frame-%')
-          OR (type = 'split_video' AND slug LIKE 'split-video-%')
-          OR (type = 'prompt' AND slug LIKE 'prompt-%')
-          OR (type = 'character' AND slug LIKE 'char-%')
-          OR (type = 'analyze' AND slug LIKE 'analyze-%')
-          OR (type = 'analysis' AND slug LIKE 'analysis-%')
-          OR (type = 'generate_video' AND slug LIKE 'generate-video-%')
-          OR (type = 'generate_image' AND slug LIKE 'generate-image-%')
-          OR (type = 'generate_audio' AND slug LIKE 'generate-audio-%')
-          OR (type = 'concat' AND slug LIKE 'concat-%')
-          OR (type = 'splice' AND slug LIKE 'splice-%')
-        )
-      );
-      INSERT INTO cells_schema_19(${columns})
-        SELECT ${columns} FROM cells;
-      DROP TABLE cells;
-      ALTER TABLE cells_schema_19 RENAME TO cells;
-      CREATE INDEX cells_output_entity ON cells(output_entity_id);
-      CREATE INDEX cells_grid
-        ON cells(notebook_id, grid_row, grid_column, cell_id);
-      CREATE INDEX cells_output_artifact ON cells(output_artifact_id);
-      UPDATE engine_schema SET version=19 WHERE singleton=1;
-      COMMIT;
-    `);
-  } catch (error) {
-    if (database.inTransaction) database.exec("ROLLBACK");
-    throw error;
-  } finally {
-    database.exec("PRAGMA foreign_keys = ON");
-  }
-}
+// Kept as a literal copy of CELLS_TABLE_SQL in src/schema.ts so a schema
+// drift shows up as a test diff, not a silent divergence.
+const CELLS_TABLE_DDL = `
+  CREATE TABLE IF NOT EXISTS cells (
+    notebook_id TEXT NOT NULL
+      REFERENCES notebooks(notebook_id) ON DELETE CASCADE,
+    cell_id TEXT NOT NULL,
+    type TEXT NOT NULL CHECK (
+      type IN (
+        'audio','image','video','extract_audio','extract_frame','split_video',
+        'prompt','character',
+        'analyze','analysis','generate_video','generate_image','generate_audio',
+        'concat','splice'
+      )
+    ),
+    label TEXT,
+    grid_row INTEGER NOT NULL CHECK (grid_row BETWEEN 0 AND 25),
+    grid_column INTEGER NOT NULL CHECK (grid_column BETWEEN 0 AND 12),
+    output_entity_id TEXT
+      REFERENCES entities(entity_id) ON DELETE RESTRICT,
+    prompt TEXT,
+    provider TEXT,
+    model TEXT,
+    operation TEXT,
+    tool TEXT,
+    inputs_json TEXT NOT NULL DEFAULT '{}',
+    output_artifact_id TEXT
+      REFERENCES artifacts(artifact_id) ON DELETE RESTRICT,
+    PRIMARY KEY(notebook_id, cell_id)
+  );`;
 
-describe("fixed notebook grid schema 20", () => {
+describe("fixed notebook grid schema 21", () => {
   it("exports the bounded address contract and the fifteen explicit cell types", () => {
     expect(NOTEBOOK_CELL_TYPES).toEqual([
       "audio",
@@ -151,7 +103,7 @@ describe("fixed notebook grid schema 20", () => {
       "notebook_id",
       "cell_id",
       "type",
-      "slug",
+      "label",
       "grid_row",
       "grid_column",
       "output_entity_id",
@@ -163,7 +115,7 @@ describe("fixed notebook grid schema 20", () => {
       "inputs_json",
       "output_artifact_id",
     ]);
-    expect(SCHEMA_VERSION).toBe(20);
+    expect(SCHEMA_VERSION).toBe(21);
     expect(NOTEBOOK_GRID_ROW_COUNT).toBe(26);
     expect(NOTEBOOK_GRID_COLUMN_COUNT).toBe(13);
     expect(NOTEBOOK_GRID_CAPACITY).toBe(338);
@@ -173,6 +125,49 @@ describe("fixed notebook grid schema 20", () => {
     expect(parseNotebookGridAddress("@aa1")).toBeUndefined();
     expect(notebookGridAddress({ row: 25, column: 12 })).toBe("z13");
     expect(notebookGridTag({ row: 0, column: 0 })).toBe("@a1");
+  });
+
+  it("pins the label-only cells DDL and its live column projection", async () => {
+    const { root, engine } = await setup();
+    engine.close();
+    const catalog = new DatabaseSync(path.join(root, "data", "videobook.db"), {
+      readOnly: true,
+    });
+    const liveColumns = (
+      catalog.prepare("PRAGMA table_info(cells)").all() as Array<{
+        name: string;
+        notnull: number;
+      }>
+    ).map(({ name, notnull }) => ({ name, notnull }));
+    catalog.close();
+
+    const scratchRoot = await mkdtemp(
+      path.join(tmpdir(), "videobook-cells-ddl-"),
+    );
+    roots.push(scratchRoot);
+    const scratch = new DatabaseSync(path.join(scratchRoot, "cells-ddl.db"));
+    scratch.exec(`
+      CREATE TABLE notebooks (notebook_id TEXT PRIMARY KEY);
+      CREATE TABLE entities (entity_id TEXT PRIMARY KEY);
+      CREATE TABLE artifacts (artifact_id TEXT PRIMARY KEY);
+    `);
+    scratch.exec(CELLS_TABLE_DDL);
+    const pinnedColumns = (
+      scratch.prepare("PRAGMA table_info(cells)").all() as Array<{
+        name: string;
+        notnull: number;
+      }>
+    ).map(({ name, notnull }) => ({ name, notnull }));
+    scratch.close();
+
+    expect(liveColumns).toEqual(pinnedColumns);
+    expect(pinnedColumns.map((column) => column.name)).toEqual([
+      ...CELLS_TABLE_COLUMNS,
+    ]);
+    expect(pinnedColumns.find((column) => column.name === "label")).toEqual({
+      name: "label",
+      notnull: 0,
+    });
   });
 
   it("allocates empty slots in address order and reports a full grid", () => {
@@ -204,7 +199,7 @@ describe("fixed notebook grid schema 20", () => {
     const cells = NOTEBOOK_CELL_TYPES.map((type, index) =>
       engine.notebooks.createCell({
         type,
-        slug: `${NOTEBOOK_CELL_SLUG_PREFIXES[type]}-cell`,
+        label: `${type} cell`,
         slot: {
           row: Math.floor(index / NOTEBOOK_GRID_COLUMN_COUNT),
           column: index % NOTEBOOK_GRID_COLUMN_COUNT,
@@ -230,7 +225,7 @@ describe("fixed notebook grid schema 20", () => {
       [...NOTEBOOK_CELL_TYPES].sort(),
     );
     expect(reloaded.cells.find((cell) => cell.type === "audio")).toMatchObject({
-      slug: "aud-cell",
+      label: "audio cell",
       slot: { row: 0, column: 0 },
     });
     expect(
@@ -275,75 +270,11 @@ describe("fixed notebook grid schema 20", () => {
       database
         .prepare(
           `INSERT INTO cells(
-          notebook_id, cell_id, type, slug, grid_row, grid_column, inputs_json
-        ) VALUES (?, 'removed-split', 'split', 'split-removed', 0, 0, '{}')`,
+          notebook_id, cell_id, type, label, grid_row, grid_column, inputs_json
+        ) VALUES (?, 'removed-split', 'split', 'split removed', 0, 0, '{}')`,
         )
         .run(notebook.id),
     ).toThrow();
-    database.close();
-  });
-
-  it("enforces typed notebook-unique slugs and output entity references", async () => {
-    const { root, engine } = await setup();
-    const notebook = value(await engine.notebooks.create("Slugs"));
-    const entity = value(await engine.entities.create("character", "Boat"));
-    const image = engine.notebooks.createCell({
-      type: "image",
-      slug: "img-boat",
-      slot: { row: 0, column: 0 },
-      outputEntityId: entity.id,
-    });
-    value(
-      await engine.notebooks.write({
-        ...notebook,
-        cells: [image],
-        edges: [],
-      }),
-    );
-    expect(value(engine.notebooks.read(notebook.id)).cells[0]).toMatchObject({
-      slug: "img-boat",
-      outputEntityId: entity.id,
-    });
-
-    const duplicate = await engine.notebooks.write({
-      ...notebook,
-      cells: [
-        image,
-        {
-          ...image,
-          id: uuidv7(),
-          slot: { row: 0, column: 1 },
-        },
-      ],
-      edges: [],
-    });
-    expect(duplicate).toMatchObject({
-      ok: false,
-      error: { message: "Duplicate cell slug: img-boat" },
-    });
-
-    const invalid = await engine.notebooks.write({
-      ...notebook,
-      cells: [{ ...image, slug: "video-boat" }],
-      edges: [],
-    });
-    expect(invalid).toMatchObject({
-      ok: false,
-      error: { message: "Invalid image cell slug: video-boat" },
-    });
-
-    engine.close();
-    const database = new DatabaseSync(path.join(root, "data", "videobook.db"), {
-      readOnly: true,
-    });
-    expect(
-      database
-        .prepare("SELECT slug, output_entity_id FROM cells WHERE cell_id=?")
-        .get(image.id),
-    ).toMatchObject({
-      slug: "img-boat",
-      output_entity_id: entity.id,
-    });
     database.close();
   });
 
@@ -352,17 +283,14 @@ describe("fixed notebook grid schema 20", () => {
     const notebook = value(await engine.notebooks.create("Inputs"));
     const first = engine.notebooks.createCell({
       type: "video",
-      slug: "vid-first",
       slot: { row: 0, column: 0 },
     });
     const second = engine.notebooks.createCell({
       type: "video",
-      slug: "vid-second",
       slot: { row: 0, column: 1 },
     });
     const target = engine.notebooks.createCell({
       type: "analyze",
-      slug: "analyze-target",
       slot: { row: 1, column: 0 },
     });
     const duplicateInput = await engine.notebooks.write({
@@ -395,7 +323,6 @@ describe("fixed notebook grid schema 20", () => {
     const notebook = value(await engine.notebooks.create("Workflow state"));
     const cell = engine.notebooks.createCell({
       type: "analyze",
-      slug: "analyze-source",
       slot: { row: 0, column: 0 },
     });
     value(
@@ -537,7 +464,7 @@ describe("fixed notebook grid schema 20", () => {
     database.close();
   });
 
-  it.each([11, 12, 18])(
+  it.each([11, 12, 18, 19, 20])(
     "rejects schema-v%s catalogs without migration",
     async (version) => {
       const { root, engine } = await setup();
@@ -551,146 +478,20 @@ describe("fixed notebook grid schema 20", () => {
       database.close();
 
       expect(() => createEngine({ rootDir: root })).toThrow(
-        `Database schema ${version} is not supported by engine schema 20`,
+        `Database schema ${version} is not supported by engine schema 21`,
       );
     },
   );
-
-  it("upgrades valid schema 19 cells without losing notebook graph state", async () => {
-    const { root, engine } = await setup();
-    const notebook = value(await engine.notebooks.create("Upgrade"));
-    const source = engine.notebooks.createCell({
-      type: "video",
-      slug: "vid-source",
-      slot: { row: 0, column: 0 },
-    });
-    const analysis = engine.notebooks.createCell({
-      type: "analysis",
-      slug: "analysis-result",
-      slot: { row: 1, column: 0 },
-    });
-    const edge = engine.notebooks.createEdge({
-      source: source.id,
-      target: analysis.id,
-      targetInput: "input",
-    });
-    value(await engine.notebooks.write({
-      ...notebook,
-      cells: [source, analysis],
-      edges: [edge],
-      execution: {
-        [source.id]: {
-          status: "completed",
-          fingerprint: "source-fingerprint",
-        },
-      },
-    }));
-    engine.close();
-
-    const database = new DatabaseSync(
-      path.join(root, "data", "videobook.db"),
-    );
-    rewriteCellsAsSchema19(database);
-    database.close();
-
-    const upgraded = createEngine({ rootDir: root });
-    await upgraded.ready;
-    const reloaded = value(upgraded.notebooks.read(notebook.id));
-    expect(reloaded.cells).toMatchObject([
-      { id: source.id, type: "video", slug: "vid-source" },
-      { id: analysis.id, type: "analysis", slug: "analysis-result" },
-    ]);
-    expect(reloaded.edges).toEqual([edge]);
-    expect(reloaded.execution?.[source.id]).toMatchObject({
-      status: "completed",
-      fingerprint: "source-fingerprint",
-    });
-
-    const extractFrame = upgraded.notebooks.createCell({
-      type: "extract_frame",
-      slug: "extract-frame-source",
-      slot: { row: 2, column: 0 },
-    });
-    value(await upgraded.notebooks.write({
-      ...reloaded,
-      cells: [...reloaded.cells, extractFrame],
-    }));
-    expect(value(upgraded.notebooks.read(notebook.id)).cells).toContainEqual(
-      expect.objectContaining(extractFrame),
-    );
-    upgraded.close();
-
-    const verified = new DatabaseSync(
-      path.join(root, "data", "videobook.db"),
-      { readOnly: true },
-    );
-    expect(
-      (verified
-        .prepare("SELECT version FROM engine_schema WHERE singleton=1")
-        .get() as { version: number }).version,
-    ).toBe(20);
-    expect(verified.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
-    verified.close();
-  });
-
-  it("rejects off-grid schema 19 catalogs without mutating them", async () => {
-    const { root, engine } = await setup();
-    const notebook = value(await engine.notebooks.create("Invalid upgrade"));
-    const cell = engine.notebooks.createCell({
-      type: "prompt",
-      slug: "prompt-invalid-upgrade",
-      slot: { row: 0, column: 0 },
-    });
-    value(
-      await engine.notebooks.write({
-        ...notebook,
-        cells: [cell],
-        edges: [],
-      }),
-    );
-    engine.close();
-
-    const database = new DatabaseSync(
-      path.join(root, "data", "videobook.db"),
-    );
-    rewriteCellsAsSchema19(database);
-    database
-      .prepare("UPDATE cells SET grid_column=-1 WHERE cell_id=?")
-      .run(cell.id);
-    database.close();
-
-    expect(() => createEngine({ rootDir: root })).toThrow(
-      `Database schema 19 contains off-grid cell ${cell.id} at 0:-1`,
-    );
-
-    const unchanged = new DatabaseSync(
-      path.join(root, "data", "videobook.db"),
-      { readOnly: true },
-    );
-    expect(
-      unchanged
-        .prepare("SELECT version FROM engine_schema WHERE singleton=1")
-        .get(),
-    ).toEqual({ version: 19 });
-    expect(
-      unchanged
-        .prepare("SELECT grid_row, grid_column FROM cells WHERE cell_id=?")
-        .get(cell.id),
-    ).toEqual({ grid_row: 0, grid_column: -1 });
-    unchanged.close();
-  });
 
   it("rejects duplicate, fractional, and out-of-bounds slots", async () => {
     const { engine } = await setup();
     const notebook = value(await engine.notebooks.create("Validation"));
     const first = engine.notebooks.createCell({
       type: "prompt",
-      slug: "prompt-first",
       slot: { row: 0, column: 0 },
     });
     const duplicate = engine.notebooks.createCell({
       type: "image",
-      slug: "img-duplicate",
       slot: { row: 0, column: 0 },
     });
     const duplicated = await engine.notebooks.write({
@@ -767,12 +568,10 @@ describe("fixed notebook grid schema 20", () => {
     const notebook = value(await engine.notebooks.create("Swap"));
     const first = engine.notebooks.createCell({
       type: "prompt",
-      slug: "prompt-first",
       slot: { row: 0, column: 0 },
     });
     const second = engine.notebooks.createCell({
       type: "image",
-      slug: "img-second",
       slot: { row: 0, column: 1 },
     });
     value(
@@ -812,12 +611,10 @@ describe("fixed notebook grid schema 20", () => {
     const notebook = value(await engine.notebooks.create("Downward move"));
     const first = engine.notebooks.createCell({
       type: "prompt",
-      slug: "prompt-first",
       slot: { row: 0, column: 0 },
     });
     const second = engine.notebooks.createCell({
       type: "image",
-      slug: "img-second",
       slot: { row: 1, column: 0 },
     });
     value(
@@ -874,50 +671,7 @@ describe("fixed notebook grid schema 20", () => {
     database.close();
 
     expect(() => createEngine({ rootDir: root })).toThrow(
-      "Database schema 10 is not supported by engine schema 20",
+      "Database schema 10 is not supported by engine schema 21",
     );
-  });
-
-  it("swaps slugs between surviving cells in one write", async () => {
-    const { engine } = await setup();
-    const notebook = value(await engine.notebooks.create("Swap"));
-    const alpha = engine.notebooks.createCell({
-      type: "audio",
-      slug: "aud-alpha",
-      slot: { row: 0, column: 0 },
-    });
-    const beta = engine.notebooks.createCell({
-      type: "audio",
-      slug: "aud-beta",
-      slot: { row: 1, column: 0 },
-    });
-    value(
-      await engine.notebooks.write({
-        ...notebook,
-        cells: [alpha, beta],
-        edges: [],
-      }),
-    );
-
-    // Swapping two live slugs is a valid document; the write must not trip
-    // the per-notebook slug UNIQUE mid-upsert.
-    value(
-      await engine.notebooks.write({
-        ...notebook,
-        cells: [
-          { ...alpha, slug: "aud-beta" },
-          { ...beta, slug: "aud-alpha" },
-        ],
-        edges: [],
-      }),
-    );
-    const reloaded = value(engine.notebooks.read(notebook.id));
-    expect(reloaded.cells.map((cell) => [cell.id, cell.slug]).sort()).toEqual(
-      [
-        [alpha.id, "aud-beta"],
-        [beta.id, "aud-alpha"],
-      ].sort(),
-    );
-    engine.close();
   });
 });

@@ -24,13 +24,13 @@ function value<T>(
   return result.value;
 }
 
-async function setup(slug = "semantic-model"): Promise<Engine> {
+async function setup(name = "semantic-model"): Promise<Engine> {
   const root = await mkdtemp(path.join(tmpdir(), "videobook-v5-"));
   roots.push(root);
   return createEngine({
     dataDir: path.join(root, "data"),
     workspaceDir: path.join(root, "workspace"),
-    initialBookSlug: slug,
+    initialBookName: name,
   });
 }
 
@@ -81,7 +81,7 @@ describe("v5 semantic media model", () => {
   it("binds immutable streams and normalized transcripts to source objects", async () => {
     const engine = await setup();
     const artifact = value(
-      await engine.artifacts.create({ kind: "video", slug: "interview" }),
+      await engine.artifacts.create({ kind: "video", label: "interview" }),
     );
     value(await engine.files.write(artifact.artifactId, "original.mp4", "version one"));
     const firstManifest = value(await engine.files.manifest(artifact.artifactId));
@@ -262,7 +262,7 @@ describe("v5 semantic media model", () => {
   it("round-trips typed notebook references and pinned search selections", async () => {
     const engine = await setup();
     const artifact = value(
-      await engine.artifacts.create({ kind: "audio", slug: "voiceover" }),
+      await engine.artifacts.create({ kind: "audio", label: "voiceover" }),
     );
     value(await engine.files.write(artifact.artifactId, "original.wav", "audio"));
     const objectHash = value(await engine.files.manifest(artifact.artifactId))
@@ -288,7 +288,7 @@ describe("v5 semantic media model", () => {
     const notebook = value(await engine.notebooks.create("Audio notebook"));
     const cell = engine.notebooks.createCell({
       type: "audio",
-      slug: "aud-find-intro",
+      label: "aud-find-intro",
       slot: { row: 2, column: 3 },
       references: [
         {

@@ -365,7 +365,7 @@ runtime structures capable of many segments and modalities per artifact:
 | Segment text | Transcript/OCR/description/metadata text, language, half-open UTF-8 byte offsets or timed source ranges, confidence, provenance |
 | Segment embeddings | Segment, modality, embedding space, dimensions, quantized vector, source hash, updated time; multiple spaces permitted |
 | Exact/near duplicates | Cryptographic hash and optional perceptual/frame fingerprints with extractor version |
-| Lexical index | FTS-capable index over transcript, OCR, descriptions, labels, slugs, and selected metadata |
+| Lexical index | FTS-capable index over transcript, OCR, descriptions, labels, and selected metadata |
 | ANN indexes | Cached per embedding space and compatible query modality, rebuilt from runtime rows |
 
 All runtime tables remain excluded from Dolt staging. A stale manifest or source

@@ -63,22 +63,22 @@ realDescribe("single-book local similarity real-media E2E", () => {
       let engine: Engine | null = createEngine({
         dataDir: path.join(root, "data"),
         workspaceDir: path.join(root, "workspaces"),
-        initialBookSlug: "real-media",
+        initialBookName: "real-media",
         similarity: {
           modelCacheDir: process.env.VIDEOBOOK_E2E_MODEL_CACHE ??
             path.join(tmpdir(), "videobook-model-cache"),
         },
       });
       try {
-        const image = value(await engine.artifacts.create({ kind: "image", slug: "img-source" }));
-        const imageExact = value(await engine.artifacts.create({ kind: "image", slug: "img-exact" }));
+        const image = value(await engine.artifacts.create({ kind: "image", label: "img-source" }));
+        const imageExact = value(await engine.artifacts.create({ kind: "image", label: "img-exact" }));
         const imageTranscoded = value(
-          await engine.artifacts.create({ kind: "image", slug: "img-transcoded" }),
+          await engine.artifacts.create({ kind: "image", label: "img-transcoded" }),
         );
-        const video = value(await engine.artifacts.create({ kind: "video", slug: "vid-source" }));
-        const videoExact = value(await engine.artifacts.create({ kind: "video", slug: "vid-exact" }));
+        const video = value(await engine.artifacts.create({ kind: "video", label: "vid-source" }));
+        const videoExact = value(await engine.artifacts.create({ kind: "video", label: "vid-exact" }));
         const videoTranscoded = value(
-          await engine.artifacts.create({ kind: "video", slug: "vid-transcoded" }),
+          await engine.artifacts.create({ kind: "video", label: "vid-transcoded" }),
         );
         for (const [artifact, name, source] of [
           [image, "original.jpg", imageSource],
@@ -154,7 +154,7 @@ realAudioDescribe("single-book local audio similarity real-media E2E", () => {
       const engine = createEngine({
         dataDir: path.join(root, "data"),
         workspaceDir: path.join(root, "workspaces"),
-        initialBookSlug: "real-audio",
+        initialBookName: "real-audio",
         similarity: {
           audio: {
             modelCacheDir: process.env.VIDEOBOOK_E2E_AUDIO_MODEL_CACHE ??
@@ -164,13 +164,13 @@ realAudioDescribe("single-book local audio similarity real-media E2E", () => {
       });
       try {
         const original = value(
-          await engine.artifacts.create({ kind: "audio", slug: "aud-source" }),
+          await engine.artifacts.create({ kind: "audio", label: "aud-source" }),
         );
         const exact = value(
-          await engine.artifacts.create({ kind: "audio", slug: "aud-exact" }),
+          await engine.artifacts.create({ kind: "audio", label: "aud-exact" }),
         );
         const variant = value(
-          await engine.artifacts.create({ kind: "audio", slug: "aud-transcoded" }),
+          await engine.artifacts.create({ kind: "audio", label: "aud-transcoded" }),
         );
         value(
           await engine.files.writeFromPath(

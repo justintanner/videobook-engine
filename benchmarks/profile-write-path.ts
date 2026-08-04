@@ -97,14 +97,14 @@ async function main(): Promise<void> {
   const engine = await createEngine({
     dataDir: path.join(root, "data"),
     workspaceDir: path.join(root, "workspace"),
-    initialBookSlug: "write-profile",
+    initialBookName: "write-profile",
   });
   await engine.ready;
   await engine.initialize();
 
   // Warm: the first write pays one-time costs that would skew the average.
   const warm = value(
-    await engine.artifacts.create({ kind: "video", name: "warmup" }),
+    await engine.artifacts.create({ kind: "video", label: "warmup" }),
   );
   value(await engine.files.write(warm.artifactId, "warm.txt", "warm"));
 
@@ -114,7 +114,7 @@ async function main(): Promise<void> {
     const artifact = value(
       await engine.artifacts.create({
         kind: "video",
-        name: `profile ${index}`,
+        label: `profile ${index}`,
       }),
     );
     value(

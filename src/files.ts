@@ -359,7 +359,7 @@ async function manifest(
     const files = filtered.map(rowToManifestFile);
     return {
       artifactId: artifact.artifact_id,
-      slug: artifact.slug,
+      ...(artifact.label ? { label: artifact.label } : {}),
       path: context.artifactPath(artifact.artifact_id),
       fileCount: files.length,
       files,

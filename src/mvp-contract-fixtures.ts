@@ -453,7 +453,7 @@ const searchPage: SearchPage = {
   hits: [
     {
       artifactId: videoSource.artifactId,
-      artifactSlug: "vid-red-van",
+      artifactLabel: "Red Van",
       artifactKind: "video",
       location: videoSource,
       representativeTick: 120_000,

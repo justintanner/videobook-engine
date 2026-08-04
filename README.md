@@ -21,7 +21,7 @@ const engine = createEngine({
 });
 
 const book = engine.book.get();
-// { bookId: "…", slug: "my-story", createdAt: … }
+// { bookId: "…", name: "My Story", createdAt: … }
 
 const script = await engine.artifacts.create({
   kind: "script",
@@ -84,7 +84,7 @@ rootDir/
 Semantic tables are committed as Dolt revisions. Runtime tables (jobs, leases,
 views, caches, settings, and logs) share the same database, match the
 versioned `runtime_%` ignore policy, and are never staged. Semantic surrogate
-identities are UUIDv7 values. Artifact slugs are human-facing names and can be
+identities are UUIDv7 values. Artifact labels are free-text display names and can be
 reused after hard deletion; immutable CAS objects remain available to history.
 
 The current catalog format is schema version 20. Valid schema version 19
@@ -122,30 +122,17 @@ See [the complete engine layout](docs/engine-layout.md) for every schema
 column, relationship, index, runtime/CAS structure, current editing contract,
 and the additional normalized structures a full non-linear editor will need.
 
-## Artifacts and slugs
+## Artifacts, labels, and identity
 
-Artifact slugs are canonical and kind-prefixed. Supplying a `name` derives a
-slug; supplying a `slug` validates it. Repeated name-based creation adds a
-numeric suffix when needed.
-
-| Kind | Prefix | Example |
-| --- | --- | --- |
-| `video` | `vid-` | `vid-opening-shot` |
-| `image` | `img-` | `img-cat-portrait` |
-| `audio` | `aud-` | `aud-ambient-bed` |
-| `script` | `script-` | `script-opening-draft` |
-| `character` | `char-` | `char-protagonist` |
-| `prompt` | `prompt-` | `prompt-sunrise` |
-| `scene` | `scene-` | `scene-rooftop` |
-| `final` | `final` | `final` |
-
-There is no `notebook` artifact kind or `book-` artifact prefix. Notebook
-graphs remain available separately through `engine.notebooks`.
+Artifacts are identified by `artifact_id` (UUIDv7) — the only reference
+handle. An optional free-text `label` exists purely for display: it is
+non-unique, never parsed, and never used to look anything up. Media content
+is addressed by `object_hash` in the CAS.
 
 ## API surface
 
-- `engine.book` — `get()` and `rename(slug)` for the singleton book
-- `engine.artifacts` — create, list, get, rename, delete, and resolve slugs
+- `engine.book` — `get()` and `rename(name)` for the singleton book
+- `engine.artifacts` — create, list, get, rename (relabel), and delete
 - `engine.files` and `engine.workspaces` — immutable object-backed files and
   disposable materialization
 - `engine.metadata` — book metadata, artifact metadata, and audio waveforms
@@ -193,11 +180,7 @@ unambiguous prefix) to inspect or restore state:
 ```ts
 const revisions = engine.history.revisions();
 
-await engine.history.restoreArtifact(
-  artifactId,
-  revisions[0]!.hash,
-  "script-restored-draft", // optional replacement slug
-);
+await engine.history.restoreArtifact(artifactId, revisions[0]!.hash);
 
 await engine.history.restore(revisions[0]!.hash);
 ```

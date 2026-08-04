@@ -113,6 +113,8 @@ interface ForkFixture {
   forkObjects: ContentStore;
   upstreamObjectRoot: string;
   prefix: string;
+  /** Artifact created upstream before the fork was taken. */
+  baseArtifactId: string;
 }
 
 async function setupForkedCatalogs(): Promise<ForkFixture> {
@@ -130,13 +132,13 @@ async function setupForkedCatalogs(): Promise<ForkFixture> {
   const upstream = createEngine({
     dataDir: upstreamData,
     workspaceDir: path.join(root, "upstream-workspace"),
-    initialBookSlug: "fork-book",
+    initialBookName: "fork-book",
     remoteObjects: upstreamObjects,
     objectPrefix: prefix,
     catalogBackup: { name: "origin", url: upstreamUrl },
   });
   const base = value(
-    await upstream.artifacts.create({ kind: "image", slug: "img-base" }),
+    await upstream.artifacts.create({ kind: "image", label: "img-base" }),
   );
   value(
     await upstream.files.write(base.artifactId, "original.png", "base bytes"),
@@ -167,6 +169,7 @@ async function setupForkedCatalogs(): Promise<ForkFixture> {
     forkObjects,
     upstreamObjectRoot,
     prefix,
+    baseArtifactId: base.artifactId,
   };
 }
 
@@ -203,7 +206,7 @@ describe("fork bootstrap", () => {
     const fork = await openFork(fixture);
     // The bootstrap copied only the catalog database; the object bytes are
     // fetched from the public store on first read (ensureLocal).
-    const base = value(fork.artifacts.get("img-base"));
+    const base = value(fork.artifacts.get(fixture.baseArtifactId));
     expect(
       value(await fork.files.read(base.artifactId, "original.png")).toString(),
     ).toBe("base bytes");
@@ -211,7 +214,7 @@ describe("fork bootstrap", () => {
     // The fork is a full citizen: it commits on its own main and backs up
     // to its own catalog remote.
     const mine = value(
-      await fork.artifacts.create({ kind: "video", slug: "vid-fork" }),
+      await fork.artifacts.create({ kind: "video", label: "vid-fork" }),
     );
     value(
       await fork.files.write(mine.artifactId, "original.mp4", "fork bytes"),
@@ -248,7 +251,7 @@ describe("merge-back integration flow", () => {
     // own stores.
     const fork = await openFork(fixture);
     const forkArtifact = value(
-      await fork.artifacts.create({ kind: "video", slug: "vid-fork" }),
+      await fork.artifacts.create({ kind: "video", label: "vid-fork" }),
     );
     value(
       await fork.files.write(
@@ -268,7 +271,7 @@ describe("merge-back integration flow", () => {
     // Upstream moves ahead too.
     const upstream = await openUpstream(fixture);
     const upstreamArtifact = value(
-      await upstream.artifacts.create({ kind: "audio", slug: "aud-upstream" }),
+      await upstream.artifacts.create({ kind: "audio", label: "aud-upstream" }),
     );
     value(
       await upstream.files.write(
@@ -340,12 +343,12 @@ describe("merge-back integration flow", () => {
     expect(log[0]?.message).toContain("write-set: ");
     expect(log[0]?.message).toContain(`object:${forkObjectHash}`);
     expect(log[1]?.commit_hash).toBe(upstreamHead);
-    const slugs = (
+    const labels = (
       merged
-        .prepare("SELECT slug FROM artifacts ORDER BY slug")
-        .all() as Array<{ slug: string }>
-    ).map((row) => row.slug);
-    expect(slugs).toEqual(["aud-upstream", "img-base", "vid-fork"]);
+        .prepare("SELECT label FROM artifacts ORDER BY label")
+        .all() as Array<{ label: string }>
+    ).map((row) => row.label);
+    expect(labels).toEqual(["aud-upstream", "img-base", "vid-fork"]);
     merged.close();
 
     // The integration commit landed on the upstream remote: a fresh fetch
@@ -364,14 +367,14 @@ describe("merge-back integration flow", () => {
     expect(
       verify.doltBranches().find((branch) => branch.name === "verify")?.hash,
     ).toBe(result.integrationCommit);
-    const remoteSlugs = (
+    const remoteLabels = (
       verify
         .prepare(
-          "SELECT slug FROM dolt_at_artifacts('origin/main') ORDER BY slug",
+          "SELECT label FROM dolt_at_artifacts('origin/main') ORDER BY label",
         )
-        .all() as Array<{ slug: string }>
-    ).map((row) => row.slug);
-    expect(remoteSlugs).toEqual(["aud-upstream", "img-base", "vid-fork"]);
+        .all() as Array<{ label: string }>
+    ).map((row) => row.label);
+    expect(remoteLabels).toEqual(["aud-upstream", "img-base", "vid-fork"]);
     verify.close();
 
     // Re-running the flow against the integrated catalog (the merge
@@ -402,7 +405,7 @@ describe("merge-back integration flow", () => {
 
     // The fork applies the takedown first (earlier wall clock)…
     const fork = await openFork(fixture);
-    const manifest = value(await fork.files.manifest("img-base"));
+    const manifest = value(await fork.files.manifest(fixture.baseArtifactId));
     const hash = manifest.files[0]?.objectHash;
     if (!hash) throw new Error("missing base object hash");
     value(
@@ -448,37 +451,52 @@ describe("merge-back integration flow", () => {
     ).toBe(forkForgottenAt);
   });
 
-  it("surfaces a cross-fork slug collision as MERGE_CONFLICT", async () => {
+  it("merges identically-named artifacts created on both sides", async () => {
     const fixture = await setupForkedCatalogs();
 
     const fork = await openFork(fixture);
-    value(await fork.artifacts.create({ kind: "video", slug: "vid-cat" }));
+    const forkArtifact = value(
+      await fork.artifacts.create({ kind: "video", label: "vid-cat" }),
+    );
     value(await fork.storage.backup());
     fork.close();
 
     const upstream = await openUpstream(fixture);
-    value(await upstream.artifacts.create({ kind: "video", slug: "vid-cat" }));
+    const upstreamArtifact = value(
+      await upstream.artifacts.create({ kind: "video", label: "vid-cat" }),
+    );
     value(await upstream.storage.backup());
     upstream.close();
 
-    const error = await expectFault(() =>
-      mergeBack({
-        upstreamDbPath: path.join(fixture.upstreamData, "videobook.db"),
-        forkRemote: { url: fixture.forkUrl },
-        upstreamObjects: fixture.upstreamObjects,
-        forkObjects: fixture.forkObjects,
-        objectPrefix: fixture.prefix,
-      }),
+    // Artifact identity is artifact_id (UUIDv7): the same display label on
+    // both sides is not a conflict class, so the merge-back succeeds and
+    // keeps both rows.
+    const result = await mergeBack({
+      upstreamDbPath: path.join(fixture.upstreamData, "videobook.db"),
+      forkRemote: { url: fixture.forkUrl },
+      upstreamObjects: fixture.upstreamObjects,
+      forkObjects: fixture.forkObjects,
+      objectPrefix: fixture.prefix,
+      keepWorkDir: true,
+    });
+    roots.push(result.workDir!);
+    expect(result.alreadyIntegrated).toBe(false);
+
+    const merged = new DatabaseSync(
+      path.join(result.workDir!, "videobook.db"),
+      { readOnly: true },
     );
-    expect(error.code).toBe("MERGE_CONFLICT");
-    expect(error.message).toContain("vid-cat");
-    const conflicts = (error.details?.slugConflicts ?? []) as Array<{
-      slug: string;
-      artifactIds: string[];
-    }>;
-    expect(conflicts).toHaveLength(1);
-    expect(conflicts[0]?.slug).toBe("vid-cat");
-    expect(conflicts[0]?.artifactIds).toHaveLength(2);
+    const rows = merged
+      .prepare(
+        "SELECT artifact_id, label FROM artifacts WHERE label='vid-cat' ORDER BY artifact_id",
+      )
+      .all() as Array<{ artifact_id: string; label: string }>;
+    merged.close();
+    expect(rows.map((row) => row.artifact_id)).toEqual(
+      [forkArtifact.artifactId, upstreamArtifact.artifactId].sort(),
+    );
+    expect(rows[0]?.artifact_id).not.toBe(rows[1]?.artifact_id);
+    expect(rows.map((row) => row.label)).toEqual(["vid-cat", "vid-cat"]);
   });
 
   it("points a diverged backup into the merge-back flow", async () => {
@@ -498,7 +516,7 @@ describe("merge-back integration flow", () => {
 
     const upstream = await openUpstream(fixture);
     value(
-      await upstream.artifacts.create({ kind: "audio", slug: "aud-moved" }),
+      await upstream.artifacts.create({ kind: "audio", label: "aud-moved" }),
     );
     value(await upstream.storage.backup());
     upstream.close();
@@ -506,7 +524,7 @@ describe("merge-back integration flow", () => {
     value(
       await secondMachine.artifacts.create({
         kind: "image",
-        slug: "img-local",
+        label: "img-local",
       }),
     );
     const backup = await secondMachine.storage.backup();

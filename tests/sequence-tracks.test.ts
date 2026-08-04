@@ -30,7 +30,7 @@ describe("sequence track lifecycle", () => {
     const engine = createEngine({
       dataDir: join(root, "data"),
       workspaceDir: join(root, "workspace"),
-      initialBookSlug: "sequence-tracks",
+      initialBookName: "sequence-tracks",
     });
     engines.push(engine);
     await engine.ready;
@@ -73,7 +73,7 @@ describe("sequence track lifecycle", () => {
     if (!occupiedTrack) return;
     const artifact = await engine.artifacts.create({
       kind: "image",
-      slug: "track-fixture",
+      label: "track-fixture",
     });
     expect(artifact.ok).toBe(true);
     if (!artifact.ok) return;
@@ -154,7 +154,7 @@ describe("sequence track lifecycle", () => {
     const first = createEngine({
       dataDir,
       workspaceDir: join(root, "workspace"),
-      initialBookSlug: "duplicate-keys",
+      initialBookName: "duplicate-keys",
     });
     await first.ready;
     const audio = first.sequences

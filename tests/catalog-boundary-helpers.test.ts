@@ -12,7 +12,7 @@ describe("shared catalog boundary helpers", () => {
     const cell: NotebookCell = {
       id: "cell-1",
       type: "analyze",
-      slug: "analyze-source",
+      label: "analyze-source",
       slot: { row: 2, column: -3 },
       provider: "kie",
       inputs: { source: "vid-demo" },
@@ -22,7 +22,7 @@ describe("shared catalog boundary helpers", () => {
       { column: "notebook_id", type: "TEXT", value: "notebook-1" },
       { column: "cell_id", type: "TEXT", value: "cell-1" },
       { column: "type", type: "TEXT", value: "analyze" },
-      { column: "slug", type: "TEXT", value: "analyze-source" },
+      { column: "label", type: "TEXT", value: "analyze-source" },
       { column: "grid_row", type: "INTEGER", value: 2 },
       { column: "grid_column", type: "INTEGER", value: -3 },
       { column: "output_entity_id", type: "TEXT", value: null },

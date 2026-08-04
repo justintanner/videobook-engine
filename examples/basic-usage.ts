@@ -13,19 +13,19 @@ const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "videobook-basic-"));
 try {
   const engine = createEngine({
     rootDir,
-    initialBookSlug: "story",
+    initialBookName: "story",
   });
   try {
     const book = engine.book.get();
-    console.log(`Opened book: ${book.slug} (${book.bookId})`);
+    console.log(`Opened book: ${book.name} (${book.bookId})`);
 
     const scriptResult = await engine.artifacts.create({
       kind: "script",
-      name: "opening draft",
+      label: "opening draft",
     });
     if (!scriptResult.ok) throw new Error(scriptResult.error.message);
     const script = scriptResult.value;
-    console.log(`Created: ${script.slug} (${script.artifactId})`);
+    console.log(`Created: ${script.label ?? "(unlabeled)"} (${script.artifactId})`);
 
     const write = await engine.files.write(
       script.artifactId,

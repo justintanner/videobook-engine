@@ -17,13 +17,13 @@ import { DoltStore, EngineFault } from "./store.js";
 
 interface BookRow {
   book_id: string;
-  slug: string;
+  name: string;
   created_at: number;
 }
 
 export interface ArtifactRow {
   artifact_id: string;
-  slug: string;
+  label: string | null;
   kind: ArtifactKind;
   created_at: number;
 }
@@ -67,17 +67,15 @@ export class EngineContext {
     const databasePath = path.join(storage.dataDir, "videobook.db");
     const initialBook = !existsSync(databasePath)
       ? (() => {
-          if (!config.initialBookSlug) {
+          const name = config.initialBookName?.trim();
+          if (!name) {
             throw new EngineFault({
               code: "INVALID_INPUT",
               message:
-                "initialBookSlug is required when creating a new engine root",
+                "initialBookName is required when creating a new engine root",
             });
           }
-          return {
-            bookId: uuidv7(),
-            slug: normalizeBookSlug(config.initialBookSlug),
-          };
+          return { bookId: uuidv7(), name };
         })()
       : undefined;
 
@@ -116,7 +114,7 @@ export class EngineContext {
 
   bookRow(): BookRow {
     const row = this.store.db
-      .prepare("SELECT book_id, slug, created_at FROM book")
+      .prepare("SELECT book_id, name, created_at FROM book")
       .get() as unknown as BookRow | undefined;
     if (!row) {
       throw new EngineFault({
@@ -130,35 +128,19 @@ export class EngineContext {
   book(row = this.bookRow()): Book {
     return {
       bookId: row.book_id,
-      slug: row.slug,
+      name: row.name,
       createdAt: row.created_at,
     };
   }
 
-  artifactRow(reference: string): ArtifactRow {
-    const row = this.store.db
-      .prepare(
-        `SELECT artifact_id, slug, kind, created_at
-         FROM artifacts
-         WHERE artifact_id = ? OR slug = ?
-         ORDER BY CASE WHEN artifact_id = ? THEN 0 ELSE 1 END
-         LIMIT 1`,
-      )
-      .get(reference, reference, reference) as unknown as
-      ArtifactRow | undefined;
-    if (!row) {
-      throw new EngineFault({
-        code: "NOT_FOUND",
-        message: `Artifact not found: ${reference}`,
-      });
-    }
-    return row;
+  artifactRow(artifactId: string): ArtifactRow {
+    return this.artifactRowById(artifactId);
   }
 
   artifactRowById(artifactId: string): ArtifactRow {
     const row = this.store.db
       .prepare(
-        `SELECT artifact_id, slug, kind, created_at
+        `SELECT artifact_id, label, kind, created_at
          FROM artifacts
          WHERE artifact_id = ?`,
       )
@@ -175,7 +157,7 @@ export class EngineContext {
   artifact(row: ArtifactRow): Artifact {
     return {
       artifactId: row.artifact_id,
-      slug: row.slug,
+      ...(row.label === null ? {} : { label: row.label }),
       kind: row.kind,
       createdAt: row.created_at,
       path: this.artifactPath(row.artifact_id),
@@ -215,35 +197,9 @@ function assertValidIdentity(identity: { name: string; email: string }): void {
   }
 }
 
-export function normalizeBookSlug(input: string): string {
-  const slug = input
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "");
-  if (!slug || !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)) {
-    throw new Error(`Invalid book slug: ${input}`);
-  }
-  return slug;
-}
-
-export function isValidBookSlug(input: string): boolean {
-  try {
-    return normalizeBookSlug(input) === input;
-  } catch {
-    return false;
-  }
-}
-
 function toError(error: unknown): EngineError {
   if (error instanceof EngineFault) return error.error;
   const message = error instanceof Error ? error.message : String(error);
-  if (
-    message.includes("artifacts_active_slug") ||
-    /UNIQUE constraint failed: artifacts\.slug/i.test(message)
-  ) {
-    return { code: "SLUG_CONFLICT", message };
-  }
   if (/UNIQUE constraint failed/i.test(message)) {
     return { code: "ALREADY_EXISTS", message };
   }

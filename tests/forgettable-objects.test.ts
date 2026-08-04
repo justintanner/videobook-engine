@@ -31,7 +31,7 @@ function value<T>(
 }
 
 async function setup(
-  slug = "forgettable",
+  name = "forgettable",
   remoteObjects?: ContentStore,
 ): Promise<{ engine: Engine; root: string; dataDir: string }> {
   const root = await mkdtemp(path.join(tmpdir(), "videobook-forget-"));
@@ -40,7 +40,7 @@ async function setup(
   const engine = createEngine({
     dataDir,
     workspaceDir: path.join(root, "workspace"),
-    initialBookSlug: slug,
+    initialBookName: name,
     ...(remoteObjects ? { remoteObjects } : {}),
   });
   return { engine, root, dataDir };
@@ -119,7 +119,7 @@ describe("forgettable objects", () => {
   it("deletes an unreferenced object and keeps a tombstone row", async () => {
     const { engine, dataDir } = await setup();
     const artifact = value(
-      await engine.artifacts.create({ kind: "video", slug: "interview" }),
+      await engine.artifacts.create({ kind: "video", label: "interview" }),
     );
     const first = await writeOriginal(engine, artifact.artifactId, "v1");
     const second = await writeOriginal(engine, artifact.artifactId, "v2-two");
@@ -172,7 +172,7 @@ describe("forgettable objects", () => {
   it("refuses to delete a referenced object unless forced", async () => {
     const { engine, dataDir } = await setup();
     const artifact = value(
-      await engine.artifacts.create({ kind: "video", slug: "takedown" }),
+      await engine.artifacts.create({ kind: "video", label: "takedown" }),
     );
     const { hash } = await writeOriginal(engine, artifact.artifactId, "clip");
 
@@ -205,10 +205,10 @@ describe("forgettable objects", () => {
   it("collects only objects unreferenced at HEAD", async () => {
     const { engine, dataDir } = await setup();
     const keep = value(
-      await engine.artifacts.create({ kind: "video", slug: "keep" }),
+      await engine.artifacts.create({ kind: "video", label: "keep" }),
     );
     const drop = value(
-      await engine.artifacts.create({ kind: "video", slug: "drop" }),
+      await engine.artifacts.create({ kind: "video", label: "drop" }),
     );
     const replaced = await writeOriginal(engine, keep.artifactId, "old");
     const current = await writeOriginal(engine, keep.artifactId, "current");
@@ -260,7 +260,7 @@ describe("forgettable objects", () => {
   it("restores an old revision whose object was collected as a tombstone", async () => {
     const { engine } = await setup();
     const artifact = value(
-      await engine.artifacts.create({ kind: "video", slug: "rewind" }),
+      await engine.artifacts.create({ kind: "video", label: "rewind" }),
     );
     const first = await writeOriginal(engine, artifact.artifactId, "past");
     await writeOriginal(engine, artifact.artifactId, "present");
@@ -286,7 +286,7 @@ describe("forgettable objects", () => {
     const remote = fileContentStore(path.join(root, "remote-objects"));
     const { engine } = await setup("forgettable-remote", remote);
     const artifact = value(
-      await engine.artifacts.create({ kind: "video", slug: "published" }),
+      await engine.artifacts.create({ kind: "video", label: "published" }),
     );
     const { hash } = await writeOriginal(engine, artifact.artifactId, "sync");
     expect(value(await engine.storage.backup()).state).toBe("backed_up");
@@ -307,7 +307,7 @@ describe("forgettable objects", () => {
   it("moves transcript text behind a forgettable CAS payload", async () => {
     const { engine, dataDir } = await setup();
     const artifact = value(
-      await engine.artifacts.create({ kind: "video", slug: "talk" }),
+      await engine.artifacts.create({ kind: "video", label: "talk" }),
     );
     const { hash } = await writeOriginal(engine, artifact.artifactId, "media");
     const stream = value(
@@ -434,7 +434,7 @@ describe("forgettable objects", () => {
   it("book restore preserves tombstones and object rows created later", async () => {
     const { engine } = await setup("restore-merge");
     const artifact = value(
-      await engine.artifacts.create({ kind: "video", slug: "chronicle" }),
+      await engine.artifacts.create({ kind: "video", label: "chronicle" }),
     );
     const first = await writeOriginal(engine, artifact.artifactId, "one");
     await writeOriginal(engine, artifact.artifactId, "two-2");
@@ -476,12 +476,12 @@ describe("forgettable objects", () => {
     const engine = createEngine({
       dataDir,
       workspaceDir: path.join(root, "workspace"),
-      initialBookSlug: "takedown",
+      initialBookName: "takedown",
       remoteObjects: remote,
       objectPrefix: "media",
     });
     const artifact = value(
-      await engine.artifacts.create({ kind: "video", slug: "leak" }),
+      await engine.artifacts.create({ kind: "video", label: "leak" }),
     );
     const { hash } = await writeOriginal(
       engine,
@@ -531,7 +531,7 @@ describe("forgettable objects", () => {
   it("lists transcripts even when one payload is forgotten", async () => {
     const { engine } = await setup("degraded-list");
     const artifact = value(
-      await engine.artifacts.create({ kind: "video", slug: "panel" }),
+      await engine.artifacts.create({ kind: "video", label: "panel" }),
     );
     const { hash } = await writeOriginal(engine, artifact.artifactId, "media");
     const stream = value(

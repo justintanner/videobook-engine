@@ -76,7 +76,7 @@ interface CoverageRow {
 interface SegmentRow {
   segment_id: string;
   artifact_id: string;
-  artifact_slug: string;
+  artifact_label: string | null;
   artifact_kind: ArtifactKind;
   artifact_created_at: number;
   stream_id: string | null;
@@ -962,7 +962,7 @@ function querySegments(
   const placeholders = generations.map(() => "?").join(",");
   const rows = context.store.db
     .prepare(
-      `SELECT s.segment_id, s.artifact_id, a.slug AS artifact_slug,
+      `SELECT s.segment_id, s.artifact_id, a.label AS artifact_label,
               a.kind AS artifact_kind, a.created_at AS artifact_created_at,
               s.stream_id, s.object_hash,
               s.source_range_json, s.source_path, s.segment_kind,
@@ -1376,7 +1376,7 @@ function orderedEmbeddings(
 ): OrderedEmbedding[] {
   const rows = context.store.db
     .prepare(
-      `SELECT s.segment_id, s.artifact_id, a.slug AS artifact_slug,
+      `SELECT s.segment_id, s.artifact_id, a.label AS artifact_label,
               a.kind AS artifact_kind, a.created_at AS artifact_created_at,
               s.stream_id, s.object_hash, s.source_range_json,
               s.source_path, s.segment_kind, s.representative_tick,
@@ -1780,7 +1780,9 @@ function intervalPriority(interval: AcceptedInterval): number {
 function candidateToHit(candidate: Candidate): SearchHit {
   return {
     artifactId: candidate.segment.artifact_id,
-    artifactSlug: candidate.segment.artifact_slug,
+    ...(candidate.segment.artifact_label
+      ? { artifactLabel: candidate.segment.artifact_label }
+      : {}),
     artifactKind: candidate.segment.artifact_kind,
     location: segmentLocation(candidate.segment),
     ...(candidate.segment.representative_tick === null

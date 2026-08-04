@@ -21,34 +21,6 @@ export const NOTEBOOK_CELL_TYPES = [
 
 export type NotebookCellType = (typeof NOTEBOOK_CELL_TYPES)[number];
 
-export const NOTEBOOK_CELL_SLUG_PREFIXES = {
-  audio: "aud",
-  image: "img",
-  video: "vid",
-  extract_audio: "extract-audio",
-  extract_frame: "extract-frame",
-  split_video: "split-video",
-  prompt: "prompt",
-  character: "char",
-  analyze: "analyze",
-  analysis: "analysis",
-  generate_video: "generate-video",
-  generate_image: "generate-image",
-  generate_audio: "generate-audio",
-  concat: "concat",
-  splice: "splice",
-} as const satisfies Record<NotebookCellType, string>;
-
-const NOTEBOOK_CELL_SLUG_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)+$/;
-
-export function isValidNotebookCellSlug(
-  type: NotebookCellType,
-  slug: string,
-): boolean {
-  return NOTEBOOK_CELL_SLUG_PATTERN.test(slug)
-    && slug.startsWith(`${NOTEBOOK_CELL_SLUG_PREFIXES[type]}-`);
-}
-
 // The staging allowlist is also the restore table list: history.restore
 // reloads every table below from its dolt_at_* projection, deleting in
 // reverse order and inserting in forward order. Keep the list ordered
@@ -118,9 +90,8 @@ export const RUNTIME_TABLES = [
   "runtime_text_similarity_chunks",
 ] as const;
 
-function cellsTableSql(tableName: "cells" | "cells_schema_20"): string {
-  return `
-  CREATE TABLE IF NOT EXISTS ${tableName} (
+const CELLS_TABLE_SQL = `
+  CREATE TABLE IF NOT EXISTS cells (
     notebook_id TEXT NOT NULL
       REFERENCES notebooks(notebook_id) ON DELETE CASCADE,
     cell_id TEXT NOT NULL,
@@ -132,14 +103,7 @@ function cellsTableSql(tableName: "cells" | "cells_schema_20"): string {
         'concat','splice'
       )
     ),
-    slug TEXT NOT NULL CHECK (
-      slug GLOB '[a-z0-9]*'
-      AND slug NOT GLOB '*[^a-z0-9-]*'
-      AND slug NOT GLOB '*--*'
-      AND slug NOT LIKE '-%'
-      AND slug NOT LIKE '%-'
-      AND instr(slug, '-') > 0
-    ),
+    label TEXT,
     grid_row INTEGER NOT NULL CHECK (grid_row BETWEEN 0 AND 25),
     grid_column INTEGER NOT NULL CHECK (grid_column BETWEEN 0 AND 12),
     output_entity_id TEXT
@@ -152,30 +116,8 @@ function cellsTableSql(tableName: "cells" | "cells_schema_20"): string {
     inputs_json TEXT NOT NULL DEFAULT '{}',
     output_artifact_id TEXT
       REFERENCES artifacts(artifact_id) ON DELETE RESTRICT,
-    PRIMARY KEY(notebook_id, cell_id),
-    UNIQUE(notebook_id, slug),
-    CHECK (
-      (type = 'audio' AND slug LIKE 'aud-%')
-      OR (type = 'image' AND slug LIKE 'img-%')
-      OR (type = 'video' AND slug LIKE 'vid-%')
-      OR (type = 'extract_audio' AND slug LIKE 'extract-audio-%')
-      OR (type = 'extract_frame' AND slug LIKE 'extract-frame-%')
-      OR (type = 'split_video' AND slug LIKE 'split-video-%')
-      OR (type = 'prompt' AND slug LIKE 'prompt-%')
-      OR (type = 'character' AND slug LIKE 'char-%')
-      OR (type = 'analyze' AND slug LIKE 'analyze-%')
-      OR (type = 'analysis' AND slug LIKE 'analysis-%')
-      OR (type = 'generate_video' AND slug LIKE 'generate-video-%')
-      OR (type = 'generate_image' AND slug LIKE 'generate-image-%')
-      OR (type = 'generate_audio' AND slug LIKE 'generate-audio-%')
-      OR (type = 'concat' AND slug LIKE 'concat-%')
-      OR (type = 'splice' AND slug LIKE 'splice-%')
-    )
+    PRIMARY KEY(notebook_id, cell_id)
   );`;
-}
-
-const CELLS_TABLE_SQL = cellsTableSql("cells");
-export const SCHEMA_20_CELLS_TABLE_SQL = cellsTableSql("cells_schema_20");
 
 export const SEMANTIC_SCHEMA_SQL = `
   CREATE TABLE IF NOT EXISTS engine_schema (
@@ -186,13 +128,13 @@ export const SEMANTIC_SCHEMA_SQL = `
 
   CREATE TABLE IF NOT EXISTS book (
     book_id TEXT PRIMARY KEY,
-    slug TEXT NOT NULL UNIQUE,
+    name TEXT NOT NULL,
     created_at INTEGER NOT NULL
   );
 
   CREATE TABLE IF NOT EXISTS artifacts (
     artifact_id TEXT PRIMARY KEY,
-    slug TEXT NOT NULL UNIQUE,
+    label TEXT,
     kind TEXT NOT NULL CHECK (
       kind IN (
         'video','image','audio','script','character',

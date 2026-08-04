@@ -24,14 +24,9 @@ import { EngineFault } from "./store.js";
  * 1. Precondition: both sides must carry the same `engine_schema.version`.
  *    Mismatches are refused with SCHEMA_INCOMPATIBLE before any merge is
  *    attempted (`assertSameSchemaVersion`).
- * 2. `artifacts.slug` is globally unique, so two forks minting the same
- *    slug is a user-facing merge conflict, not a raw constraint error.
- *    `findSlugConflicts` detects them pre-merge with a three-way
- *    (base/ours/theirs) simulation over the artifacts slug projection and
- *    the merge is refused with MERGE_CONFLICT listing slug and artifact
- *    ids. doltlite's own verification is the backstop for cases the
- *    simulation cannot foresee; those refusals are re-diagnosed and also
- *    surface as MERGE_CONFLICT when attributable to slugs.
+ * 2. Artifact identity is `artifact_id` (UUIDv7), which is collision-free
+ *    across forks, so merges have no name-conflict class. `artifacts.label`
+ *    is non-unique display text and merges like any other column.
  * 3. RESTRICT foreign-key dangles (one fork deletes a row the other fork
  *    newly references) are caught by doltlite's merge-time working-set
  *    verification and surface as a typed MERGE_VIOLATION, never a raw
@@ -48,22 +43,12 @@ import { EngineFault } from "./store.js";
  *    engine is consistent even before reconcile runs.
  */
 
-export interface SlugConflict {
-  slug: string;
-  artifactIds: string[];
-}
-
-export interface MergePolicyOutcome {
+interface MergePolicyOutcome {
   fastForward: boolean;
   /** Transcript rows demoted from current to derived by the reconcile. */
   reconciledTranscripts: number;
   /** Sequence rows demoted from primary by the reconcile. */
   reconciledSequences: number;
-}
-
-interface ArtifactSlugRow {
-  artifact_id: string;
-  slug: string;
 }
 
 interface VersionRow {
@@ -116,80 +101,6 @@ export function assertSameSchemaVersion(
       details: { oursRef, theirsRef, oursVersion: ours, theirsVersion: theirs },
     });
   }
-}
-
-function slugMapAt(
-  db: DatabaseSync,
-  ref: string,
-): Map<string, string> {
-  const rows = db
-    .prepare("SELECT artifact_id, slug FROM dolt_at_artifacts(?)")
-    .all(ref) as unknown as ArtifactSlugRow[];
-  return new Map(rows.map((row) => [row.artifact_id, row.slug]));
-}
-
-/**
- * Slugs that would be held by more than one artifact row after a three-way
- * merge of `oursRef` and `theirsRef`. The survivor simulation mirrors Dolt
- * row-level merge semantics over the (artifact_id, slug) projection; rows
- * changed incompatibly on both sides count conservatively on both sides
- * because Dolt will conflict them anyway.
- */
-export function findSlugConflicts(
-  db: DatabaseSync,
-  oursRef: string,
-  theirsRef: string,
-): SlugConflict[] {
-  if (!tableExists(db, "artifacts")) return [];
-  const baseRow = db
-    .prepare("SELECT dolt_merge_base(?, ?) AS hash")
-    .get(oursRef, theirsRef) as unknown as { hash: string | null } | undefined;
-  const base = baseRow?.hash
-    ? slugMapAt(db, baseRow.hash)
-    : new Map<string, string>();
-  const ours = slugMapAt(db, oursRef);
-  const theirs = slugMapAt(db, theirsRef);
-  const ids = new Set([...base.keys(), ...ours.keys(), ...theirs.keys()]);
-  const holders = new Map<string, Set<string>>();
-  const hold = (id: string, slug: string | undefined): void => {
-    if (slug === undefined) return;
-    let set = holders.get(slug);
-    if (!set) {
-      set = new Set();
-      holders.set(slug, set);
-    }
-    set.add(id);
-  };
-  for (const id of ids) {
-    const b = base.get(id);
-    const o = ours.get(id);
-    const t = theirs.get(id);
-    if (b !== undefined && o === b && t === b) {
-      hold(id, b);
-    } else if (b === undefined) {
-      if (o !== undefined && t !== undefined && o !== t) {
-        // Same row id added with different slugs on both sides: a row
-        // conflict Dolt will report; count both slugs conservatively.
-        hold(id, o);
-        hold(id, t);
-      } else {
-        hold(id, o ?? t);
-      }
-    } else if (o === t) {
-      hold(id, o);
-    } else if (o === b) {
-      hold(id, t);
-    } else if (t === b) {
-      hold(id, o);
-    } else {
-      hold(id, o);
-      hold(id, t);
-    }
-  }
-  return [...holders.entries()]
-    .filter(([, set]) => set.size > 1)
-    .map(([slug, set]) => ({ slug, artifactIds: [...set].sort() }))
-    .sort((a, b) => a.slug.localeCompare(b.slug));
 }
 
 /**
@@ -271,25 +182,11 @@ export function reconcileSingletonFlags(db: DatabaseSync): {
 
 /**
  * Post-merge verification: referential integrity plus the invariants the
- * merge policy owns (unique slugs, single current transcript per source,
- * single primary sequence per book). Throws MERGE_VIOLATION on any breach.
+ * merge policy owns (single current transcript per source, single primary
+ * sequence per book). Throws MERGE_VIOLATION on any breach.
  */
 export function verifyConstraintHealth(db: DatabaseSync): void {
   const foreignKeyRows = db.prepare("PRAGMA foreign_key_check").all();
-  const duplicateSlugs = tableExists(db, "artifacts")
-    ? (db
-        .prepare(
-          // +slug forces a full table scan: doltlite's checkout can leave
-          // the UNIQUE index on artifacts.slug missing rows (ve-wsu), and
-          // an index-backed GROUP BY would fail with "database disk image
-          // is malformed" instead of verifying anything.
-          `SELECT slug, COUNT(DISTINCT artifact_id) AS holders
-           FROM artifacts
-           GROUP BY +slug
-           HAVING holders > 1`,
-        )
-        .all() as unknown as Array<{ slug: string; holders: number }>)
-    : [];
   const multipleCurrent = tableExists(db, "transcripts")
     ? (db
         .prepare(
@@ -314,7 +211,6 @@ export function verifyConstraintHealth(db: DatabaseSync): void {
     : [];
   if (
     foreignKeyRows.length > 0 ||
-    duplicateSlugs.length > 0 ||
     multipleCurrent.length > 0 ||
     multiplePrimary.length > 0
   ) {
@@ -323,7 +219,6 @@ export function verifyConstraintHealth(db: DatabaseSync): void {
       message: "Merged working set violates semantic constraints",
       details: {
         foreignKeyViolations: foreignKeyRows,
-        duplicateSlugs,
         multipleCurrentTranscripts: multipleCurrent,
         multiplePrimarySequences: multiplePrimary,
       },
@@ -331,30 +226,11 @@ export function verifyConstraintHealth(db: DatabaseSync): void {
   }
 }
 
-function mergeConflictFault(
-  branch: string,
-  slugConflicts: SlugConflict[],
-): EngineFault {
-  const listing = slugConflicts
-    .map((conflict) => conflict.slug)
-    .join(", ");
-  return new EngineFault({
-    code: "MERGE_CONFLICT",
-    message: `Merge of ${branch} conflicts on artifact slug(s): ${listing}`,
-    details: { branch, slugConflicts },
-  });
-}
-
-function mapMergeError(db: DatabaseSync, branch: string, error: unknown): never {
+function mapMergeError(branch: string, error: unknown): never {
   const message = error instanceof Error ? error.message : String(error);
   if (CONSTRAINT_VIOLATION_REFUSAL.test(message)) {
     // doltlite's merge-time verification refused and rolled back, so both
-    // refs are still intact: re-run the slug diagnosis to see whether this
-    // is a user-facing slug conflict.
-    const slugConflicts = findSlugConflicts(db, "HEAD", branch);
-    if (slugConflicts.length > 0) {
-      throw mergeConflictFault(branch, slugConflicts);
-    }
+    // refs are still intact; surface the refusal as a typed violation.
     throw new EngineFault({
       code: "MERGE_VIOLATION",
       message:
@@ -399,9 +275,9 @@ function commitReconcile(
 
 /**
  * Merges `branch` into HEAD under the engine merge policy: same-schema
- * precondition, user-facing slug-conflict detection, Dolt constraint
- * verification with typed errors, deterministic singleton-flag reconcile,
- * and a post-merge constraint health check.
+ * precondition, Dolt constraint verification with typed errors,
+ * deterministic singleton-flag reconcile, and a post-merge constraint
+ * health check.
  *
  * NOTE (ve-wsu): doltlite corrupts full engine catalogs on checkout and
  * clone, misfires its "uncommitted changes" merge guard on the full
@@ -418,15 +294,11 @@ export function mergeWithPolicy(
   branch: string,
 ): MergePolicyOutcome {
   assertSameSchemaVersion(db, "HEAD", branch);
-  const slugConflicts = findSlugConflicts(db, "HEAD", branch);
-  if (slugConflicts.length > 0) {
-    throw mergeConflictFault(branch, slugConflicts);
-  }
   let result: MergeResult;
   try {
     result = db.doltMerge(branch);
   } catch (error) {
-    mapMergeError(db, branch, error);
+    mapMergeError(branch, error);
   }
   const reconciled = reconcileSingletonFlags(db);
   verifyConstraintHealth(db);

@@ -52,7 +52,7 @@ describe("declared write sets", () => {
     const context = new EngineContext({
       dataDir,
       workspaceDir,
-      initialBookSlug: "demo",
+      initialBookName: "demo",
     });
     // Deliberately under-declared: the mutation also writes entities.
     await context.store.semantic(
@@ -85,7 +85,7 @@ describe("declared write sets", () => {
     const engine = createEngine({
       dataDir,
       workspaceDir,
-      initialBookSlug: "demo",
+      initialBookName: "demo",
     });
     await engine.ready;
     const headBefore = engine.head;
@@ -156,7 +156,7 @@ describe("declared write sets", () => {
     context = new EngineContext({
       dataDir: path.join(root, "data"),
       workspaceDir: path.join(root, "workspace"),
-      initialBookSlug: "demo",
+      initialBookName: "demo",
       semanticCommitBoundary: sweep,
     });
     const clean = async (
@@ -188,12 +188,12 @@ describe("declared write sets", () => {
 
     await clean("book.rename", async () => value(await book.rename("demo-2")));
 
-    const video = value(await artifacts.create({ kind: "video", name: "v" }));
+    const video = value(await artifacts.create({ kind: "video", label: "v" }));
     if (violations.length > 0) {
       throw new Error(`artifacts.create: ${violations.join(", ")}`);
     }
     const scratch = value(
-      await artifacts.create({ kind: "script", name: "s" }),
+      await artifacts.create({ kind: "script", label: "s" }),
     );
     await clean("artifacts.rename", async () =>
       value(await artifacts.rename(scratch.artifactId, "s2")),
@@ -267,7 +267,6 @@ describe("declared write sets", () => {
     const notebook = value(await notebooks.create("nb"));
     const cell = notebooks.createCell({
       type: "prompt",
-      slug: "prompt-one",
       slot: { row: 0, column: 0 },
     });
     await clean("notebooks.insertCell", async () =>
@@ -512,7 +511,7 @@ describe("declared write sets", () => {
     );
 
     const disposable = value(
-      await artifacts.create({ kind: "script", name: "gone" }),
+      await artifacts.create({ kind: "script", label: "gone" }),
     );
     value(await files.write(disposable.artifactId, "a.txt", "bytes"));
     const disposableHash = value(await files.manifest(disposable.artifactId))

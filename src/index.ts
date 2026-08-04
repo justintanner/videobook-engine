@@ -105,19 +105,14 @@ export {
 
 export type {
   NotebookMention,
-  NotebookMentionKind,
   NotebookMentionReplacement,
 } from "./notebook-mentions.js";
 export {
-  classifyNotebookReference,
+  isNotebookGridAddress,
   normalizeNotebookReference,
-  NOTEBOOK_ASSET_SLUG_PATTERN,
-  NOTEBOOK_ASSET_SLUG_SOURCE,
-  NOTEBOOK_CELL_REFERENCE_SOURCE,
   NOTEBOOK_GRID_ADDRESS_PATTERN,
   NOTEBOOK_GRID_ADDRESS_SOURCE,
   NOTEBOOK_MENTION_PATTERN,
-  NOTEBOOK_REFERENCE_SOURCE,
   notebookMentionPrefixAtEnd,
   replaceNotebookMentions,
   scanNotebookMentions,
@@ -137,22 +132,7 @@ export {
   hasPartialMediaFile,
 } from "./status.js";
 
-export {
-  expandSlotRefs,
-  parseArtifactTags,
-} from "./resolver.js";
-
-export { artifactSlug, normalizeKind } from "./artifacts.js";
-export {
-  artifactKindPrefix,
-  artifactNameSlug,
-  humanizeArtifactSlug,
-  isArtifactNameStopWord,
-} from "./artifact-names.js";
-export {
-  isValidBookSlug,
-  normalizeBookSlug,
-} from "./context.js";
+export { normalizeKind } from "./artifacts.js";
 export { normalizeFilePath } from "./files.js";
 export { isUuidV7 } from "./ids.js";
 export { JobQueue, QueueRunner } from "./job-queue.js";
@@ -166,8 +146,6 @@ export {
 } from "./fork.js";
 export type { StoredObject } from "./cas.js";
 export {
-  isValidNotebookCellSlug,
-  NOTEBOOK_CELL_SLUG_PREFIXES,
   NOTEBOOK_CELL_TYPES,
   RUNTIME_TABLES,
   SCHEMA_VERSION,

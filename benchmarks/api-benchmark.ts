@@ -48,7 +48,6 @@ export const API_BENCHMARK_GROUPS = [
   "messages",
   "history",
   "status",
-  "resolver",
   "storage",
   "logs",
   "settings",
@@ -284,7 +283,7 @@ export async function runFullApiBenchmark(
       createEngine({
         dataDir,
         workspaceDir,
-        initialBookSlug: "api-benchmark",
+        initialBookName: "api-benchmark",
         remoteObjects,
         similarity: {
           provider: mediaSimilarityProvider,
@@ -323,7 +322,7 @@ export async function runFullApiBenchmark(
     );
     await exerciseDomainApis(engine, recorder);
     await exerciseCommunicationsAndHistory(engine, recorder, seeded);
-    await exerciseStatusAndResolver(engine, recorder, seeded);
+    await exerciseStatus(engine, recorder, seeded);
     await exerciseRuntimeApis(engine, recorder, seeded);
     await exerciseSimilarity(engine, recorder, seeded);
     await exerciseStorage(engine, recorder, scratch);
@@ -488,7 +487,7 @@ async function seedArtifacts(
       await recorder.measure("artifacts.create", "write", () =>
         engine.artifacts.create({
           kind,
-          name: `benchmark ${kind} ${index}`,
+          label: `benchmark ${kind} ${index}`,
         }),
       ),
     );
@@ -534,14 +533,6 @@ async function exerciseArtifactReads(
       ),
     );
     value(
-      await recorder.measure("artifacts.resolveSlug", "read", () =>
-        engine.artifacts.resolveSlug(artifact.slug),
-      ),
-    );
-    await recorder.measure("artifacts.isSlugAvailable", "read", () =>
-      engine.artifacts.isSlugAvailable(`img-unused-${index}`),
-    );
-    value(
       await recorder.measure("files.read", "read", () =>
         engine.files.read(
           artifact.artifactId,
@@ -570,7 +561,7 @@ async function exerciseFilesAndWorkspaces(
 ): Promise<{ objectHash: string }> {
   const scratch = value(
     await recorder.measure("artifacts.create", "write", () =>
-      engine.artifacts.create({ kind: "script", name: "file operations" }),
+      engine.artifacts.create({ kind: "script", label: "file operations" }),
     ),
   );
   const sourcePath = path.join(fixtureRoot, "source.txt");
@@ -1207,14 +1198,14 @@ async function exerciseDomainApis(
     () =>
       engine.notebooks.createCell({
         type: "prompt",
-        slug: "prompt-benchmark",
+        label: "prompt-benchmark",
         slot: { row: 0, column: 0 },
         prompt: "Benchmark prompt",
       }),
   );
   const secondCell = engine.notebooks.createCell({
     type: "image",
-    slug: "img-benchmark",
+    label: "img-benchmark",
     slot: { row: 0, column: 1 },
   });
   await recorder.measure("notebooks.createEdge", "runtime", () =>
@@ -1356,7 +1347,7 @@ async function exerciseCommunicationsAndHistory(
   );
 }
 
-async function exerciseStatusAndResolver(
+async function exerciseStatus(
   engine: Engine,
   recorder: BenchmarkRecorder,
   seeded: Awaited<ReturnType<typeof seedArtifacts>>,
@@ -1368,7 +1359,7 @@ async function exerciseStatusAndResolver(
   );
   await recorder.measure("status.compute", "read", () =>
     engine.status.compute({
-      artifactSlug: seeded.artifacts[0]!.slug,
+      kind: seeded.artifacts[0]!.kind,
       fileNames: new Set([seeded.filenames[0]!]),
       primaryMediaName: seeded.filenames[0]!,
       hasOriginalMetadata: true,
@@ -1378,21 +1369,6 @@ async function exerciseStatusAndResolver(
       generationError: null,
       artifactRow: null,
     }),
-  );
-  const text = `@${seeded.artifacts[0]!.slug} @${seeded.artifacts[1]!.slug}`;
-  await recorder.measure("resolver.parseTags", "read", () =>
-    engine.resolver.parseTags(text),
-  );
-  await recorder.measure("resolver.expandSlotRefs", "read", () =>
-    engine.resolver.expandSlotRefs("$1 then $2", [
-      { slug: seeded.artifacts[0]!.slug },
-      { slug: seeded.artifacts[1]!.slug },
-    ]),
-  );
-  value(
-    await recorder.measure("resolver.resolveAll", "read", () =>
-      engine.resolver.resolveAll(text),
-    ),
   );
 }
 
@@ -1697,7 +1673,7 @@ async function exerciseStorage(
   );
 
   const scratchArtifact = value(
-    await engine.artifacts.create({ kind: "script", name: "object deletion" }),
+    await engine.artifacts.create({ kind: "script", label: "object deletion" }),
   );
   value(
     await engine.files.write(

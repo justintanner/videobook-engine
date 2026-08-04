@@ -71,7 +71,7 @@ export function computeArtifactStatus(
   input: ArtifactStatusInput,
 ): ArtifactStatus {
   const {
-    artifactSlug,
+    kind,
     fileNames,
     primaryMediaName,
     hasOriginalMetadata,
@@ -100,7 +100,7 @@ export function computeArtifactStatus(
   }
   if (generationError) return "error";
 
-  const isVideo = artifactSlug.startsWith("vid-");
+  const isVideo = kind === "video";
   const mediaIsImageLike =
     primaryMediaName !== null &&
     IMAGE_LIKE_MEDIA_RE.test(primaryMediaName);
@@ -112,7 +112,7 @@ export function computeArtifactStatus(
     return "error";
   }
   if (primaryMediaName !== null) {
-    if (artifactSlug === "final") return "ready";
+    if (kind === "final") return "ready";
     if (isVideo && !hasOriginalMetadata) {
       return "processing";
     }
@@ -120,9 +120,9 @@ export function computeArtifactStatus(
   }
   if (hasPartFile) return "error";
   if (
-    artifactSlug.startsWith("char-") ||
-    artifactSlug.startsWith("prompt-") ||
-    artifactSlug.startsWith("scene-")
+    kind === "character" ||
+    kind === "prompt" ||
+    kind === "scene"
   ) {
     return "ready";
   }
@@ -165,7 +165,7 @@ async function getArtifactStatus(
         ? (options.primaryMediaName ?? null)
         : findPrimaryMediaFile(
             manifestResult.value.files,
-            artifact.slug,
+            artifact.kind,
           )?.name ?? null;
     const hasOriginalMetadata = Boolean(
       context.store.db
@@ -177,7 +177,7 @@ async function getArtifactStatus(
         .get(artifact.artifact_id),
     );
     return computeArtifactStatus({
-      artifactSlug: artifact.slug,
+      kind: artifact.kind,
       fileNames,
       primaryMediaName: primary,
       hasOriginalMetadata,
@@ -284,7 +284,6 @@ function pendingTask(
   return row
     ? {
         artifactId: artifact.artifact_id,
-        artifactSlug: artifact.slug,
         taskId: row.task_id,
         taskType: row.task_type,
         workspacePath: context.artifactPath(artifact.artifact_id),
@@ -309,7 +308,6 @@ function generationError(
   return row
     ? {
         artifactId: artifact.artifact_id,
-        artifactSlug: artifact.slug,
         message: row.message,
         ...(row.fail_code ? { failCode: row.fail_code } : {}),
         ...(row.prompt !== null ? { prompt: row.prompt } : {}),

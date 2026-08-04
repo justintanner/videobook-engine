@@ -1,6 +1,9 @@
 import { extname } from "node:path";
 
-import type { ArtifactManifestFile } from "./engine-types.js";
+import type {
+  ArtifactKind,
+  ArtifactManifestFile,
+} from "./engine-types.js";
 
 const AUDIO_EXTENSIONS = new Set([
   "mp3",
@@ -29,16 +32,16 @@ export type RenderOrientation = (typeof RENDER_ORIENTATIONS)[number];
 
 export function findAudioFile(
   files: ArtifactManifestFile[],
-  artifactSlug: string,
+  kind: ArtifactKind,
 ): ArtifactManifestFile | null {
-  if (artifactSlug.startsWith("vid-")) {
+  if (kind === "video") {
     return (
       files.find((file) => file.name === "audio_original.mp3") ??
       files.find((file) => file.name === "original.mp3") ??
       null
     );
   }
-  if (artifactSlug.startsWith("aud-")) {
+  if (kind === "audio") {
     return (
       files.find((file) =>
         AUDIO_EXTENSIONS.has(extension(file)),
@@ -63,9 +66,9 @@ export function findVideoFile(
 
 export function findPrimaryMediaFile(
   files: ArtifactManifestFile[],
-  artifactSlug: string,
+  kind: ArtifactKind,
 ): ArtifactManifestFile | null {
-  if (artifactSlug === "final") {
+  if (kind === "final") {
     for (const orientation of RENDER_ORIENTATIONS) {
       const match = files.find(
         (file) =>

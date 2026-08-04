@@ -213,7 +213,7 @@ export async function migrateV4(
     const book = sourceBook(sourceDatabase);
     const initial = createEngine({
       rootDir: destinationRoot,
-      initialBookSlug: book.slug,
+      initialBookName: book.slug,
     });
     await initial.ready;
     initial.close();
@@ -226,6 +226,10 @@ export async function migrateV4(
     for (const table of COPY_TABLES) {
       if (table === "notebooks") {
         copyLegacyNotebooks(sourceDatabase, destinationDatabase);
+      } else if (table === "book") {
+        copyLegacyBook(sourceDatabase, destinationDatabase);
+      } else if (table === "artifacts") {
+        copyLegacyArtifacts(sourceDatabase, destinationDatabase);
       } else {
         copyTable(sourceDatabase, destinationDatabase, table);
       }
@@ -259,7 +263,7 @@ export async function migrateV4(
     await engine.ready;
     const reportArtifact = await engine.artifacts.create({
       kind: "script",
-      slug: "migration-report",
+      label: "migration-report",
     });
     if (!reportArtifact.ok) {
       engine.close();
@@ -448,6 +452,51 @@ function copyTable(
   );
   for (const row of rows) {
     insert.run(...shared.map((column) => row[column] ?? null));
+  }
+}
+
+/**
+ * Legacy schema-v4 catalogs name books and artifacts with slugs; the
+ * current schema stores free-text name/label columns instead, so the old
+ * slug is carried over as the display text.
+ */
+function copyLegacyBook(
+  source: DatabaseSync,
+  destination: DatabaseSync,
+): void {
+  const rows = source
+    .prepare("SELECT book_id, slug, created_at FROM book")
+    .all() as unknown as Array<{
+      book_id: string;
+      slug: string;
+      created_at: number;
+    }>;
+  const insert = destination.prepare(
+    "INSERT INTO book(book_id, name, created_at) VALUES (?, ?, ?)",
+  );
+  for (const row of rows) {
+    insert.run(row.book_id, row.slug, row.created_at);
+  }
+}
+
+function copyLegacyArtifacts(
+  source: DatabaseSync,
+  destination: DatabaseSync,
+): void {
+  const rows = source
+    .prepare("SELECT artifact_id, slug, kind, created_at FROM artifacts")
+    .all() as unknown as Array<{
+      artifact_id: string;
+      slug: string;
+      kind: string;
+      created_at: number;
+    }>;
+  const insert = destination.prepare(
+    `INSERT INTO artifacts(artifact_id, label, kind, created_at)
+     VALUES (?, ?, ?, ?)`,
+  );
+  for (const row of rows) {
+    insert.run(row.artifact_id, row.slug, row.kind, row.created_at);
   }
 }
 

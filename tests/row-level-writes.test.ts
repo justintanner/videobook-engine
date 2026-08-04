@@ -38,7 +38,7 @@ async function setup() {
   const engine = createEngine({
     dataDir: path.join(root, "data"),
     workspaceDir: path.join(root, "workspace"),
-    initialBookSlug: "row-writes",
+    initialBookName: "row-writes",
   });
   engines.push(engine);
   await engine.ready;
@@ -99,41 +99,31 @@ describe("row-level notebook cell writes", () => {
     const notebook = value(await engine.notebooks.create("Cells"));
     const prompt = engine.notebooks.createCell({
       type: "prompt",
-      slug: "prompt-one",
+      label: "prompt-one",
       slot: { row: 0, column: 0 },
     });
     value(await engine.notebooks.insertCell(notebook.id, prompt));
     const image = engine.notebooks.createCell({
       type: "image",
-      slug: "img-one",
+      label: "img-one",
       slot: { row: 0, column: 1 },
     });
     value(await engine.notebooks.insertCell(notebook.id, image));
 
     expect(
-      value(engine.notebooks.read(notebook.id)).cells.map((cell) => cell.slug),
+      value(engine.notebooks.read(notebook.id)).cells.map((cell) => cell.label),
     ).toEqual(["prompt-one", "img-one"]);
 
-    // Occupied slots and duplicate slugs are rejected per row.
+    // Occupied slots are rejected per row.
     const squatting = engine.notebooks.createCell({
       type: "video",
-      slug: "vid-one",
+      label: "vid-one",
       slot: { row: 0, column: 0 },
     });
     expect(await engine.notebooks.insertCell(notebook.id, squatting))
       .toMatchObject({
         ok: false,
         error: { message: "Cell slot is occupied: 0:0" },
-      });
-    const duplicateSlug = engine.notebooks.createCell({
-      type: "image",
-      slug: "img-one",
-      slot: { row: 2, column: 0 },
-    });
-    expect(await engine.notebooks.insertCell(notebook.id, duplicateSlug))
-      .toMatchObject({
-        ok: false,
-        error: { message: "Duplicate cell slug: img-one" },
       });
 
     value(
@@ -154,17 +144,17 @@ describe("row-level notebook cell writes", () => {
     }));
     expect(
       value(engine.notebooks.read(notebook.id)).cells.map((cell) => ({
-        slug: cell.slug,
+        label: cell.label,
         slot: cell.slot,
       })),
     ).toEqual([
-      { slug: "img-one", slot: { row: 0, column: 1 } },
-      { slug: "prompt-one", slot: { row: 1, column: 0 } },
+      { label: "img-one", slot: { row: 0, column: 1 } },
+      { label: "prompt-one", slot: { row: 1, column: 0 } },
     ]);
 
     value(await engine.notebooks.removeCell(notebook.id, image.id));
     expect(
-      value(engine.notebooks.read(notebook.id)).cells.map((cell) => cell.slug),
+      value(engine.notebooks.read(notebook.id)).cells.map((cell) => cell.label),
     ).toEqual(["prompt-one"]);
     expect(await engine.notebooks.removeCell(notebook.id, image.id))
       .toMatchObject({ ok: false, error: { code: "NOT_FOUND" } });
@@ -176,18 +166,18 @@ describe("row-level notebook cell writes", () => {
     const context = new EngineContext({
       dataDir: path.join(root, "data"),
       workspaceDir: path.join(root, "workspace"),
-      initialBookSlug: "cell-repair",
+      initialBookName: "cell-repair",
     });
     const notebooks = createNotebooksApi(context);
     const notebook = value(await notebooks.create("Repair"));
     const first = notebooks.createCell({
       type: "prompt",
-      slug: "prompt-first",
+      label: "prompt-first",
       slot: { row: 0, column: 0 },
     });
     const second = notebooks.createCell({
       type: "prompt",
-      slug: "prompt-second",
+      label: "prompt-second",
       slot: { row: 0, column: 0 },
     });
     // Simulate merge fallout: two cells land on the same grid slot.
@@ -196,17 +186,17 @@ describe("row-level notebook cell writes", () => {
       () => {
         const insert = context.store.db.prepare(
           `INSERT INTO cells(
-            notebook_id, cell_id, type, slug, grid_row, grid_column
+            notebook_id, cell_id, type, label, grid_row, grid_column
           ) VALUES (?, ?, ?, ?, 0, 0)`,
         );
-        insert.run(notebook.id, first.id, first.type, first.slug);
-        insert.run(notebook.id, second.id, second.type, second.slug);
+        insert.run(notebook.id, first.id, first.type, first.label ?? null);
+        insert.run(notebook.id, second.id, second.type, second.label ?? null);
       },
     );
 
     const third = notebooks.createCell({
       type: "image",
-      slug: "img-third",
+      label: "img-third",
       slot: { row: 1, column: 0 },
     });
     value(await notebooks.insertCell(notebook.id, third));

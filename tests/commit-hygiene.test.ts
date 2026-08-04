@@ -41,7 +41,7 @@ describe("commit hygiene", () => {
     const engine = createEngine({
       dataDir,
       workspaceDir: path.join(root, "workspace"),
-      initialBookSlug: "demo",
+      initialBookName: "demo",
     });
     const enqueued = engine.jobs.queue.enqueue({
       type: "generate",
@@ -85,7 +85,7 @@ describe("commit hygiene", () => {
     const context = new EngineContext({
       dataDir: path.join(root, "data"),
       workspaceDir: path.join(root, "workspace"),
-      initialBookSlug: "demo",
+      initialBookName: "demo",
     });
     const notebooks = createNotebooksApi(context);
     const notebook = value(await notebooks.create("cascade"));
@@ -95,7 +95,7 @@ describe("commit hygiene", () => {
         context.store.db
           .prepare(
             `INSERT INTO cells(
-              notebook_id, cell_id, type, slug, grid_row, grid_column
+              notebook_id, cell_id, type, label, grid_row, grid_column
             ) VALUES (?, 'cell-1', 'prompt', 'prompt-one', 0, 0)`,
           )
           .run(notebook.id);
@@ -141,7 +141,7 @@ describe("commit hygiene", () => {
     const context = new EngineContext({
       dataDir: path.join(root, "data"),
       workspaceDir: path.join(root, "workspace"),
-      initialBookSlug: "demo",
+      initialBookName: "demo",
       semanticCommitBoundary: (boundary) => {
         if (boundary === "after-dolt-commit") {
           context.store.db
@@ -192,7 +192,7 @@ describe("commit hygiene", () => {
     const common = {
       dataDir: path.join(root, "data"),
       workspaceDir: path.join(root, "workspace"),
-      initialBookSlug: "demo",
+      initialBookName: "demo",
     };
     expect(
       () =>
@@ -215,7 +215,7 @@ describe("commit hygiene", () => {
     const context = new EngineContext({
       dataDir: path.join(root, "data"),
       workspaceDir: path.join(root, "workspace"),
-      initialBookSlug: "demo",
+      initialBookName: "demo",
       identity: { name: "Ada Lovelace", email: "ada@example.com" },
     });
     await context.store.semantic(
@@ -242,7 +242,7 @@ describe("commit hygiene", () => {
     const context = new EngineContext({
       dataDir: path.join(root, "data"),
       workspaceDir: path.join(root, "workspace"),
-      initialBookSlug: "demo",
+      initialBookName: "demo",
     });
     await context.store.semantic(
       { operation: "authored", tables: ["book_metadata"] },
@@ -266,7 +266,7 @@ describe("commit hygiene", () => {
     const context = new EngineContext({
       dataDir: path.join(root, "data"),
       workspaceDir: path.join(root, "workspace"),
-      initialBookSlug: "demo",
+      initialBookName: "demo",
     });
     const history = createHistoryApi(context);
     const head = context.store.head;
@@ -284,7 +284,7 @@ describe("commit hygiene", () => {
     const context = new EngineContext({
       dataDir: path.join(root, "data"),
       workspaceDir: path.join(root, "workspace"),
-      initialBookSlug: "demo",
+      initialBookName: "demo",
     });
     const history = createHistoryApi(context);
     const logged = value(
@@ -309,7 +309,7 @@ describe("commit hygiene", () => {
     const context = new EngineContext({
       dataDir: path.join(root, "data"),
       workspaceDir: path.join(root, "workspace"),
-      initialBookSlug: "demo",
+      initialBookName: "demo",
     });
     const head = context.store.head;
     await expect(
@@ -337,7 +337,7 @@ describe("commit hygiene", () => {
     const context = new EngineContext({
       dataDir: path.join(root, "data"),
       workspaceDir: path.join(root, "workspace"),
-      initialBookSlug: "demo",
+      initialBookName: "demo",
     });
     const head = context.store.head;
     await context.store.semantic(
@@ -359,7 +359,7 @@ describe("commit hygiene", () => {
     const context = new EngineContext({
       dataDir: path.join(root, "data"),
       workspaceDir: path.join(root, "workspace"),
-      initialBookSlug: "demo",
+      initialBookName: "demo",
     });
     const artifactId = uuidv7();
     const baseRevision = context.store.head;

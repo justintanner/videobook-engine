@@ -10,12 +10,9 @@ import { createEngine, type Engine } from "../src/engine.js";
 import type { EngineError } from "../src/engine-types.js";
 import {
   assertSameSchemaVersion,
-  findSlugConflicts,
   mergeWithPolicy,
   reconcileSingletonFlags,
   verifyConstraintHealth,
-  type MergePolicyOutcome,
-  type SlugConflict,
 } from "../src/merge-policy.js";
 import { SEMANTIC_SCHEMA_SQL } from "../src/schema.js";
 import { EngineFault } from "../src/store.js";
@@ -29,11 +26,11 @@ import { EngineFault } from "../src/store.js";
 // "uncommitted changes" merge guard deterministically misfires once a
 // working root has >=10 tables, and dolt_checkout drops secondary UNIQUE
 // index rows once the working set has three or more tables (so branch
-// writes to UNIQUE-indexed tables like artifacts fail with "database disk
-// image is malformed" in larger fixtures). Each test database stays well
-// under the guard limit and picks branch-write tables accordingly, while
-// covering every table its scenario touches. Engine-level branch/merge on
-// the full catalog is the ve-mim.7 follow-up.
+// writes to tables carrying secondary UNIQUE indexes fail with "database
+// disk image is malformed" in larger fixtures). Each test database stays
+// well under the guard limit and picks branch-write tables accordingly,
+// while covering every table its scenario touches. Engine-level
+// branch/merge on the full catalog is the ve-mim.7 follow-up.
 
 const roots: string[] = [];
 
@@ -100,11 +97,7 @@ function expectFault(work: () => unknown): EngineError {
   throw new Error("Expected an EngineFault");
 }
 
-function slugConflictsOf(error: EngineError): SlugConflict[] {
-  return (error.details?.slugConflicts ?? []) as SlugConflict[];
-}
-
-async function setupEngine(initialBookSlug = "merge-book"): Promise<{
+async function setupEngine(initialBookName = "merge-book"): Promise<{
   engine: Engine;
   root: string;
   dataDir: string;
@@ -116,7 +109,7 @@ async function setupEngine(initialBookSlug = "merge-book"): Promise<{
     engine: createEngine({
       dataDir,
       workspaceDir: path.join(root, "workspace"),
-      initialBookSlug,
+      initialBookName,
     }),
     root,
     dataDir,
@@ -162,102 +155,14 @@ describe("merge policy preconditions", () => {
   });
 });
 
-describe("merge policy for unique artifact slugs", () => {
-  it("surfaces cross-fork slug collisions as user-facing merge conflicts", async () => {
-    const db = await mergeDb(["engine_schema", "artifacts"]);
-    const baseArtifact = uuidv7();
-    const leftArtifact = uuidv7();
-    const rightArtifact = uuidv7();
-    db.prepare(
-      "INSERT INTO engine_schema(singleton, version, created_at) VALUES (1, 18, 0)",
-    ).run();
-    db.prepare(
-      "INSERT INTO artifacts(artifact_id, slug, kind, created_at) VALUES (?, 'vid-base', 'video', 0)",
-    ).run(baseArtifact);
-    commitTables(db, ["engine_schema", "artifacts"], "base");
-    for (const [branch, artifactId] of [
-      ["fork-left", leftArtifact],
-      ["fork-right", rightArtifact],
-    ] as const) {
-      fork(db, branch, ["artifacts"], () => {
-        db.prepare(
-          "INSERT INTO artifacts(artifact_id, slug, kind, created_at) VALUES (?, 'vid-cat', 'video', 1)",
-        ).run(artifactId);
-      });
-    }
-
-    const first: MergePolicyOutcome = mergeWithPolicy(db, "fork-left");
-    expect(first.reconciledTranscripts).toBe(0);
-
-    // The policy detects the collision before merging and reports it with
-    // the slug and both artifact ids.
-    const error = expectFault(() => mergeWithPolicy(db, "fork-right"));
-    expect(error.code).toBe("MERGE_CONFLICT");
-    expect(error.message).toContain("vid-cat");
-    expect(slugConflictsOf(error)).toEqual([
-      {
-        slug: "vid-cat",
-        artifactIds: [leftArtifact, rightArtifact].sort(),
-      },
-    ]);
-    expect(findSlugConflicts(db, "HEAD", "fork-right")).toEqual(
-      slugConflictsOf(error),
-    );
-
-    // doltlite's own merge-time verification is the backstop: it refuses
-    // the UNIQUE violation atomically instead of committing a bad working
-    // set, so no partial merge state exists either way.
-    expect(() => db.doltMerge("fork-right")).toThrow(/constraint violations/);
-    expect(
-      db
-        .prepare("SELECT artifact_id FROM artifacts ORDER BY slug")
-        .all() as Array<{ artifact_id: string }>,
-    ).toEqual([{ artifact_id: baseArtifact }, { artifact_id: leftArtifact }]);
-    verifyConstraintHealth(db);
-    db.close();
-  });
-
-  it("maps same-row edits on both forks to a row-level merge conflict", async () => {
-    const db = await mergeDb(["engine_schema", "artifacts"]);
-    const artifactId = uuidv7();
-    db.prepare(
-      "INSERT INTO engine_schema(singleton, version, created_at) VALUES (1, 18, 0)",
-    ).run();
-    db.prepare(
-      "INSERT INTO artifacts(artifact_id, slug, kind, created_at) VALUES (?, 'vid-base', 'video', 0)",
-    ).run(artifactId);
-    commitTables(db, ["engine_schema", "artifacts"], "base");
-    for (const [branch, slug] of [
-      ["fork-left", "vid-left"],
-      ["fork-right", "vid-right"],
-    ] as const) {
-      fork(db, branch, ["artifacts"], () => {
-        db.prepare("UPDATE artifacts SET slug=? WHERE artifact_id=?").run(
-          slug,
-          artifactId,
-        );
-      });
-    }
-
-    mergeWithPolicy(db, "fork-left");
-    // Each fork's slug is held by exactly one row, so this is not a slug
-    // conflict; the same-row edit is Dolt's row-level conflict instead.
-    expect(findSlugConflicts(db, "HEAD", "fork-right")).toEqual([]);
-    const error = expectFault(() => mergeWithPolicy(db, "fork-right"));
-    expect(error.code).toBe("MERGE_CONFLICT");
-    expect(error.message).toContain("fork-right");
-    db.close();
-  });
-});
-
 describe("merge policy for RESTRICT foreign keys", () => {
   it("surfaces delete-vs-reference dangles as typed violations", async () => {
     // The dangle is built on objects/pinned_search_results rather than
     // artifacts/cells: doltlite's dolt_checkout drops secondary UNIQUE
     // index rows once the working set has three or more tables (ve-wsu),
-    // so branch writes must stick to primary-key-indexed tables —
-    // artifacts.slug would fail with "database disk image is malformed"
-    // before the merge policy ever runs. objects and
+    // so branch writes must stick to primary-key-indexed tables — a
+    // UNIQUE-indexed table would fail with "database disk image is
+    // malformed" before the merge policy ever runs. objects and
     // pinned_search_results carry the same ON DELETE RESTRICT semantics
     // with primary keys only.
     const tables = [
@@ -277,7 +182,7 @@ describe("merge policy for RESTRICT foreign keys", () => {
       "INSERT INTO engine_schema(singleton, version, created_at) VALUES (1, 18, 0)",
     ).run();
     db.prepare(
-      "INSERT INTO artifacts(artifact_id, slug, kind, created_at) VALUES (?, 'vid-doomed', 'video', 0)",
+      "INSERT INTO artifacts(artifact_id, label, kind, created_at) VALUES (?, 'vid-doomed', 'video', 0)",
     ).run(artifactId);
     db.prepare(
       "INSERT INTO objects(object_hash, size_bytes, created_at) VALUES ('o-doomed', 1, 0)",
@@ -287,7 +192,7 @@ describe("merge policy for RESTRICT foreign keys", () => {
     ).run(notebookId);
     db.prepare(
       `INSERT INTO cells(
-        notebook_id, cell_id, type, slug, grid_row, grid_column, inputs_json
+        notebook_id, cell_id, type, label, grid_row, grid_column, inputs_json
       ) VALUES (?, ?, 'image', 'img-base', 0, 0, '{}')`,
     ).run(notebookId, cellId);
     commitTables(db, tables, "base");
@@ -353,7 +258,7 @@ describe("merge policy for derived singleton flags", () => {
       "INSERT INTO engine_schema(singleton, version, created_at) VALUES (1, 18, 0)",
     ).run();
     db.prepare(
-      "INSERT INTO artifacts(artifact_id, slug, kind, created_at) VALUES (?, 'vid-talk', 'video', 0)",
+      "INSERT INTO artifacts(artifact_id, label, kind, created_at) VALUES (?, 'vid-talk', 'video', 0)",
     ).run(artifactId);
     db.prepare(
       "INSERT INTO objects(object_hash, size_bytes, created_at) VALUES ('h-source', 1, 0), ('h-payload', 1, 0)",
@@ -480,7 +385,7 @@ describe("merge policy for derived singleton flags", () => {
       "INSERT INTO engine_schema(singleton, version, created_at) VALUES (1, 18, 0)",
     ).run();
     db.prepare(
-      "INSERT INTO book(book_id, slug, created_at) VALUES (?, 'merge-book', 0)",
+      "INSERT INTO book(book_id, name, created_at) VALUES (?, 'merge-book', 0)",
     ).run(bookId);
     const insertSequence = db.prepare(
       `INSERT INTO sequences(
@@ -538,31 +443,10 @@ describe("merge policy for derived singleton flags", () => {
 });
 
 describe("engine-level merge policy behavior", () => {
-  it("serializes concurrent slug dedup inside the write chain", async () => {
-    const { engine } = await setupEngine();
-    const [first, second] = await Promise.all([
-      engine.artifacts.create({ kind: "image", name: "cat" }),
-      engine.artifacts.create({ kind: "image", name: "cat" }),
-    ]);
-    if (!first.ok || !second.ok) {
-      throw new Error(
-        `concurrent create failed: ${JSON.stringify([first, second])}`,
-      );
-    }
-    // Before the fix both creates read the slug set outside the write
-    // chain and raced onto img-cat; now the second sees the first.
-    expect([first.value.slug, second.value.slug].sort()).toEqual([
-      "img-cat",
-      "img-cat-2",
-    ]);
-    expect(first.value.artifactId).not.toBe(second.value.artifactId);
-    engine.close();
-  });
-
   it("reports IN_USE with every RESTRICT reference kind on delete", async () => {
     const { engine } = await setupEngine();
     const artifact = value(
-      await engine.artifacts.create({ kind: "video", slug: "vid-referenced" }),
+      await engine.artifacts.create({ kind: "video", label: "vid-referenced" }),
     );
     const write = await engine.files.write(
       artifact.artifactId,

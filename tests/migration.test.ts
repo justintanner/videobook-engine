@@ -105,7 +105,7 @@ describe("schema-v4 copy-forward migration", () => {
     const dryRun = value(dryRunV4Migration(source.root));
     expect(dryRun).toMatchObject({
       sourceSchemaVersion: 4,
-      destinationSchemaVersion: 20,
+      destinationSchemaVersion: 21,
       sourceBookId: source.bookId,
       artifactCount: 1,
       notebookCount: 1,
@@ -132,7 +132,16 @@ describe("schema-v4 copy-forward migration", () => {
     });
     const engine = createEngine({ rootDir: destinationRoot });
     await engine.ready;
-    expect(engine.book.get().bookId).toBe(source.bookId);
+    // The legacy book and artifact slugs carry over as free-text names.
+    expect(engine.book.get()).toMatchObject({
+      bookId: source.bookId,
+      name: "migration-fixture",
+    });
+    expect(value(engine.artifacts.get(source.artifactId!))).toMatchObject({
+      artifactId: source.artifactId,
+      label: "img-lighthouse",
+      kind: "image",
+    });
     expect(engine.notebooks.list()[0]?.id).toBe(source.notebookId);
     expect(value(engine.notebooks.read(source.notebookId))).toMatchObject({
       id: source.notebookId,

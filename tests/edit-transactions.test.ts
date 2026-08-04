@@ -53,10 +53,10 @@ async function setup(): Promise<{
   const engine = createEngine({
     dataDir: path.join(root, "data"),
     workspaceDir: path.join(root, "workspace"),
-    initialBookSlug: "edit-transactions",
+    initialBookName: "edit-transactions",
   });
   const artifact = value(
-    await engine.artifacts.create({ kind: "video", slug: "source" }),
+    await engine.artifacts.create({ kind: "video", label: "source" }),
   );
   value(
     await engine.files.write(artifact.artifactId, "original.mp4", "source"),

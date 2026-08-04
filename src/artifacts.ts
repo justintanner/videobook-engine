@@ -32,101 +32,66 @@ export function createArtifactsApi(context: EngineContext) {
   return {
     create: (
       input: CreateArtifactInput | string,
-      name?: string,
+      label?: string,
     ): Promise<Result<Artifact, EngineError>> =>
-      createArtifact(context, input, name),
+      createArtifact(context, input, label),
     list: (options?: { sort?: "newest" | "oldest" }): Artifact[] =>
       listArtifacts(context, options),
-    get: (artifact: string): Result<Artifact, EngineError> =>
-      syncResultOf(() => context.artifact(context.artifactRow(artifact))),
-    resolveSlug: (slug: string): Result<Artifact, EngineError> =>
-      syncResultOf(() => {
-        const row = context.store.db
-          .prepare(
-            `SELECT artifact_id, slug, kind, created_at
-             FROM artifacts
-             WHERE slug=?`,
-          )
-          .get(slug) as unknown as ArtifactRow | undefined;
-        if (!row) throw new Error(`Active artifact slug not found: ${slug}`);
-        return context.artifact(row);
-      }),
-    isSlugAvailable: (slug: string): boolean =>
-      !context.store.db
-        .prepare(
-          `SELECT 1 AS present
-           FROM artifacts
-           WHERE slug=?`,
-        )
-        .get(slug),
+    get: (artifactId: string): Result<Artifact, EngineError> =>
+      syncResultOf(() => context.artifact(context.artifactRowById(artifactId))),
     rename: (
       input: RenameArtifactInput | string,
-      name?: string,
+      label?: string,
     ): Promise<Result<Artifact, EngineError>> =>
-      renameArtifact(context, input, name),
+      renameArtifact(context, input, label),
     delete: (
-      artifact: string,
-    ): Promise<
-      Result<
-        { artifactId: string; slug: string },
-        EngineError
-      >
-    > => deleteArtifact(context, artifact),
+      artifactId: string,
+    ): Promise<Result<{ artifactId: string }, EngineError>> =>
+      deleteArtifact(context, artifactId),
   };
+}
+
+function normalizeLabel(input: string | undefined): string | null {
+  const label = input?.trim();
+  return label ? label : null;
 }
 
 async function createArtifact(
   context: EngineContext,
   input: CreateArtifactInput | string,
-  positionalName?: string,
+  positionalLabel?: string,
 ): Promise<Result<Artifact, EngineError>> {
   return resultOf(async () => {
     const parsed =
       typeof input === "string"
         ? {
             kind: normalizeKind(input),
-            name: positionalName ?? "",
-            explicitSlug: undefined,
+            label: normalizeLabel(positionalLabel),
           }
         : {
             kind: normalizeKind(input.kind),
-            name: input.name ?? input.slug ?? "",
-            explicitSlug: input.slug,
+            label: normalizeLabel(input.label),
           };
-    const base = artifactSlug(parsed.kind, parsed.explicitSlug ?? parsed.name);
     const artifactId = newUuidV7();
-    // The dedup read and the insert must both run inside the serialized
-    // write chain: picking the suffix before store.semantic would race a
-    // concurrent create minting the same base slug (merge policy,
-    // ve-mim.6). details/writeSet are finalized inside the callback, which
-    // runs before the commit message is rendered.
-    const details: Record<string, unknown> = {
-      slug: parsed.explicitSlug ?? base,
-      kind: parsed.kind,
-    };
-    const writeSet = [
-      `artifact:${artifactId}`,
-      `artifact-slug:${String(details.slug)}`,
-    ];
     const mutation = await context.store.semantic(
       {
         operation: "create_artifact",
         tables: ["artifacts"],
         artifactId,
-        details,
-        writeSet,
+        details: {
+          ...(parsed.label === null ? {} : { label: parsed.label }),
+          kind: parsed.kind,
+        },
+        writeSet: [`artifact:${artifactId}`],
       },
       (_operationId, now) => {
-        const slug = parsed.explicitSlug ?? nextActiveSlug(context, base);
-        details.slug = slug;
-        writeSet[1] = `artifact-slug:${slug}`;
         context.store.db
           .prepare(
             `INSERT INTO artifacts(
-              artifact_id, slug, kind, created_at
+              artifact_id, label, kind, created_at
             ) VALUES (?, ?, ?, ?)`,
           )
-          .run(artifactId, slug, parsed.kind, now);
+          .run(artifactId, parsed.label, parsed.kind, now);
         context.store.db
           .prepare(
             `INSERT INTO runtime_artifact_views(
@@ -144,7 +109,7 @@ async function createArtifact(
       },
     );
     context.ensureArtifactWorkspace(artifactId);
-    return ok(context.artifact(context.artifactRow(artifactId)), mutation.revision);
+    return ok(context.artifact(context.artifactRowById(artifactId)), mutation.revision);
   });
 }
 
@@ -155,7 +120,7 @@ function listArtifacts(
   const direction = options.sort === "oldest" ? "ASC" : "DESC";
   const rows = context.store.db
     .prepare(
-      `SELECT artifact_id, slug, kind, created_at
+      `SELECT artifact_id, label, kind, created_at
        FROM artifacts
        ORDER BY created_at ${direction}, artifact_id ${direction}`,
     )
@@ -166,55 +131,55 @@ function listArtifacts(
 async function renameArtifact(
   context: EngineContext,
   input: RenameArtifactInput | string,
-  positionalName?: string,
+  positionalLabel?: string,
 ): Promise<Result<Artifact, EngineError>> {
   return resultOf(async () => {
     const parsed =
       typeof input === "string"
-        ? { artifact: input, name: positionalName ?? "", slug: undefined }
+        ? { artifact: input, label: positionalLabel ?? "" }
         : input;
-    const current = context.artifactRow(parsed.artifact);
-    const slug = artifactSlug(current.kind, parsed.slug ?? parsed.name ?? "");
-    if (slug === current.slug) return context.artifact(current);
+    const current = context.artifactRowById(parsed.artifact);
+    const label = normalizeLabel(parsed.label);
+    if (label === current.label) return context.artifact(current);
     const mutation = await context.store.semantic(
       {
         operation: "rename_artifact",
         tables: ["artifacts"],
         artifactId: current.artifact_id,
-        details: { oldSlug: current.slug, newSlug: slug },
-        writeSet: [
-          `artifact:${current.artifact_id}`,
-          `artifact-slug:${current.slug}`,
-          `artifact-slug:${slug}`,
-        ],
+        details: {
+          ...(current.label === null ? {} : { oldLabel: current.label }),
+          ...(label === null ? {} : { newLabel: label }),
+        },
+        writeSet: [`artifact:${current.artifact_id}`],
       },
       () => {
         context.store.db
           .prepare(
             `UPDATE artifacts
-             SET slug=?
+             SET label=?
              WHERE artifact_id=?`,
           )
-          .run(slug, current.artifact_id);
+          .run(label, current.artifact_id);
       },
     );
-    return ok(context.artifact(context.artifactRow(current.artifact_id)), mutation.revision);
+    return ok(
+      context.artifact(context.artifactRowById(current.artifact_id)),
+      mutation.revision,
+    );
   });
 }
 
 async function deleteArtifact(
   context: EngineContext,
-  artifactReference: string,
-): Promise<
-  Result<{ artifactId: string; slug: string }, EngineError>
-> {
+  artifactId: string,
+): Promise<Result<{ artifactId: string }, EngineError>> {
   return resultOf(async () => {
-    const artifact = context.artifactRow(artifactReference);
+    const artifact = context.artifactRowById(artifactId);
     const references = artifactReferences(context, artifact.artifact_id);
     if (references.length > 0) {
       throw new EngineFault({
         code: "IN_USE",
-        message: `Artifact is still referenced: ${artifact.slug}`,
+        message: `Artifact is still referenced: ${artifact.artifact_id}`,
         details: { references },
       });
     }
@@ -237,13 +202,10 @@ async function deleteArtifact(
         ],
         artifactId: artifact.artifact_id,
         details: {
-          slug: artifact.slug,
+          ...(artifact.label === null ? {} : { label: artifact.label }),
           cancelledJobs: jobs.map((job) => job.id),
         },
-        writeSet: [
-          `artifact:${artifact.artifact_id}`,
-          `artifact-slug:${artifact.slug}`,
-        ],
+        writeSet: [`artifact:${artifact.artifact_id}`],
       },
       (_operationId, now) => {
         context.store.db
@@ -311,13 +273,7 @@ async function deleteArtifact(
       recursive: true,
       force: true,
     });
-    return ok(
-      {
-        artifactId: artifact.artifact_id,
-        slug: artifact.slug,
-      },
-      mutation.revision,
-    );
+    return ok({ artifactId: artifact.artifact_id }, mutation.revision);
   });
 }
 
@@ -349,50 +305,6 @@ export function normalizeKind(input: string): ArtifactKind {
     default:
       throw new Error(`Invalid artifact kind: ${input}`);
   }
-}
-
-/** Normalizes a name or slug with the canonical prefix for its artifact kind. */
-export function artifactSlug(kind: ArtifactKind, input: string): string {
-  if (kind === "final") return "final";
-  const prefix = prefixForKind(kind);
-  let normalized = input
-    .trim()
-    .toLowerCase()
-    .replace(/^@/, "")
-    .replace(/[^a-z0-9_-]+/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^[-_]+|[-_]+$/g, "");
-  if (!normalized) throw new Error("Artifact name or slug is required");
-  const knownPrefix = /^(vid|img|aud|script|char|prompt|scene|prm|scn)-/;
-  if (knownPrefix.test(normalized)) {
-    if (!normalized.startsWith(`${prefix}-`)) {
-      throw new Error(`Artifact slug ${normalized} does not match kind ${kind}`);
-    }
-    return normalized;
-  }
-  normalized = `${prefix}-${normalized}`;
-  if (!/^[a-z0-9]+(?:[a-z0-9_-]*[a-z0-9])?$/.test(normalized)) {
-    throw new Error(`Invalid artifact slug: ${normalized}`);
-  }
-  return normalized;
-}
-
-function nextActiveSlug(context: EngineContext, base: string): string {
-  let suffix = 1;
-  let candidate = base;
-  while (
-    context.store.db
-      .prepare(
-        `SELECT 1 AS present
-         FROM artifacts
-         WHERE slug=?`,
-      )
-      .get(candidate)
-  ) {
-    suffix += 1;
-    candidate = `${base}-${suffix}`;
-  }
-  return candidate;
 }
 
 function artifactReferences(
@@ -466,25 +378,4 @@ function artifactReferences(
     })),
   );
   return references;
-}
-
-function prefixForKind(kind: ArtifactKind): string {
-  switch (kind) {
-    case "video":
-      return "vid";
-    case "image":
-      return "img";
-    case "audio":
-      return "aud";
-    case "script":
-      return "script";
-    case "character":
-      return "char";
-    case "prompt":
-      return "prompt";
-    case "scene":
-      return "scene";
-    case "final":
-      return "final";
-  }
 }

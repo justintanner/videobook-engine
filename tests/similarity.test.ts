@@ -70,21 +70,21 @@ describe("local similarity API", () => {
     let engine: Engine | null = createEngine({
       dataDir: path.join(root, "data"),
       workspaceDir: path.join(root, "workspace"),
-      initialBookSlug: "media",
+      initialBookName: "media",
       similarity: { provider },
     });
     try {
       const cat = value(
-        await engine.artifacts.create({ kind: "image", slug: "img-cat" }),
+        await engine.artifacts.create({ kind: "image", label: "img-cat" }),
       );
       const catVariant = value(
-        await engine.artifacts.create({ kind: "image", slug: "img-cat-variant" }),
+        await engine.artifacts.create({ kind: "image", label: "img-cat-variant" }),
       );
       const catExact = value(
-        await engine.artifacts.create({ kind: "image", slug: "img-cat-exact" }),
+        await engine.artifacts.create({ kind: "image", label: "img-cat-exact" }),
       );
       const video = value(
-        await engine.artifacts.create({ kind: "video", slug: "vid-cat" }),
+        await engine.artifacts.create({ kind: "video", label: "vid-cat" }),
       );
       value(await engine.files.write(cat.artifactId, "original.jpg", "cat"));
       value(await engine.files.write(catVariant.artifactId, "original.jpg", "cat variant"));
@@ -140,7 +140,7 @@ describe("local similarity API", () => {
     const engine = createEngine({
       dataDir: path.join(root, "data"),
       workspaceDir: path.join(root, "workspace"),
-      initialBookSlug: "disabled",
+      initialBookName: "disabled",
     });
     try {
       expect(await engine.similarity.prepare()).toMatchObject({
@@ -160,21 +160,21 @@ describe("audio similarity API", () => {
     let engine: Engine | null = createEngine({
       dataDir: path.join(root, "data"),
       workspaceDir: path.join(root, "workspace"),
-      initialBookSlug: "audio",
+      initialBookName: "audio",
       similarity: { provider, audio: { provider: audioProvider } },
     });
     try {
       const purr = value(
-        await engine.artifacts.create({ kind: "audio", slug: "aud-purr" }),
+        await engine.artifacts.create({ kind: "audio", label: "aud-purr" }),
       );
       const purrVariant = value(
-        await engine.artifacts.create({ kind: "audio", slug: "aud-purr-variant" }),
+        await engine.artifacts.create({ kind: "audio", label: "aud-purr-variant" }),
       );
       const purrExact = value(
-        await engine.artifacts.create({ kind: "audio", slug: "aud-purr-exact" }),
+        await engine.artifacts.create({ kind: "audio", label: "aud-purr-exact" }),
       );
       const rain = value(
-        await engine.artifacts.create({ kind: "audio", slug: "aud-rain" }),
+        await engine.artifacts.create({ kind: "audio", label: "aud-rain" }),
       );
       value(await engine.files.write(purr.artifactId, "original.mp3", "purr"));
       value(
@@ -251,12 +251,12 @@ describe("audio similarity API", () => {
     const disabled = createEngine({
       dataDir: path.join(disabledRoot, "data"),
       workspaceDir: path.join(disabledRoot, "workspace"),
-      initialBookSlug: "audio-disabled",
+      initialBookName: "audio-disabled",
       similarity: { provider },
     });
     try {
       const audio = value(
-        await disabled.artifacts.create({ kind: "audio", slug: "aud-disabled" }),
+        await disabled.artifacts.create({ kind: "audio", label: "aud-disabled" }),
       );
       value(await disabled.files.write(audio.artifactId, "original.mp3", "purr"));
       expect(await disabled.similarity.index(audio.artifactId)).toMatchObject({
@@ -274,12 +274,12 @@ describe("audio similarity API", () => {
     const invalid = createEngine({
       dataDir: path.join(invalidRoot, "data"),
       workspaceDir: path.join(invalidRoot, "workspace"),
-      initialBookSlug: "audio-invalid",
+      initialBookName: "audio-invalid",
       similarity: { provider, audio: { provider: audioProvider } },
     });
     try {
       const audio = value(
-        await invalid.artifacts.create({ kind: "audio", slug: "aud-invalid" }),
+        await invalid.artifacts.create({ kind: "audio", label: "aud-invalid" }),
       );
       value(await invalid.files.write(audio.artifactId, "track.mp3", "purr"));
       expect(await invalid.similarity.index(audio.artifactId)).toMatchObject({
@@ -299,13 +299,13 @@ describe("audio similarity API", () => {
     let engine: Engine | null = createEngine({
       dataDir,
       workspaceDir,
-      initialBookSlug: "audio-upgrade",
+      initialBookName: "audio-upgrade",
       similarity: { provider },
     });
     let imageId: string;
     try {
       const image = value(
-        await engine.artifacts.create({ kind: "image", slug: "img-preserved" }),
+        await engine.artifacts.create({ kind: "image", label: "img-preserved" }),
       );
       imageId = image.artifactId;
       value(await engine.files.write(imageId, "original.jpg", "cat"));
@@ -347,7 +347,7 @@ describe("audio similarity API", () => {
         kind: "image",
       });
       const audio = value(
-        await engine.artifacts.create({ kind: "audio", slug: "aud-after-upgrade" }),
+        await engine.artifacts.create({ kind: "audio", label: "aud-after-upgrade" }),
       );
       value(await engine.files.write(audio.artifactId, "original.mp3", "purr"));
       expect(value(await engine.similarity.index(audio.artifactId))).toMatchObject({
@@ -370,21 +370,21 @@ describe("text similarity API", () => {
     let engine: Engine | null = createEngine({
       dataDir: path.join(root, "data"),
       workspaceDir: path.join(root, "workspace"),
-      initialBookSlug: "text",
+      initialBookName: "text",
       similarity: { provider, text: { provider: textProvider } },
     });
     try {
       const markdown = value(
-        await engine.artifacts.create({ kind: "script", slug: "script-cat-markdown" }),
+        await engine.artifacts.create({ kind: "script", label: "script-cat-markdown" }),
       );
       const plain = value(
-        await engine.artifacts.create({ kind: "character", slug: "char-feline-plain" }),
+        await engine.artifacts.create({ kind: "character", label: "char-feline-plain" }),
       );
       const json = value(
-        await engine.artifacts.create({ kind: "prompt", slug: "prompt-cat-json" }),
+        await engine.artifacts.create({ kind: "prompt", label: "prompt-cat-json" }),
       );
       const unrelated = value(
-        await engine.artifacts.create({ kind: "final", slug: "final" }),
+        await engine.artifacts.create({ kind: "final", label: "final" }),
       );
       value(
         await engine.files.write(
@@ -449,18 +449,18 @@ describe("text similarity API", () => {
     const engine = createEngine({
       dataDir: path.join(root, "data"),
       workspaceDir: path.join(root, "workspace"),
-      initialBookSlug: "exact-text",
+      initialBookName: "exact-text",
       similarity: { provider, text: { provider: textProvider } },
     });
     try {
       const first = value(
-        await engine.artifacts.create({ kind: "scene", slug: "scene-first-json" }),
+        await engine.artifacts.create({ kind: "scene", label: "scene-first-json" }),
       );
       const reordered = value(
-        await engine.artifacts.create({ kind: "scene", slug: "scene-reordered-json" }),
+        await engine.artifacts.create({ kind: "scene", label: "scene-reordered-json" }),
       );
       const byteExact = value(
-        await engine.artifacts.create({ kind: "scene", slug: "scene-byte-exact-json" }),
+        await engine.artifacts.create({ kind: "scene", label: "scene-byte-exact-json" }),
       );
       const jsonA = '{"b":"rug","a":"cat"}';
       const jsonB = '{\n  "a": "cat",\n  "b": "rug"\n}';
@@ -502,12 +502,12 @@ describe("text similarity API", () => {
     const engine = createEngine({
       dataDir: path.join(root, "data"),
       workspaceDir: path.join(root, "workspace"),
-      initialBookSlug: "text-errors",
+      initialBookName: "text-errors",
       similarity: { provider, text: { provider: textProvider, maxSourceBytes: 8 } },
     });
     try {
       const invalid = value(
-        await engine.artifacts.create({ kind: "prompt", slug: "prompt-invalid-json" }),
+        await engine.artifacts.create({ kind: "prompt", label: "prompt-invalid-json" }),
       );
       value(await engine.files.write(invalid.artifactId, "original.json", "{oops"));
       expect(await engine.similarity.index(invalid.artifactId)).toMatchObject({
@@ -516,7 +516,7 @@ describe("text similarity API", () => {
       });
 
       const empty = value(
-        await engine.artifacts.create({ kind: "character", slug: "char-empty-text" }),
+        await engine.artifacts.create({ kind: "character", label: "char-empty-text" }),
       );
       value(await engine.files.write(empty.artifactId, "original.md", "\n\n  \n"));
       expect(await engine.similarity.index(empty.artifactId)).toMatchObject({
@@ -525,7 +525,7 @@ describe("text similarity API", () => {
       });
 
       const tooLarge = value(
-        await engine.artifacts.create({ kind: "script", slug: "script-too-large" }),
+        await engine.artifacts.create({ kind: "script", label: "script-too-large" }),
       );
       value(await engine.files.write(tooLarge.artifactId, "original.md", "123456789"));
       expect(await engine.similarity.index(tooLarge.artifactId)).toMatchObject({
@@ -534,7 +534,7 @@ describe("text similarity API", () => {
       });
 
       const ambiguous = value(
-        await engine.artifacts.create({ kind: "scene", slug: "scene-ambiguous" }),
+        await engine.artifacts.create({ kind: "scene", label: "scene-ambiguous" }),
       );
       value(await engine.files.write(ambiguous.artifactId, "original.md", "cat"));
       value(await engine.files.write(ambiguous.artifactId, "original.txt", "cat"));

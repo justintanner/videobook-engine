@@ -145,7 +145,7 @@ interface EmbeddingRow {
   vector_blob: Uint8Array;
   frame_count: number | null;
   updated_at: number;
-  slug?: string;
+  label?: string | null;
 }
 
 interface TextDocumentRow {
@@ -158,7 +158,7 @@ interface TextDocumentRow {
   dimensions: number;
   chunk_count: number;
   updated_at: number;
-  slug?: string;
+  label?: string | null;
 }
 
 interface TextChunkRow {
@@ -176,7 +176,7 @@ interface TextChunkRow {
   source_path?: string;
   object_hash?: string;
   content_hash?: string;
-  slug?: string;
+  label?: string | null;
 }
 
 interface CachedIndex {
@@ -299,7 +299,7 @@ class LocalSimilarityApi implements SimilarityApi {
       );
       const artifactRows = this.context.store.db
         .prepare(
-          `SELECT artifact_id, slug, kind, created_at
+          `SELECT artifact_id, label, kind, created_at
            FROM artifacts
            WHERE kind IN (${artifactKinds.map(() => "?").join(", ")})
            ORDER BY created_at, artifact_id`,
@@ -689,7 +689,7 @@ class LocalSimilarityApi implements SimilarityApi {
     if (!query) {
       throw new EngineFault({
         code: "NOT_READY",
-        message: `Artifact is not indexed for similarity: ${artifact.slug}`,
+        message: `Artifact is not indexed for similarity: ${artifact.artifact_id}`,
         details: { artifactId: artifact.artifact_id },
       });
     }
@@ -723,7 +723,7 @@ class LocalSimilarityApi implements SimilarityApi {
     if (!query) {
       throw new EngineFault({
         code: "NOT_READY",
-        message: `Artifact is not indexed for similarity: ${artifact.slug}`,
+        message: `Artifact is not indexed for similarity: ${artifact.artifact_id}`,
         details: { artifactId: artifact.artifact_id },
       });
     }
@@ -770,7 +770,7 @@ class LocalSimilarityApi implements SimilarityApi {
           : cosine(queryVector, vectorFromBlob(candidate));
         return {
           artifactId: candidate.artifact_id,
-          slug: candidate.slug ?? candidate.artifact_id,
+          ...(candidate.label ? { label: candidate.label } : {}),
           kind: candidate.kind,
           score: global,
           exactBytes,
@@ -908,7 +908,7 @@ class LocalSimilarityApi implements SimilarityApi {
         const queryChunk = queryChunks[match.queryChunkIndex];
         return {
           artifactId: match.chunk.artifact_id,
-          slug: match.chunk.slug ?? match.chunk.artifact_id,
+          ...(match.chunk.label ? { label: match.chunk.label } : {}),
           kind: "text" as const,
           score: match.score,
           exactBytes: match.exactBytes,
@@ -1086,13 +1086,13 @@ class LocalSimilarityApi implements SimilarityApi {
     if (sources.length === 0) {
       throw new EngineFault({
         code: "INVALID_INPUT",
-        message: `No supported original ${kind} file for ${artifact.slug}`,
+        message: `No supported original ${kind} file for ${artifact.artifact_id}`,
       });
     }
     if (kind === "text" && sources.length > 1) {
       throw new EngineFault({
         code: "INVALID_INPUT",
-        message: `Multiple supported original ${kind} files for ${artifact.slug}`,
+        message: `Multiple supported original ${kind} files for ${artifact.artifact_id}`,
         details: { paths: sources.map((source) => source.path) },
       });
     }
@@ -1179,7 +1179,7 @@ class LocalSimilarityApi implements SimilarityApi {
       .prepare(
         `SELECT e.id, e.artifact_id, e.kind, e.source_path,
                 e.object_hash, e.embedding_space, e.dimensions, e.vector_blob,
-                e.frame_count, e.updated_at, a.slug
+                e.frame_count, e.updated_at, a.label AS label
          FROM runtime_similarity_embeddings e
          JOIN artifacts a ON a.artifact_id=e.artifact_id
          WHERE e.kind=? AND e.embedding_space=?
@@ -1380,7 +1380,7 @@ class LocalSimilarityApi implements SimilarityApi {
                 c.embedding_space, c.chunk_index, c.start_offset,
                 c.end_offset, c.chunk_text, c.dimensions, c.vector_blob,
                 c.updated_at, d.source_path, d.object_hash, d.content_hash,
-                a.slug
+                a.label AS label
          FROM runtime_text_similarity_chunks c
          JOIN runtime_text_similarity_documents d ON d.id=c.document_id
          JOIN artifacts a ON a.artifact_id=c.artifact_id

@@ -406,7 +406,7 @@ function createFailuresApi(context: EngineContext) {
         const row = context.store.db
           .prepare(`${FAILURE_SELECT} WHERE artifact_id=?`)
           .get(artifactId) as unknown as FailureRow | undefined;
-        return row ? failureFromRow(context, row) : null;
+        return row ? failureFromRow(row) : null;
       }),
     clear: (artifact: string): Promise<Result<boolean, EngineError>> =>
       clearFailure(context, artifact),
@@ -415,7 +415,7 @@ function createFailuresApi(context: EngineContext) {
         const rows = context.store.db
           .prepare(`${FAILURE_SELECT} ORDER BY failed_at DESC`)
           .all() as unknown as FailureRow[];
-        return rows.map((row) => failureFromRow(context, row));
+        return rows.map((row) => failureFromRow(row));
       }),
   };
 }
@@ -627,7 +627,6 @@ async function writeFailure(
     return ok(
       {
         artifactId: artifact.artifact_id,
-        artifactSlug: artifact.slug,
         message: info.message,
         ...(info.failCode ? { failCode: info.failCode } : {}),
         ...(info.prompt !== undefined ? { prompt: info.prompt } : {}),
@@ -760,7 +759,7 @@ function viewFromRow(context: EngineContext, row: ArtifactViewRow): ArtifactView
   const artifact = context.artifactRowById(row.artifact_id);
   return {
     artifactId: row.artifact_id,
-    slug: artifact.slug,
+    ...(artifact.label !== null ? { label: artifact.label } : {}),
     status: row.status,
     meta: parseJson(row.meta_json, {}),
     ownerId: row.owner_id,
@@ -773,10 +772,8 @@ function viewFromRow(context: EngineContext, row: ArtifactViewRow): ArtifactView
 }
 
 function pendingFromRow(context: EngineContext, row: PendingRow): PendingTask {
-  const artifact = context.artifactRowById(row.artifact_id);
   return {
     artifactId: row.artifact_id,
-    artifactSlug: artifact.slug,
     taskId: row.task_id,
     taskType: row.task_type,
     workspacePath: context.artifactPath(row.artifact_id),
@@ -787,11 +784,9 @@ function pendingFromRow(context: EngineContext, row: PendingRow): PendingTask {
   };
 }
 
-function failureFromRow(context: EngineContext, row: FailureRow): GenerationError {
-  const artifact = context.artifactRowById(row.artifact_id);
+function failureFromRow(row: FailureRow): GenerationError {
   return {
     artifactId: row.artifact_id,
-    artifactSlug: artifact.slug,
     message: row.message,
     ...(row.fail_code ? { failCode: row.fail_code } : {}),
     ...(row.prompt !== null ? { prompt: row.prompt } : {}),

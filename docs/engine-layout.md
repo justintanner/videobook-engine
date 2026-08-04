@@ -106,8 +106,8 @@ There are 34 allowlisted semantic tables.
 | Table | Columns | Keys, constraints, and purpose |
 | --- | --- | --- |
 | `engine_schema` | `singleton INTEGER`<br>`version INTEGER`<br>`created_at INTEGER` | `singleton PK CHECK(singleton = 1)`. Records the clean-break catalog version. The recorded version rejects older catalogs rather than migrating them. |
-| `book` | `book_id TEXT`<br>`slug TEXT`<br>`created_at INTEGER` | `book_id PK`; `slug UQ`. Exactly one row per engine root. |
-| `artifacts` | `artifact_id TEXT`<br>`slug TEXT`<br>`kind TEXT`<br>`created_at INTEGER` | `artifact_id PK`; `slug UQ`; `kind CHECK IN (video, image, audio, script, character, prompt, scene, final)`. The artifact is the stable identity for source media, generated media, documents, and final renders. |
+| `book` | `book_id TEXT`<br>`name TEXT`<br>`created_at INTEGER` | `book_id PK`. Exactly one row per engine root; `name` is free-text display. |
+| `artifacts` | `artifact_id TEXT`<br>`label TEXT?`<br>`kind TEXT`<br>`created_at INTEGER` | `artifact_id PK`; `kind CHECK IN (video, image, audio, script, character, prompt, scene, final)`. `label` is optional, non-unique display text. The artifact id is the stable identity for source media, generated media, documents, and final renders. |
 | `objects` | `object_hash TEXT`<br>`size_bytes INTEGER`<br>`created_at INTEGER`<br>`forgotten_at INTEGER?` | `object_hash PK`; `size_bytes CHECK >= 0`. Versioned metadata for bytes stored outside the database. Rows are append-only: `forgotten_at` marks a tombstone whose bytes were deleted by `deleteObject`/`gc`. |
 | `artifact_files` | `artifact_id TEXT`<br>`path TEXT`<br>`object_hash TEXT`<br>`mtime_ms INTEGER`<br>`created_at INTEGER` | `(artifact_id, path) PK`; `artifact_id FK → artifacts.artifact_id ON DELETE CASCADE`; `object_hash FK → objects.object_hash ON DELETE RESTRICT`. Maps a logical artifact path to immutable content. |
 | `book_metadata` | `key TEXT`<br>`value_json TEXT` | `key PK`. Singleton-book key/value metadata; no redundant `book_id`. |
@@ -120,7 +120,7 @@ There are 34 allowlisted semantic tables.
 | `entities` | `entity_id TEXT`<br>`type TEXT`<br>`name TEXT`<br>`description TEXT?`<br>`prompt TEXT?`<br>`data_json TEXT DEFAULT '{}'`<br>`created_at INTEGER` | `entity_id PK`; `type CHECK IN (prompt, character, scene)`. Normalized reusable creative concepts. |
 | `notebooks` | `notebook_id TEXT`<br>`name TEXT`<br>`created_at INTEGER` | `notebook_id PK`. Owns a generation/authoring graph. Schema v18 removed the monolithic `properties_json` cell. |
 | `notebook_fields` | `notebook_id TEXT`<br>`field TEXT`<br>`value_json TEXT` | `(notebook_id, field) PK`; notebook `FK → notebooks ON DELETE CASCADE`; `field` is restricted to the typed public notebook fields. Stores optional notebook-level workflow values independently. |
-| `cells` | `notebook_id TEXT`<br>`cell_id TEXT`<br>`type TEXT`<br>`slug TEXT`<br>`grid_row INTEGER`<br>`grid_column INTEGER`<br>`output_entity_id TEXT?`<br>`prompt TEXT?`<br>`provider TEXT?`<br>`model TEXT?`<br>`operation TEXT?`<br>`tool TEXT?`<br>`inputs_json TEXT DEFAULT '{}'`<br>`output_artifact_id TEXT?` | `(notebook_id, cell_id) PK`; `(notebook_id, slug) UQ`; notebook `FK → notebooks ON DELETE CASCADE`; entity and output artifacts use `ON DELETE RESTRICT`. Cell types and kind-specific slug prefixes are checked by the schema. |
+| `cells` | `notebook_id TEXT`<br>`cell_id TEXT`<br>`type TEXT`<br>`label TEXT?`<br>`grid_row INTEGER`<br>`grid_column INTEGER`<br>`output_entity_id TEXT?`<br>`prompt TEXT?`<br>`provider TEXT?`<br>`model TEXT?`<br>`operation TEXT?`<br>`tool TEXT?`<br>`inputs_json TEXT DEFAULT '{}'`<br>`output_artifact_id TEXT?` | `(notebook_id, cell_id) PK`; notebook `FK → notebooks ON DELETE CASCADE`; entity and output artifacts use `ON DELETE RESTRICT`. `label` is optional display text; the grid slot is the user-facing handle. |
 | `notebook_cell_executions` | `notebook_id TEXT`<br>`cell_id TEXT`<br>fingerprint/status/output/provider/run/timestamp/tool/error fields<br>`stale INTEGER`<br>`fixture_baseline INTEGER` | `(notebook_id, cell_id) PK` and composite cell FK with cascade. Gives each cell's execution and staleness state its own merge boundary. |
 | `notebook_generation_plans` | `notebook_id TEXT`<br>`plan_id TEXT`<br>`cell_id TEXT`<br>`status TEXT`<br>`plan_json TEXT`<br>output/error/timestamp fields | `(notebook_id, plan_id) PK`; composite cell FK with cascade. |
 | `notebook_run_plans` | `notebook_id TEXT`<br>`plan_id TEXT`<br>`status TEXT`<br>plan/cost/fingerprint/output fields<br>timestamps | `(notebook_id, plan_id) PK`. Stores approval and execution plans as independently mergeable rows. |
@@ -229,17 +229,10 @@ are the constraint-verification primitives.
   `SCHEMA_INCOMPATIBLE` before any merge is attempted
   (`assertSameSchemaVersion`). This was previously only implied by the
   engine's open-time version gate.
-- **`artifacts.slug` (globally unique) → user-facing conflict.** Two forks
-  minting the same slug for different artifacts is detected before the
-  merge by a three-way (merge-base/ours/theirs) simulation over the
-  artifacts slug projection (`findSlugConflicts`, using `dolt_merge_base`
-  and `dolt_at_artifacts`), and refused with `MERGE_CONFLICT` listing the
-  slug and both artifact ids. doltlite's own verification is the backstop:
-  refusals it reports are re-diagnosed and surface as `MERGE_CONFLICT`
-  when attributable to slugs. Row-level same-row edits surface as
-  `MERGE_CONFLICT` as well. At create time, slug dedup runs inside the
-  serialized write chain (not as a read-then-write outside it), so
-  concurrent creates cannot race onto the same slug.
+- **Artifact identity is `artifact_id` (UUIDv7) → no name-conflict
+  class.** Forks mint collision-free ids, and `artifacts.label` is
+  non-unique display text that merges as an ordinary column. Row-level
+  same-row edits surface as `MERGE_CONFLICT`.
 - **RESTRICT foreign keys → verification-surfaced typed violation.** A
   fork that deletes a row another fork newly references is caught by
   doltlite's merge-time working-set verification, which refuses and rolls
@@ -324,9 +317,9 @@ Integration is a dedicated flow, `mergeBack` in
    `dolt_log`/`dolt_branches` — `doltHashOf` returns content hashes, not
    commit hashes; the fetched remote-tracking ref gets a local branch
    pointer, a ref-only write that is safe under ve-wsu).
-3. Run the merge policy: same-schema precondition, pre-merge slug-conflict
-   detection (`MERGE_CONFLICT`), then a projection-level three-way row
-   merge over `dolt_at_<table>` snapshots of base/ours/theirs (row
+3. Run the merge policy: same-schema precondition, then a
+   projection-level three-way row merge over `dolt_at_<table>`
+   snapshots of base/ours/theirs (row
    semantics mirror Dolt: one-sided changes win, identical changes
    resolve, incompatible changes abort with `MERGE_CONFLICT`), deterministic
    singleton-flag reconcile, and post-merge constraint verification
@@ -542,7 +535,7 @@ interface ArtifactManifestFile {
 
 interface ArtifactManifest {
   artifactId: string;
-  slug: string;
+  label?: string;
   path: string;               // disposable workspace path
   fileCount: number;
   files: ArtifactManifestFile[];
@@ -701,7 +694,7 @@ must reproduce a render.
   selections, UI panels, decode caches, thumbnails, temporary renders, active
   jobs, locks, and presence in ignored runtime tables.
 - Pin renders and derived analysis to source object hashes and a Dolt revision,
-  not mutable artifact slugs or workspace paths.
+  not mutable artifact labels or workspace paths.
 - Treat color space, transfer function, matrix, range, alpha mode, rotation,
   sample rate, channel layout, and variable-frame-rate timing as first-class
   media facts.

@@ -1,62 +1,61 @@
 import { describe, expect, it } from "vitest";
 
 import {
-  classifyNotebookReference,
+  isNotebookGridAddress,
   notebookMentionPrefixAtEnd,
-  parseArtifactTags,
   replaceNotebookMentions,
   scanNotebookMentions,
   stripNotebookMentions,
 } from "../src/index.js";
 
 describe("notebook mention grammar", () => {
-  it("scans bounded grid addresses and underscore-safe slugs", () => {
-    expect(scanNotebookMentions(
-      "Use @A2, @z13. Keep @vid-yt-3h3i_td5kce whole.",
-    )).toMatchObject([
-      { raw: "@A2", reference: "a2", kind: "grid" },
-      { raw: "@z13", reference: "z13", kind: "grid" },
-      {
-        raw: "@vid-yt-3h3i_td5kce",
-        reference: "vid-yt-3h3i_td5kce",
-        kind: "asset-slug",
-      },
+  it("scans only bounded grid addresses; slug-style tokens are inert text", () => {
+    expect(scanNotebookMentions("@a2 likes @img-foo")).toEqual([
+      { raw: "@a2", reference: "a2", index: 0, end: 3 },
     ]);
+    expect(scanNotebookMentions("Use @A2, @z13. Keep @vid-yt-3h3i_td5kce whole.")).toEqual([
+      { raw: "@A2", reference: "a2", index: 4, end: 7 },
+      { raw: "@z13", reference: "z13", index: 9, end: 13 },
+    ]);
+    // Word and hyphen continuations are not grid mentions.
+    expect(scanNotebookMentions("@a2-set @a14 @aa1")).toEqual([]);
   });
 
-  it("classifies only in-bounds grid addresses as grid references", () => {
-    expect(classifyNotebookReference("@a1")).toBe("grid");
-    expect(classifyNotebookReference("Z13")).toBe("grid");
-    expect(classifyNotebookReference("a14")).toBe("cell-slug/id-prefix");
-    expect(classifyNotebookReference("aa1")).toBe("cell-slug/id-prefix");
-    expect(classifyNotebookReference("@img-main_view")).toBe("asset-slug");
+  it("accepts only in-bounds grid addresses", () => {
+    expect(isNotebookGridAddress("@a1")).toBe(true);
+    expect(isNotebookGridAddress("Z13")).toBe(true);
+    expect(isNotebookGridAddress(" @A2 ")).toBe(true);
+    expect(isNotebookGridAddress("a14")).toBe(false);
+    expect(isNotebookGridAddress("aa1")).toBe(false);
+    expect(isNotebookGridAddress("a0")).toBe(false);
+    expect(isNotebookGridAddress("@img-foo")).toBe(false);
   });
 
-  it("replaces exact mentions longest-first without prefix collisions", () => {
+  it("reports the active mention prefix at the end of the input", () => {
+    expect(notebookMentionPrefixAtEnd("combine @a")).toBe("a");
+    expect(notebookMentionPrefixAtEnd("combine @A13")).toBe("a13");
+    expect(notebookMentionPrefixAtEnd("combine @")).toBe("");
+    expect(notebookMentionPrefixAtEnd("no mention")).toBeUndefined();
+  });
+
+  it("replaces exact grid mentions longest-first without prefix collisions", () => {
     expect(replaceNotebookMentions(
-      "Use @img-da-set, then @IMG-DA.",
+      "Blend @a1 with @A13.",
       [
-        { reference: "img-da", replacement: "short" },
-        { reference: "img-da-set", replacement: "long" },
+        { reference: "a1", replacement: "the sketch" },
+        { reference: "@a13", replacement: "the render" },
       ],
-    )).toBe("Use long, then short.");
+    )).toBe("Blend the sketch with the render.");
   });
 
-  it("shares active-prefix and artifact-tag parsing", () => {
-    expect(notebookMentionPrefixAtEnd("combine @Vid-YT_3")).toBe("vid-yt_3");
-    expect(parseArtifactTags(
-      "@vid-yt-3h3i_td5kce @a2 @a14 @vid-yt-3h3i_td5kce",
-    )).toEqual(["vid-yt-3h3i_td5kce"]);
-  });
-
-  it("strips exact mentions without leaving a middle double-space", () => {
+  it("strips exact grid mentions without leaving a middle double-space", () => {
     expect(stripNotebookMentions(
-      "zoom into @vid-motion suddenly",
-      ["vid-motion"],
+      "zoom into @b7 suddenly",
+      ["b7"],
     )).toBe("zoom into suddenly");
     expect(stripNotebookMentions(
-      "@vid-motion but slower",
-      ["vid-motion"],
+      "@b7 but slower",
+      ["b7"],
     )).toBe(" but slower");
   });
 });
