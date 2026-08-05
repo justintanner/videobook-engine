@@ -10,8 +10,6 @@ import type {
   NotebookReferenceKind,
   NotebookRun,
   NotebookRunPlan,
-  NotebookTranscriptAttachment,
-  NotebookTranscriptEdit,
   PinnedSearchResult,
 } from "./notebook/types.js";
 import type { EngineError, Result, Revision } from "./engine-types.js";
@@ -51,8 +49,6 @@ interface NotebookFieldRow {
     | "lifecycle_state"
     | "workflow_version"
     | "analysis_revision"
-    | "audio_spine"
-    | "current_selection"
     | "fixture";
   value_json: string;
 }
@@ -97,18 +93,6 @@ interface NotebookRunPlanRow {
   run_id: string | null;
   outputs_json: string | null;
   error: string | null;
-}
-
-interface NotebookTranscriptEditRow {
-  action_id: string;
-  kind: string;
-  restored: number;
-  payload_json: string;
-}
-
-interface NotebookTranscriptAttachmentRow {
-  attachment_id: string;
-  payload_json: string;
 }
 
 interface NotebookCellRow {
@@ -425,8 +409,6 @@ async function writeNotebook(
           "notebook_cell_executions",
           "notebook_generation_plans",
           "notebook_run_plans",
-          "notebook_transcript_edits",
-          "notebook_transcript_attachments",
           "edges",
           "cell_references",
           "pinned_search_results",
@@ -719,8 +701,6 @@ async function deleteNotebook(
           "notebook_cell_executions",
           "notebook_generation_plans",
           "notebook_run_plans",
-          "notebook_transcript_edits",
-          "notebook_transcript_attachments",
           "edges",
           "runs",
           "cell_references",
@@ -891,20 +871,6 @@ function notebookFromRows(
        WHERE notebook_id=? ORDER BY created_at, plan_id`,
     )
     .all(row.notebook_id) as unknown as NotebookRunPlanRow[];
-  const transcriptEdits = context.store.db
-    .prepare(
-      `SELECT action_id, kind, restored, payload_json
-       FROM notebook_transcript_edits
-       WHERE notebook_id=? ORDER BY action_id`,
-    )
-    .all(row.notebook_id) as unknown as NotebookTranscriptEditRow[];
-  const transcriptAttachments = context.store.db
-    .prepare(
-      `SELECT attachment_id, payload_json
-       FROM notebook_transcript_attachments
-       WHERE notebook_id=? ORDER BY attachment_id`,
-    )
-    .all(row.notebook_id) as unknown as NotebookTranscriptAttachmentRow[];
   const field = new Map(
     fields.map((item) => [
       item.field,
@@ -926,20 +892,6 @@ function notebookFromRows(
     ...(typeof field.get("analysis_revision") === "string"
       ? { analysisRevision: field.get("analysis_revision") as string }
       : {}),
-    ...(isRecord(field.get("audio_spine"))
-      ? {
-          audioSpine: field.get(
-            "audio_spine",
-          ) as NotebookDocument["audioSpine"],
-        }
-      : {}),
-    ...(isRecord(field.get("current_selection"))
-      ? {
-          currentSelection: field.get(
-            "current_selection",
-          ) as NotebookDocument["currentSelection"],
-        }
-      : {}),
     ...(isRecord(field.get("fixture"))
       ? { fixture: field.get("fixture") as NotebookDocument["fixture"] }
       : {}),
@@ -951,10 +903,6 @@ function notebookFromRows(
     ),
     generationPlans: generationPlans.map(generationPlanFromRow),
     notebookRunPlans: runPlans.map(runPlanFromRow),
-    transcriptEdits: transcriptEdits.map(transcriptEditFromRow),
-    transcriptAttachments: transcriptAttachments.map(
-      transcriptAttachmentFromRow,
-    ),
     cells: cells.map((cell) =>
       rowToCell(
         cell,
@@ -1076,8 +1024,6 @@ function synchronizeNotebookState(
   synchronizeCellExecutions(context, notebook);
   synchronizeGenerationPlans(context, notebook);
   synchronizeRunPlans(context, notebook);
-  synchronizeTranscriptEdits(context, notebook);
-  synchronizeTranscriptAttachments(context, notebook);
 }
 
 function synchronizeNotebookFields(
@@ -1099,12 +1045,6 @@ function synchronizeNotebookFields(
   }
   if (notebook.analysisRevision !== undefined) {
     values.set("analysis_revision", notebook.analysisRevision);
-  }
-  if (notebook.audioSpine !== undefined) {
-    values.set("audio_spine", notebook.audioSpine);
-  }
-  if (notebook.currentSelection !== undefined) {
-    values.set("current_selection", notebook.currentSelection);
   }
   if (notebook.fixture !== undefined) {
     values.set("fixture", notebook.fixture);
@@ -1283,84 +1223,14 @@ function synchronizeRunPlans(
   }
 }
 
-function synchronizeTranscriptEdits(
-  context: EngineContext,
-  notebook: NotebookDocument,
-): void {
-  const edits = notebook.transcriptEdits ?? [];
-  assertUnique(
-    edits.map((edit) => edit.actionId),
-    "transcript edit action ID",
-  );
-  deleteMissingNotebookRows(
-    context,
-    "notebook_transcript_edits",
-    "action_id",
-    notebook.id,
-    edits.map((edit) => edit.actionId),
-  );
-  const upsert = context.store.db.prepare(
-    `INSERT INTO notebook_transcript_edits(
-       notebook_id, action_id, kind, restored, payload_json
-     ) VALUES (?, ?, ?, ?, ?)
-     ON CONFLICT(notebook_id, action_id) DO UPDATE SET
-       kind=excluded.kind,
-       restored=excluded.restored,
-       payload_json=excluded.payload_json`,
-  );
-  for (const edit of edits) {
-    upsert.run(
-      notebook.id,
-      requiredText(edit.actionId, "Transcript edit action ID"),
-      requiredText(edit.kind, "Transcript edit kind"),
-      edit.restored === true ? 1 : 0,
-      canonicalJson(edit),
-    );
-  }
-}
-
-function synchronizeTranscriptAttachments(
-  context: EngineContext,
-  notebook: NotebookDocument,
-): void {
-  const attachments = notebook.transcriptAttachments ?? [];
-  assertUnique(
-    attachments.map((attachment) => attachment.id),
-    "transcript attachment ID",
-  );
-  deleteMissingNotebookRows(
-    context,
-    "notebook_transcript_attachments",
-    "attachment_id",
-    notebook.id,
-    attachments.map((attachment) => attachment.id),
-  );
-  const upsert = context.store.db.prepare(
-    `INSERT INTO notebook_transcript_attachments(
-       notebook_id, attachment_id, payload_json
-     ) VALUES (?, ?, ?)
-     ON CONFLICT(notebook_id, attachment_id) DO UPDATE SET
-       payload_json=excluded.payload_json`,
-  );
-  for (const attachment of attachments) {
-    upsert.run(
-      notebook.id,
-      requiredText(attachment.id, "Transcript attachment ID"),
-      canonicalJson(attachment),
-    );
-  }
-}
-
 function deleteMissingNotebookRows(
   context: EngineContext,
   table:
     | "notebook_fields"
     | "notebook_cell_executions"
     | "notebook_generation_plans"
-    | "notebook_run_plans"
-    | "notebook_transcript_edits"
-    | "notebook_transcript_attachments",
-  idColumn: "field" | "cell_id" | "plan_id" | "action_id" | "attachment_id",
+    | "notebook_run_plans",
+  idColumn: "field" | "cell_id" | "plan_id",
   notebookId: string,
   ids: string[],
 ): void {
@@ -1836,28 +1706,6 @@ function runPlanFromRow(row: NotebookRunPlanRow): NotebookRunPlan {
         }
       : {}),
     ...(row.error ? { error: row.error } : {}),
-  };
-}
-
-function transcriptEditFromRow(
-  row: NotebookTranscriptEditRow,
-): NotebookTranscriptEdit {
-  const payload = parseJson<Record<string, unknown>>(row.payload_json, {});
-  return {
-    ...payload,
-    actionId: row.action_id,
-    kind: row.kind,
-    ...(row.restored === 1 ? { restored: true } : {}),
-  };
-}
-
-function transcriptAttachmentFromRow(
-  row: NotebookTranscriptAttachmentRow,
-): NotebookTranscriptAttachment {
-  const payload = parseJson<Record<string, unknown>>(row.payload_json, {});
-  return {
-    ...payload,
-    id: row.attachment_id,
   };
 }
 

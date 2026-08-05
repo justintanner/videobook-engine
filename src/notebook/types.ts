@@ -106,34 +106,6 @@ export interface NotebookRunPlan {
   error?: string;
 }
 
-export interface NotebookAudioSpine {
-  artifactId: string;
-  streamId: string;
-  objectHash: string;
-  sourcePath: string;
-  sequenceId: string;
-  sequenceRevision: string;
-  trackId: string;
-  clipId: string;
-}
-
-export interface NotebookCurrentSelection extends Record<string, unknown> {
-  transcriptId?: string;
-  transcriptRevision?: string;
-  startWordId?: string;
-  endWordId?: string;
-}
-
-export interface NotebookTranscriptEdit extends Record<string, unknown> {
-  actionId: string;
-  kind: string;
-  restored?: boolean;
-}
-
-export interface NotebookTranscriptAttachment extends Record<string, unknown> {
-  id: string;
-}
-
 export interface NotebookFixtureState extends Record<string, unknown> {
   version?: number;
   owner?: string;
@@ -146,14 +118,10 @@ export interface NotebookDocument {
   lifecycleState?: string;
   workflowVersion?: number;
   analysisRevision?: string;
-  audioSpine?: NotebookAudioSpine;
-  currentSelection?: NotebookCurrentSelection;
   fixture?: NotebookFixtureState;
   execution?: Record<string, NotebookCellExecution>;
   generationPlans?: NotebookGenerationPlan[];
   notebookRunPlans?: NotebookRunPlan[];
-  transcriptEdits?: NotebookTranscriptEdit[];
-  transcriptAttachments?: NotebookTranscriptAttachment[];
   cells: NotebookCell[];
   edges: NotebookEdge[];
   createdAt: string;

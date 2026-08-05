@@ -238,7 +238,7 @@ describe("single-book Dolt engine", () => {
     expect(tables).toEqual(
       [...SEMANTIC_TABLES, ...RUNTIME_TABLES].sort(),
     );
-    expect(tables).toHaveLength(57);
+    expect(tables).toHaveLength(55);
 
     const columns = (table: string) =>
       (
@@ -271,10 +271,6 @@ describe("single-book Dolt engine", () => {
     expect(columns("notebook_cell_executions")).toContain("cell_id");
     expect(columns("notebook_generation_plans")).toContain("plan_id");
     expect(columns("notebook_run_plans")).toContain("plan_id");
-    expect(columns("notebook_transcript_edits")).toContain("action_id");
-    expect(columns("notebook_transcript_attachments")).toContain(
-      "attachment_id",
-    );
     expect(columns("cells")).toEqual([
       "notebook_id",
       "cell_id",

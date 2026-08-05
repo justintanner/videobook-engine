@@ -332,21 +332,6 @@ describe("fixed notebook grid schema 21", () => {
         lifecycleState: "running",
         workflowVersion: 3,
         analysisRevision: "rev-analysis",
-        audioSpine: {
-          artifactId: "artifact-audio",
-          streamId: "stream-audio",
-          objectHash: "sha256:audio",
-          sourcePath: "audio.wav",
-          sequenceId: "sequence-main",
-          sequenceRevision: "rev-sequence",
-          trackId: "track-audio",
-          clipId: "clip-audio",
-        },
-        currentSelection: {
-          transcriptId: "transcript-current",
-          startWordId: "word-a",
-          endWordId: "word-b",
-        },
         fixture: { version: 1, owner: "integration" },
         execution: {
           [cell.id]: {
@@ -380,20 +365,6 @@ describe("fixed notebook grid schema 21", () => {
             updatedAt: "2026-07-29T00:01:00.000Z",
           },
         ],
-        transcriptEdits: [
-          {
-            actionId: "edit-1",
-            kind: "remove_words",
-            startWordId: "word-a",
-            endWordId: "word-b",
-          },
-        ],
-        transcriptAttachments: [
-          {
-            id: "attachment-1",
-            transcriptId: "transcript-current",
-          },
-        ],
         cells: [cell],
         edges: [],
       }),
@@ -405,8 +376,6 @@ describe("fixed notebook grid schema 21", () => {
       lifecycleState: "running",
       workflowVersion: 3,
       analysisRevision: "rev-analysis",
-      audioSpine: { artifactId: "artifact-audio" },
-      currentSelection: { transcriptId: "transcript-current" },
       fixture: { version: 1, owner: "integration" },
       execution: {
         [cell.id]: {
@@ -417,8 +386,6 @@ describe("fixed notebook grid schema 21", () => {
       },
       generationPlans: [{ planId: "generation-plan-1", cellId: cell.id }],
       notebookRunPlans: [{ planId: "run-plan-1", knownCostUsd: 1.25 }],
-      transcriptEdits: [{ actionId: "edit-1", kind: "remove_words" }],
-      transcriptAttachments: [{ id: "attachment-1" }],
     });
 
     value(
@@ -428,24 +395,18 @@ describe("fixed notebook grid schema 21", () => {
         lifecycleState: undefined,
         workflowVersion: undefined,
         analysisRevision: undefined,
-        audioSpine: undefined,
-        currentSelection: undefined,
         fixture: undefined,
         execution: {},
         generationPlans: [],
         notebookRunPlans: [],
-        transcriptEdits: [],
-        transcriptAttachments: [],
       }),
     );
     const cleared = value(engine.notebooks.read(notebook.id));
     expect(cleared).not.toHaveProperty("description");
-    expect(cleared).not.toHaveProperty("audioSpine");
+    expect(cleared).not.toHaveProperty("analysisRevision");
     expect(cleared.execution).toEqual({});
     expect(cleared.generationPlans).toEqual([]);
     expect(cleared.notebookRunPlans).toEqual([]);
-    expect(cleared.transcriptEdits).toEqual([]);
-    expect(cleared.transcriptAttachments).toEqual([]);
     engine.close();
 
     const database = new DatabaseSync(path.join(root, "data", "videobook.db"));
@@ -454,8 +415,6 @@ describe("fixed notebook grid schema 21", () => {
       "notebook_cell_executions",
       "notebook_generation_plans",
       "notebook_run_plans",
-      "notebook_transcript_edits",
-      "notebook_transcript_attachments",
     ]) {
       expect(
         database.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get(),

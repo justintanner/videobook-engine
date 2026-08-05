@@ -70,12 +70,10 @@ export {
 export type {
   EntityDocument,
   EntityType,
-  NotebookAudioSpine,
   NotebookCell,
   NotebookCellExecution,
   NotebookCellReference,
   NotebookCellType,
-  NotebookCurrentSelection,
   NotebookDocument,
   NotebookEdge,
   NotebookFixtureState,
@@ -84,8 +82,6 @@ export type {
   NotebookReferenceKind,
   NotebookRun,
   NotebookRunPlan,
-  NotebookTranscriptAttachment,
-  NotebookTranscriptEdit,
   PinnedSearchResult,
 } from "./notebook/types.js";
 

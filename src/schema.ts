@@ -41,8 +41,6 @@ export const SEMANTIC_TABLES = [
   "notebook_cell_executions",
   "notebook_generation_plans",
   "notebook_run_plans",
-  "notebook_transcript_edits",
-  "notebook_transcript_attachments",
   "edges",
   "runs",
   "cell_references",
@@ -211,7 +209,7 @@ export const SEMANTIC_SCHEMA_SQL = `
     field TEXT NOT NULL CHECK (
       field IN (
         'description','lifecycle_state','workflow_version',
-        'analysis_revision','audio_spine','current_selection','fixture'
+        'analysis_revision','fixture'
       )
     ),
     value_json TEXT NOT NULL,
@@ -269,22 +267,6 @@ export const SEMANTIC_SCHEMA_SQL = `
     outputs_json TEXT,
     error TEXT,
     PRIMARY KEY(notebook_id, plan_id)
-  );
-  CREATE TABLE IF NOT EXISTS notebook_transcript_edits (
-    notebook_id TEXT NOT NULL
-      REFERENCES notebooks(notebook_id) ON DELETE CASCADE,
-    action_id TEXT NOT NULL,
-    kind TEXT NOT NULL,
-    restored INTEGER NOT NULL DEFAULT 0 CHECK (restored IN (0, 1)),
-    payload_json TEXT NOT NULL,
-    PRIMARY KEY(notebook_id, action_id)
-  );
-  CREATE TABLE IF NOT EXISTS notebook_transcript_attachments (
-    notebook_id TEXT NOT NULL
-      REFERENCES notebooks(notebook_id) ON DELETE CASCADE,
-    attachment_id TEXT NOT NULL,
-    payload_json TEXT NOT NULL,
-    PRIMARY KEY(notebook_id, attachment_id)
   );
   CREATE TABLE IF NOT EXISTS edges (
     notebook_id TEXT NOT NULL
