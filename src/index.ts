@@ -90,6 +90,9 @@ export {
   firstEmptyNotebookGridSlot,
   firstEmptyNotebookGridSlots,
   isNotebookGridSlot,
+  nearestOriginNotebookGridSlot,
+  nextHorizontalSlotFrom,
+  nextVerticalSlotFrom,
   NOTEBOOK_GRID_CAPACITY,
   NOTEBOOK_GRID_COLUMN_COUNT,
   NOTEBOOK_GRID_FULL_ERROR,
@@ -98,6 +101,12 @@ export {
   notebookGridTag,
   parseNotebookGridAddress,
 } from "./notebook-grid.js";
+
+export {
+  findGenerateVideoOutputCell,
+  resolveGeneratedVideoArtifact,
+  resolveNotebookCellArtifactId,
+} from "./notebook-media-artifact.js";
 
 export type {
   NotebookMention,

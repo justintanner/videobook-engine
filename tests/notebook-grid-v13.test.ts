@@ -9,9 +9,13 @@ import {
   CELLS_TABLE_COLUMNS,
   firstEmptyNotebookGridSlot,
   firstEmptyNotebookGridSlots,
+  nearestOriginNotebookGridSlot,
+  nextHorizontalSlotFrom,
+  nextVerticalSlotFrom,
   NOTEBOOK_CELL_TYPES,
   NOTEBOOK_GRID_CAPACITY,
   NOTEBOOK_GRID_COLUMN_COUNT,
+  NOTEBOOK_GRID_FULL_ERROR,
   NOTEBOOK_GRID_ROW_COUNT,
   notebookGridAddress,
   notebookGridTag,
@@ -189,7 +193,70 @@ describe("fixed notebook grid schema 21", () => {
       column: index % NOTEBOOK_GRID_COLUMN_COUNT,
     }));
     expect(() => firstEmptyNotebookGridSlot(full)).toThrow(
-      "Notebook grid is full",
+      NOTEBOOK_GRID_FULL_ERROR,
+    );
+  });
+
+  it("allocates vertical slots downward from an anchor with collision skip and spill", () => {
+    expect(nextVerticalSlotFrom({ row: 0, column: 0 }, [])).toEqual({
+      row: 0,
+      column: 0,
+    });
+    expect(
+      nextVerticalSlotFrom(
+        { row: 1, column: 0 },
+        [{ row: 1, column: 0 }, { row: 2, column: 0 }],
+      ),
+    ).toEqual({ row: 3, column: 0 });
+    const columnFull = Array.from(
+      { length: NOTEBOOK_GRID_ROW_COUNT - 2 },
+      (_, index) => ({ row: index + 2, column: 1 }),
+    );
+    expect(
+      nextVerticalSlotFrom({ row: 2, column: 1 }, columnFull),
+    ).toEqual({ row: 2, column: 2 });
+  });
+
+  it("allocates horizontal slots rightward from an anchor with collision skip and spill", () => {
+    expect(nextHorizontalSlotFrom({ row: 0, column: 0 }, [])).toEqual({
+      row: 0,
+      column: 0,
+    });
+    expect(
+      nextHorizontalSlotFrom(
+        { row: 0, column: 2 },
+        [{ row: 0, column: 2 }, { row: 0, column: 3 }],
+      ),
+    ).toEqual({ row: 0, column: 4 });
+    const rowFull = Array.from(
+      { length: NOTEBOOK_GRID_COLUMN_COUNT - 4 },
+      (_, index) => ({ row: 1, column: index + 4 }),
+    );
+    expect(
+      nextHorizontalSlotFrom({ row: 1, column: 4 }, rowFull),
+    ).toEqual({ row: 2, column: 4 });
+  });
+
+  it("picks the free slot nearest @a1 and reports a full board for directional helpers", () => {
+    expect(
+      nearestOriginNotebookGridSlot([
+        { row: 0, column: 0 },
+        { row: 0, column: 1 },
+        { row: 1, column: 0 },
+      ]),
+    ).toEqual({ row: 0, column: 2 });
+    const full = Array.from({ length: NOTEBOOK_GRID_CAPACITY }, (_, index) => ({
+      row: Math.floor(index / NOTEBOOK_GRID_COLUMN_COUNT),
+      column: index % NOTEBOOK_GRID_COLUMN_COUNT,
+    }));
+    expect(() => nearestOriginNotebookGridSlot(full)).toThrow(
+      NOTEBOOK_GRID_FULL_ERROR,
+    );
+    expect(() => nextVerticalSlotFrom({ row: 0, column: 0 }, full)).toThrow(
+      NOTEBOOK_GRID_FULL_ERROR,
+    );
+    expect(() => nextHorizontalSlotFrom({ row: 0, column: 0 }, full)).toThrow(
+      NOTEBOOK_GRID_FULL_ERROR,
     );
   });
 

@@ -48,6 +48,17 @@ export function parseNotebookGridAddress(
   };
 }
 
+function occupiedNotebookGridKeys(
+  occupied: Iterable<NotebookGridSlot>,
+): Set<string> {
+  const occupiedKeys = new Set<string>();
+  for (const slot of occupied) {
+    assertNotebookGridSlot(slot);
+    occupiedKeys.add(`${slot.row}:${slot.column}`);
+  }
+  return occupiedKeys;
+}
+
 export function firstEmptyNotebookGridSlot(
   occupied: Iterable<NotebookGridSlot>,
 ): NotebookGridSlot {
@@ -62,11 +73,7 @@ export function firstEmptyNotebookGridSlots(
     throw new Error("Notebook grid slot count must be a nonnegative integer");
   }
   if (count === 0) return [];
-  const occupiedKeys = new Set<string>();
-  for (const slot of occupied) {
-    assertNotebookGridSlot(slot);
-    occupiedKeys.add(`${slot.row}:${slot.column}`);
-  }
+  const occupiedKeys = occupiedNotebookGridKeys(occupied);
   const result: NotebookGridSlot[] = [];
   for (let row = 0; row < NOTEBOOK_GRID_ROW_COUNT; row += 1) {
     for (let column = 0; column < NOTEBOOK_GRID_COLUMN_COUNT; column += 1) {
@@ -77,4 +84,102 @@ export function firstEmptyNotebookGridSlots(
   }
   if (result.length === count) return result;
   throw new Error(NOTEBOOK_GRID_FULL_ERROR);
+}
+
+/**
+ * Free slot minimizing Manhattan distance from @a1.
+ * Ties break by lower row, then lower column (address order among equals).
+ */
+export function nearestOriginNotebookGridSlot(
+  occupied: Iterable<NotebookGridSlot>,
+): NotebookGridSlot {
+  const occupiedKeys = occupiedNotebookGridKeys(occupied);
+  let best: NotebookGridSlot | null = null;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  for (let row = 0; row < NOTEBOOK_GRID_ROW_COUNT; row += 1) {
+    for (let column = 0; column < NOTEBOOK_GRID_COLUMN_COUNT; column += 1) {
+      if (occupiedKeys.has(`${row}:${column}`)) continue;
+      const distance = row + column;
+      if (
+        best === null
+        || distance < bestDistance
+        || (
+          distance === bestDistance
+          && (
+            row < best.row
+            || (row === best.row && column < best.column)
+          )
+        )
+      ) {
+        best = { row, column };
+        bestDistance = distance;
+      }
+    }
+  }
+  if (!best) throw new Error(NOTEBOOK_GRID_FULL_ERROR);
+  return best;
+}
+
+/**
+ * Next free slot scanning down the letter axis from `anchor` (inclusive).
+ * Same column first; when exhausted, spill rightward column-by-column from
+ * the anchor row; then origin-proximity fallback.
+ */
+export function nextVerticalSlotFrom(
+  anchor: NotebookGridSlot,
+  occupied: Iterable<NotebookGridSlot>,
+): NotebookGridSlot {
+  assertNotebookGridSlot(anchor);
+  const occupiedKeys = occupiedNotebookGridKeys(occupied);
+  for (let row = anchor.row; row < NOTEBOOK_GRID_ROW_COUNT; row += 1) {
+    if (!occupiedKeys.has(`${row}:${anchor.column}`)) {
+      return { row, column: anchor.column };
+    }
+  }
+  for (
+    let column = anchor.column + 1;
+    column < NOTEBOOK_GRID_COLUMN_COUNT;
+    column += 1
+  ) {
+    for (let row = anchor.row; row < NOTEBOOK_GRID_ROW_COUNT; row += 1) {
+      if (!occupiedKeys.has(`${row}:${column}`)) {
+        return { row, column };
+      }
+    }
+  }
+  return nearestOriginNotebookGridSlot(occupied);
+}
+
+/**
+ * Next free slot scanning right along the number axis from `anchor` (inclusive).
+ * Same row first; when exhausted, spill downward row-by-row from the anchor
+ * column; then origin-proximity fallback.
+ */
+export function nextHorizontalSlotFrom(
+  anchor: NotebookGridSlot,
+  occupied: Iterable<NotebookGridSlot>,
+): NotebookGridSlot {
+  assertNotebookGridSlot(anchor);
+  const occupiedKeys = occupiedNotebookGridKeys(occupied);
+  for (
+    let column = anchor.column;
+    column < NOTEBOOK_GRID_COLUMN_COUNT;
+    column += 1
+  ) {
+    if (!occupiedKeys.has(`${anchor.row}:${column}`)) {
+      return { row: anchor.row, column };
+    }
+  }
+  for (let row = anchor.row + 1; row < NOTEBOOK_GRID_ROW_COUNT; row += 1) {
+    for (
+      let column = anchor.column;
+      column < NOTEBOOK_GRID_COLUMN_COUNT;
+      column += 1
+    ) {
+      if (!occupiedKeys.has(`${row}:${column}`)) {
+        return { row, column };
+      }
+    }
+  }
+  return nearestOriginNotebookGridSlot(occupied);
 }
