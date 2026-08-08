@@ -85,7 +85,7 @@ const CELLS_TABLE_DDL = `
     PRIMARY KEY(notebook_id, cell_id)
   );`;
 
-describe("fixed notebook grid schema 21", () => {
+describe("fixed notebook grid schema 22", () => {
   it("exports the bounded address contract and the fifteen explicit cell types", () => {
     expect(NOTEBOOK_CELL_TYPES).toEqual([
       "audio",
@@ -120,7 +120,7 @@ describe("fixed notebook grid schema 21", () => {
       "inputs_json",
       "output_artifact_id",
     ]);
-    expect(SCHEMA_VERSION).toBe(21);
+    expect(SCHEMA_VERSION).toBe(22);
     expect(NOTEBOOK_GRID_ROW_COUNT).toBe(26);
     expect(NOTEBOOK_GRID_COLUMN_COUNT).toBe(13);
     expect(NOTEBOOK_GRID_CAPACITY).toBe(338);
@@ -515,7 +515,7 @@ describe("fixed notebook grid schema 21", () => {
     database.close();
   });
 
-  it.each([11, 12, 18, 19, 20])(
+  it.each([11, 12, 18, 19, 20, 21])(
     "rejects schema-v%s catalogs without migration",
     async (version) => {
       const { root, engine } = await setup();
@@ -529,7 +529,7 @@ describe("fixed notebook grid schema 21", () => {
       database.close();
 
       expect(() => createEngine({ rootDir: root })).toThrow(
-        `Database schema ${version} is not supported by engine schema 21`,
+        `Database schema ${version} is not supported by engine schema 22`,
       );
     },
   );
@@ -722,7 +722,7 @@ describe("fixed notebook grid schema 21", () => {
     database.close();
 
     expect(() => createEngine({ rootDir: root })).toThrow(
-      "Database schema 10 is not supported by engine schema 21",
+      "Database schema 10 is not supported by engine schema 22",
     );
   });
 });

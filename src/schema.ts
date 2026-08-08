@@ -58,6 +58,7 @@ export const SEMANTIC_TABLES = [
   "audio_waveforms",
   "prompt_entries",
   "messages",
+  "generations",
 ] as const;
 
 export type SemanticTable = (typeof SEMANTIC_TABLES)[number];
@@ -583,6 +584,28 @@ export const SEMANTIC_SCHEMA_SQL = `
     body_json TEXT NOT NULL,
     created_at INTEGER NOT NULL
   );
+  CREATE TABLE IF NOT EXISTS generations (
+    generation_id TEXT PRIMARY KEY,
+    notebook_id TEXT NOT NULL,
+    cell_id TEXT NOT NULL,
+    output_cell_id TEXT,
+    run_id TEXT,
+    status TEXT NOT NULL CHECK (
+      status IN ('dispatched','awaiting_provider','completed','failed')
+    ),
+    tool TEXT NOT NULL,
+    provider TEXT,
+    model TEXT,
+    prompt TEXT,
+    resolved_prompt TEXT,
+    provider_artifact_id TEXT,
+    output_artifact_id TEXT,
+    error TEXT,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL,
+    FOREIGN KEY(notebook_id, cell_id)
+      REFERENCES cells(notebook_id, cell_id) ON DELETE CASCADE
+  );
 
   CREATE INDEX IF NOT EXISTS artifacts_created
     ON artifacts(created_at, artifact_id);
@@ -636,6 +659,8 @@ export const SEMANTIC_SCHEMA_SQL = `
     ON prompt_entries(surface, created_at, prompt_id);
   CREATE INDEX IF NOT EXISTS messages_created
     ON messages(created_at, message_id);
+  CREATE INDEX IF NOT EXISTS generations_cell
+    ON generations(notebook_id, cell_id, created_at);
 `;
 
 const RUNTIME_SIMILARITY_SCHEMA_SQL = `

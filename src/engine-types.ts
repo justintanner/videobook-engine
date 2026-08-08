@@ -422,6 +422,60 @@ export interface ListPromptHistoryArgs {
   limit?: number;
 }
 
+export type GenerationStatus =
+  "dispatched" | "awaiting_provider" | "completed" | "failed";
+
+export interface Generation {
+  generationId: string;
+  notebookId: string;
+  cellId: string;
+  outputCellId?: string;
+  runId?: string;
+  status: GenerationStatus;
+  tool: string;
+  provider?: string;
+  model?: string;
+  prompt?: string;
+  resolvedPrompt?: string;
+  providerArtifactId?: string;
+  outputArtifactId?: string;
+  error?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface RecordGenerationArgs {
+  notebookId: string;
+  cellId: string;
+  tool: string;
+  status?: GenerationStatus;
+  outputCellId?: string;
+  runId?: string;
+  provider?: string;
+  model?: string;
+  prompt?: string;
+  resolvedPrompt?: string;
+  providerArtifactId?: string;
+  outputArtifactId?: string;
+}
+
+export interface GenerationPatch {
+  status?: GenerationStatus;
+  outputCellId?: string | null;
+  runId?: string | null;
+  provider?: string | null;
+  model?: string | null;
+  prompt?: string | null;
+  resolvedPrompt?: string | null;
+  providerArtifactId?: string | null;
+  outputArtifactId?: string | null;
+  error?: string | null;
+}
+
+export interface ListGenerationsArgs {
+  limit?: number;
+}
+
 export type BackupState =
   "unconfigured" | "pending" | "backed_up" | "offline" | "diverged";
 

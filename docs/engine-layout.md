@@ -128,6 +128,7 @@ There are 34 allowlisted semantic tables.
 | `notebook_transcript_attachments` | `notebook_id TEXT`<br>`attachment_id TEXT`<br>`payload_json TEXT` | `(notebook_id, attachment_id) PK`; notebook FK with cascade. |
 | `edges` | `notebook_id TEXT`<br>`edge_id TEXT`<br>`source_cell_id TEXT`<br>`target_cell_id TEXT`<br>`target_input TEXT` | `(notebook_id, edge_id) PK`; notebook `FK → notebooks ON DELETE CASCADE`; composite source and target FKs reference cells in the same notebook and cascade on cell deletion. |
 | `runs` | `run_id TEXT`<br>`notebook_id TEXT`<br>`status TEXT`<br>`started_at INTEGER`<br>`completed_at INTEGER`<br>`cell_order_json TEXT`<br>`outputs_json TEXT`<br>`error TEXT?` | `run_id PK`; notebook `FK → notebooks ON DELETE CASCADE`; `status CHECK IN (completed, failed, aborted)`. Terminal, versioned notebook execution records. |
+| `generations` | `generation_id TEXT`<br>`notebook_id TEXT`<br>`cell_id TEXT`<br>`output_cell_id TEXT?`<br>`run_id TEXT?`<br>`status TEXT`<br>`tool TEXT`<br>`provider TEXT?`<br>`model TEXT?`<br>`prompt TEXT?`<br>`resolved_prompt TEXT?`<br>`provider_artifact_id TEXT?`<br>`output_artifact_id TEXT?`<br>`error TEXT?`<br>`created_at INTEGER`<br>`updated_at INTEGER` | `generation_id PK`; composite cell FK with cascade; `status CHECK IN (dispatched, awaiting_provider, completed, failed)`. One row per generation attempt; every transition is its own attributed semantic commit, so `dolt_history_generations` is the per-attempt timeline. |
 
 ### Sequence timeline and media editing state
 
@@ -363,6 +364,7 @@ schema additionally defines every index below.
 | `runs_notebook_completed` | `runs(notebook_id, completed_at, run_id)` |
 | `prompt_entries_lookup` | `prompt_entries(surface, created_at, prompt_id)` |
 | `messages_created` | `messages(created_at, message_id)` |
+| `generations_cell` | `generations(notebook_id, cell_id, created_at)` |
 
 ## Local-only runtime schema
 
