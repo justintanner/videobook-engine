@@ -68,6 +68,12 @@ export {
 } from "./mvp-contract-fixtures.js";
 
 export type {
+  CellHistoryEntry,
+  ExecutionHistoryEntry,
+  WriteNotebookOptions,
+} from "./domain.js";
+
+export type {
   EntityDocument,
   EntityType,
   NotebookCell,

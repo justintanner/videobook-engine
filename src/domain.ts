@@ -24,7 +24,12 @@ import {
   firstEmptyNotebookGridSlots,
   isNotebookGridSlot,
 } from "./notebook-grid.js";
-import { canonicalJson, parseJson } from "./store.js";
+import {
+  canonicalJson,
+  commitDateIso,
+  parseCommitMessage,
+  parseJson,
+} from "./store.js";
 import { EngineFault } from "./store.js";
 
 interface EntityRow {
@@ -168,6 +173,36 @@ export function createEntitiesApi(context: EngineContext) {
   };
 }
 
+export type WriteNotebookOptions = {
+  operation?: string;
+  details?: Record<string, unknown>;
+  artifactId?: string;
+};
+
+export type CellHistoryEntry = {
+  commitHash: string;
+  commitDate: string;
+  committer: string;
+  operation?: string;
+  operationId?: string;
+  artifactId?: string;
+  details?: Record<string, unknown>;
+  cell: NotebookCell;
+};
+
+export type ExecutionHistoryEntry = {
+  commitHash: string;
+  commitDate: string;
+  committer: string;
+  operation?: string;
+  operationId?: string;
+  artifactId?: string;
+  details?: Record<string, unknown>;
+  execution: NotebookCellExecution;
+  cellId: string;
+  notebookId: string;
+};
+
 export function createNotebooksApi(context: EngineContext) {
   return {
     create: (name: string): Promise<Result<NotebookDocument, EngineError>> =>
@@ -185,8 +220,20 @@ export function createNotebooksApi(context: EngineContext) {
       syncResultOf(() => requiredNotebook(context, notebookId)),
     write: (
       notebook: NotebookDocument,
+      options?: WriteNotebookOptions,
     ): Promise<Result<Revision, EngineError>> =>
-      writeNotebook(context, notebook),
+      writeNotebook(context, notebook, options),
+    cellHistory: (
+      notebookId: string,
+      cellId: string,
+      options?: { limit?: number },
+    ): CellHistoryEntry[] => cellHistory(context, notebookId, cellId, options),
+    executionHistory: (
+      notebookId: string,
+      cellId: string,
+      options?: { limit?: number },
+    ): ExecutionHistoryEntry[] =>
+      executionHistory(context, notebookId, cellId, options),
     insertCell: (
       notebookId: string,
       cell: NotebookCell,
@@ -394,6 +441,7 @@ function listNotebooks(context: EngineContext): NotebookDocument[] {
 async function writeNotebook(
   context: EngineContext,
   notebook: NotebookDocument,
+  options?: WriteNotebookOptions,
 ): Promise<Result<Revision, EngineError>> {
   return resultOf(async () => {
     assertUuidV7(notebook.id, "Notebook ID");
@@ -401,7 +449,7 @@ async function writeNotebook(
     validateNotebook(context, notebook);
     const mutation = await context.store.semantic(
       {
-        operation: "write_notebook",
+        operation: options?.operation ?? "write_notebook",
         tables: [
           "notebooks",
           "notebook_fields",
@@ -413,7 +461,8 @@ async function writeNotebook(
           "cell_references",
           "pinned_search_results",
         ],
-        details: { notebookId: notebook.id },
+        details: { notebookId: notebook.id, ...options?.details },
+        ...(options?.artifactId ? { artifactId: options.artifactId } : {}),
         writeSet: [
           `notebook:${notebook.id}`,
           ...notebook.cells.map((cell) => `cell:${notebook.id}:${cell.id}`),
@@ -430,6 +479,156 @@ async function writeNotebook(
     );
     return ok(revisionFor(context, mutation.revision), mutation.revision);
   });
+}
+
+function cellHistory(
+  context: EngineContext,
+  notebookId: string,
+  cellId: string,
+  options?: { limit?: number },
+): CellHistoryEntry[] {
+  assertUuidV7(notebookId, "Notebook ID");
+  assertUuidV7(cellId, "Cell ID");
+  const limit = Math.max(1, Math.min(options?.limit ?? 50, 500));
+  const commitMeta = commitMetaByHash(context);
+  type HistoryCellRow = NotebookCellRow & {
+    notebook_id: string;
+    commit_hash: string;
+    committer: string;
+    commit_date: string;
+  };
+  let rows: HistoryCellRow[];
+  try {
+    rows = context.store.db
+      .prepare(
+        `SELECT notebook_id, cell_id, type, label, grid_row, grid_column,
+                output_entity_id, prompt, provider, model, operation, tool,
+                inputs_json, output_artifact_id, commit_hash, committer, commit_date
+         FROM dolt_history_cells
+         WHERE notebook_id=? AND cell_id=?
+         ORDER BY commit_date DESC
+         LIMIT ?`,
+      )
+      .all(notebookId, cellId, limit) as unknown as HistoryCellRow[];
+  } catch {
+    rows = (
+      context.store.db.doltHistoryOf("cells") as unknown as HistoryCellRow[]
+    )
+      .filter(
+        (row) => row.notebook_id === notebookId && row.cell_id === cellId,
+      )
+      .sort((left, right) =>
+        right.commit_date.localeCompare(left.commit_date),
+      )
+      .slice(0, limit);
+  }
+  return rows.map((row) => {
+    const meta = commitMeta.get(row.commit_hash);
+    return {
+      commitHash: row.commit_hash,
+      commitDate: commitDateIso(row.commit_date),
+      committer: row.committer,
+      ...(meta?.operation ? { operation: meta.operation } : {}),
+      ...(meta?.operationId ? { operationId: meta.operationId } : {}),
+      ...(meta?.artifactId ? { artifactId: meta.artifactId } : {}),
+      ...(meta?.details ? { details: meta.details } : {}),
+      cell: rowToCell(row, [], []),
+    };
+  });
+}
+
+function executionHistory(
+  context: EngineContext,
+  notebookId: string,
+  cellId: string,
+  options?: { limit?: number },
+): ExecutionHistoryEntry[] {
+  assertUuidV7(notebookId, "Notebook ID");
+  assertUuidV7(cellId, "Cell ID");
+  const limit = Math.max(1, Math.min(options?.limit ?? 50, 500));
+  const commitMeta = commitMetaByHash(context);
+  type HistoryExecutionRow = NotebookCellExecutionRow & {
+    notebook_id: string;
+    commit_hash: string;
+    committer: string;
+    commit_date: string;
+  };
+  let rows: HistoryExecutionRow[];
+  try {
+    rows = context.store.db
+      .prepare(
+        `SELECT notebook_id, cell_id, fingerprint, status, output_artifact_id,
+                provider_artifact_id, run_id, completed_at, started_at,
+                updated_at, tool, error, stale, fixture_baseline,
+                commit_hash, committer, commit_date
+         FROM dolt_history_notebook_cell_executions
+         WHERE notebook_id=? AND cell_id=?
+         ORDER BY commit_date DESC
+         LIMIT ?`,
+      )
+      .all(notebookId, cellId, limit) as unknown as HistoryExecutionRow[];
+  } catch {
+    rows = (
+      context.store.db.doltHistoryOf(
+        "notebook_cell_executions",
+      ) as unknown as HistoryExecutionRow[]
+    )
+      .filter(
+        (row) => row.notebook_id === notebookId && row.cell_id === cellId,
+      )
+      .sort((left, right) =>
+        right.commit_date.localeCompare(left.commit_date),
+      )
+      .slice(0, limit);
+  }
+  return rows.map((row) => {
+    const meta = commitMeta.get(row.commit_hash);
+    return {
+      commitHash: row.commit_hash,
+      commitDate: commitDateIso(row.commit_date),
+      committer: row.committer,
+      notebookId: row.notebook_id,
+      cellId: row.cell_id,
+      ...(meta?.operation ? { operation: meta.operation } : {}),
+      ...(meta?.operationId ? { operationId: meta.operationId } : {}),
+      ...(meta?.artifactId ? { artifactId: meta.artifactId } : {}),
+      ...(meta?.details ? { details: meta.details } : {}),
+      execution: executionFromRow(row),
+    };
+  });
+}
+
+function commitMetaByHash(
+  context: EngineContext,
+): Map<
+  string,
+  {
+    operation?: string;
+    operationId?: string;
+    artifactId?: string;
+    details?: Record<string, unknown>;
+  }
+> {
+  const map = new Map<
+    string,
+    {
+      operation?: string;
+      operationId?: string;
+      artifactId?: string;
+      details?: Record<string, unknown>;
+    }
+  >();
+  for (const commit of context.store.db.doltLog()) {
+    const parsed = parseCommitMessage(commit.message);
+    if (!parsed) continue;
+    map.set(commit.commit_hash, {
+      operation: parsed.operation,
+      operationId: parsed.operationId,
+      ...(parsed.artifactId ? { artifactId: parsed.artifactId } : {}),
+      details: parsed.details,
+    });
+  }
+  return map;
 }
 
 async function insertNotebookCell(

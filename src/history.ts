@@ -54,6 +54,8 @@ export function createHistoryApi(context: EngineContext) {
       artifactHistory(context, artifact, limit),
     resolveRevision: (revision: string): Revision | null =>
       resolveRevision(context, revision),
+    diff: (fromRevision: string, toRevision: string, table: string) =>
+      context.store.db.doltDiff(fromRevision, toRevision, table),
     recordOperation: (
       operation: string,
       artifact?: string,
