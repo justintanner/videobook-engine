@@ -183,3 +183,37 @@ export function nextHorizontalSlotFrom(
   }
   return nearestOriginNotebookGridSlot(occupied);
 }
+
+/**
+ * Wave placement for generation tiles: scan `waveRow` left-to-right from
+ * `startColumn` for a slot whose below-neighbor is also free (room for the
+ * tile's output cell directly beneath), advancing row by row while both stay
+ * within the board; origin-proximity fallback when no pair fits.
+ */
+export function nextWaveTileSlot(
+  waveRow: number,
+  startColumn: number,
+  occupied: Iterable<NotebookGridSlot>,
+): NotebookGridSlot {
+  const occupiedKeys = occupiedNotebookGridKeys(occupied);
+  const firstRow = Math.min(
+    Math.max(0, Math.trunc(waveRow)),
+    NOTEBOOK_GRID_ROW_COUNT - 1,
+  );
+  const firstColumn = Math.min(
+    Math.max(0, Math.trunc(startColumn)),
+    NOTEBOOK_GRID_COLUMN_COUNT - 1,
+  );
+  for (let row = firstRow; row + 1 < NOTEBOOK_GRID_ROW_COUNT; row += 1) {
+    for (
+      let column = firstColumn;
+      column < NOTEBOOK_GRID_COLUMN_COUNT;
+      column += 1
+    ) {
+      if (occupiedKeys.has(`${row}:${column}`)) continue;
+      if (occupiedKeys.has(`${row + 1}:${column}`)) continue;
+      return { row, column };
+    }
+  }
+  return nearestOriginNotebookGridSlot(occupied);
+}

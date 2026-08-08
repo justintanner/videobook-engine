@@ -12,6 +12,7 @@ import {
   nearestOriginNotebookGridSlot,
   nextHorizontalSlotFrom,
   nextVerticalSlotFrom,
+  nextWaveTileSlot,
   NOTEBOOK_CELL_TYPES,
   NOTEBOOK_GRID_CAPACITY,
   NOTEBOOK_GRID_COLUMN_COUNT,
@@ -235,6 +236,30 @@ describe("fixed notebook grid schema 21", () => {
     expect(
       nextHorizontalSlotFrom({ row: 1, column: 4 }, rowFull),
     ).toEqual({ row: 2, column: 4 });
+  });
+
+  it("allocates wave tile slots left-to-right keeping the output slot below free", () => {
+    expect(nextWaveTileSlot(1, 0, [])).toEqual({ row: 1, column: 0 });
+    // Skips a column whose below-neighbor is taken, packing the wave row.
+    expect(
+      nextWaveTileSlot(1, 0, [
+        { row: 1, column: 0 },
+        { row: 2, column: 1 },
+      ]),
+    ).toEqual({ row: 1, column: 2 });
+    // Full wave row advances downward from the same start column.
+    const waveFull = Array.from(
+      { length: NOTEBOOK_GRID_COLUMN_COUNT - 2 },
+      (_, index) => ({ row: 4, column: index + 2 }),
+    );
+    expect(nextWaveTileSlot(4, 2, waveFull)).toEqual({ row: 5, column: 2 });
+    const full = Array.from({ length: NOTEBOOK_GRID_CAPACITY }, (_, index) => ({
+      row: Math.floor(index / NOTEBOOK_GRID_COLUMN_COUNT),
+      column: index % NOTEBOOK_GRID_COLUMN_COUNT,
+    }));
+    expect(() => nextWaveTileSlot(0, 0, full)).toThrow(
+      NOTEBOOK_GRID_FULL_ERROR,
+    );
   });
 
   it("picks the free slot nearest @a1 and reports a full board for directional helpers", () => {
