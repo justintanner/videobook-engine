@@ -24,6 +24,10 @@
       "import": "./dist/notebook-grid.js",
       "types": "./dist/notebook-grid.d.ts"
     },
+    "./notebook-media-artifact": {
+      "import": "./dist/notebook-media-artifact.js",
+      "types": "./dist/notebook-media-artifact.d.ts"
+    },
     "./notebook-mentions": {
       "import": "./dist/notebook-mentions.js",
       "types": "./dist/notebook-mentions.d.ts"
