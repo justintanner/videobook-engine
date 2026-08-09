@@ -745,6 +745,7 @@ async function removeNotebookCell(
         operation: "remove_cell",
         tables: [
           "cells",
+          "generations",
           "notebook_cell_executions",
           "notebook_generation_plans",
           "edges",
@@ -897,6 +898,7 @@ async function deleteNotebook(
           "notebooks",
           "notebook_fields",
           "cells",
+          "generations",
           "notebook_cell_executions",
           "notebook_generation_plans",
           "notebook_run_plans",

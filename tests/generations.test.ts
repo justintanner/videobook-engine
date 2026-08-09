@@ -300,6 +300,66 @@ describe("engine.generations", () => {
     engine.close();
   });
 
+  it("commits generation deletion when removing its cell", async () => {
+    const { engine, root, dataDir } = await setup();
+    const { notebook, cell } = await createCellFixture(engine);
+    const generation = value(
+      await engine.generations.record({
+        notebookId: notebook.id,
+        cellId: cell.id,
+        tool: "generate_video",
+      }),
+    );
+
+    value(await engine.notebooks.removeCell(notebook.id, cell.id));
+    expect(engine.generations.read(generation.generationId)).toMatchObject({
+      ok: false,
+      error: { code: "NOT_FOUND" },
+    });
+    engine.close();
+
+    const reopened = createEngine({
+      dataDir,
+      workspaceDir: path.join(root, "workspace"),
+    });
+    await reopened.ready;
+    expect(reopened.generations.read(generation.generationId)).toMatchObject({
+      ok: false,
+      error: { code: "NOT_FOUND" },
+    });
+    reopened.close();
+  });
+
+  it("commits generation deletion when deleting its notebook", async () => {
+    const { engine, root, dataDir } = await setup();
+    const { notebook, cell } = await createCellFixture(engine);
+    const generation = value(
+      await engine.generations.record({
+        notebookId: notebook.id,
+        cellId: cell.id,
+        tool: "generate_video",
+      }),
+    );
+
+    value(await engine.notebooks.delete(notebook.id));
+    expect(engine.generations.read(generation.generationId)).toMatchObject({
+      ok: false,
+      error: { code: "NOT_FOUND" },
+    });
+    engine.close();
+
+    const reopened = createEngine({
+      dataDir,
+      workspaceDir: path.join(root, "workspace"),
+    });
+    await reopened.ready;
+    expect(reopened.generations.read(generation.generationId)).toMatchObject({
+      ok: false,
+      error: { code: "NOT_FOUND" },
+    });
+    reopened.close();
+  });
+
   it("yields the per-attempt transition timeline from dolt_history_generations", async () => {
     const { engine, dataDir } = await setup();
     const { notebook, cell } = await createCellFixture(engine);
