@@ -110,6 +110,7 @@ export {
 } from "./notebook-grid.js";
 
 export {
+  findGenerateImageOutputCell,
   findGenerateVideoOutputCell,
   resolveGeneratedVideoArtifact,
   resolveNotebookCellArtifactId,
