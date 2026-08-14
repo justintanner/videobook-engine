@@ -7,6 +7,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createEngine, type Engine } from "../src/engine.js";
 import type { NotebookDocument } from "../src/notebook/types.js";
 import {
+  findGenerateAudioOutputCell,
   findGenerateImageOutputCell,
   findGenerateVideoOutputCell,
   resolveNotebookCellArtifactId,
@@ -236,6 +237,167 @@ describe("notebook media artifact resolution", () => {
       .toBe(output.id);
     expect(resolveNotebookCellArtifactId(document, tile))
       .toBe(outputArtifact.artifactId);
+    engine.close();
+  });
+
+  it("finds a generate_audio output cell by role, then producer, then type", async () => {
+    const { engine, notebook } = await setup();
+    const tile = engine.notebooks.createCell({
+      type: "generate_audio",
+      slot: { row: 0, column: 0 },
+      prompt: "hello",
+    });
+    const roleOutput = engine.notebooks.createCell({
+      type: "audio",
+      slot: { row: 1, column: 0 },
+      inputs: { mediaRole: "generate-audio-output" },
+    });
+    const producerOutput = engine.notebooks.createCell({
+      type: "audio",
+      slot: { row: 1, column: 1 },
+      inputs: { producerCellId: tile.id },
+    });
+    const typeOnly = engine.notebooks.createCell({
+      type: "audio",
+      slot: { row: 1, column: 2 },
+    });
+    const extractOutput = engine.notebooks.createCell({
+      type: "audio",
+      slot: { row: 2, column: 0 },
+      inputs: { mediaRole: "extract-audio-output" },
+    });
+
+    const roleDocument: NotebookDocument = {
+      ...notebook,
+      cells: [tile, roleOutput, extractOutput],
+      edges: [
+        engine.notebooks.createEdge({
+          source: tile.id,
+          target: roleOutput.id,
+          targetInput: "media",
+        }),
+      ],
+    };
+    expect(findGenerateAudioOutputCell(roleDocument, tile.id)?.outputCell.id)
+      .toBe(roleOutput.id);
+
+    const producerDocument: NotebookDocument = {
+      ...notebook,
+      cells: [tile, producerOutput, extractOutput],
+      edges: [
+        engine.notebooks.createEdge({
+          source: tile.id,
+          target: producerOutput.id,
+          targetInput: "media",
+        }),
+      ],
+    };
+    expect(findGenerateAudioOutputCell(producerDocument, tile.id)?.outputCell.id)
+      .toBe(producerOutput.id);
+
+    const typeDocument: NotebookDocument = {
+      ...notebook,
+      cells: [tile, typeOnly, extractOutput],
+      edges: [
+        engine.notebooks.createEdge({
+          source: tile.id,
+          target: typeOnly.id,
+          targetInput: "media",
+        }),
+      ],
+    };
+    expect(findGenerateAudioOutputCell(typeDocument, tile.id)?.outputCell.id)
+      .toBe(typeOnly.id);
+
+    const noEdgeDocument: NotebookDocument = {
+      ...notebook,
+      cells: [tile, extractOutput],
+      edges: [
+        engine.notebooks.createEdge({
+          source: extractOutput.id,
+          target: tile.id,
+          targetInput: "audio",
+        }),
+      ],
+    };
+    expect(findGenerateAudioOutputCell(noEdgeDocument, tile.id)).toBeNull();
+    engine.close();
+  });
+
+  it("resolves generate_audio from the output cell, then legacy inline fields", async () => {
+    const { engine, notebook } = await setup();
+    const outputArtifact = value(await engine.artifacts.create("audio", "pair-out"));
+    const inlineArtifact = value(await engine.artifacts.create("audio", "legacy-inline"));
+    const entityArtifact = value(await engine.artifacts.create("audio", "legacy-entity"));
+
+    const pairTile = engine.notebooks.createCell({
+      type: "generate_audio",
+      slot: { row: 0, column: 0 },
+      prompt: "pair",
+      outputArtifactId: inlineArtifact.artifactId,
+    });
+    const pairOutput = engine.notebooks.createCell({
+      type: "audio",
+      slot: { row: 1, column: 0 },
+      outputArtifactId: outputArtifact.artifactId,
+      inputs: {
+        mediaRole: "generate-audio-output",
+        producerCellId: pairTile.id,
+      },
+    });
+    const pairDocument: NotebookDocument = {
+      ...notebook,
+      cells: [pairTile, pairOutput],
+      edges: [
+        engine.notebooks.createEdge({
+          source: pairTile.id,
+          target: pairOutput.id,
+          targetInput: "media",
+        }),
+      ],
+    };
+    expect(resolveNotebookCellArtifactId(pairDocument, pairTile))
+      .toBe(outputArtifact.artifactId);
+    expect(resolveNotebookCellArtifactId(pairDocument, pairTile))
+      .not.toBe(inlineArtifact.artifactId);
+
+    const inlineTile = engine.notebooks.createCell({
+      type: "generate_audio",
+      slot: { row: 0, column: 1 },
+      prompt: "legacy",
+      outputArtifactId: inlineArtifact.artifactId,
+    });
+    const inlineDocument: NotebookDocument = {
+      ...notebook,
+      cells: [inlineTile],
+      edges: [],
+    };
+    expect(resolveNotebookCellArtifactId(inlineDocument, inlineTile))
+      .toBe(inlineArtifact.artifactId);
+
+    const entityTile = engine.notebooks.createCell({
+      type: "generate_audio",
+      slot: { row: 0, column: 2 },
+      prompt: "entity",
+      outputEntityId: entityArtifact.artifactId,
+    });
+    const entityDocument: NotebookDocument = {
+      ...notebook,
+      cells: [entityTile],
+      edges: [],
+    };
+    expect(resolveNotebookCellArtifactId(entityDocument, entityTile))
+      .toBe(entityArtifact.artifactId);
+
+    const emptyTile = engine.notebooks.createCell({
+      type: "generate_audio",
+      slot: { row: 0, column: 3 },
+      prompt: "empty",
+    });
+    expect(resolveNotebookCellArtifactId(
+      { ...notebook, cells: [emptyTile], edges: [] },
+      emptyTile,
+    )).toBeUndefined();
     engine.close();
   });
 });

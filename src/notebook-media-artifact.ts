@@ -6,7 +6,7 @@ import type {
 
 type NotebookGraph = Pick<NotebookDocument, "cells" | "edges">;
 
-type GenerationOutputType = "video" | "image";
+type GenerationOutputType = "video" | "image" | "audio";
 
 function findGenerationOutputCell(
   document: NotebookGraph,
@@ -68,6 +68,18 @@ export function findGenerateImageOutputCell(
   );
 }
 
+export function findGenerateAudioOutputCell(
+  document: NotebookGraph,
+  generateAudioCellId: string,
+): { outputCell: NotebookCell; outputEdge: NotebookEdge } | null {
+  return findGenerationOutputCell(
+    document,
+    generateAudioCellId,
+    "audio",
+    "generate-audio-output",
+  );
+}
+
 function inlineCellArtifactId(cell: NotebookCell): string | undefined {
   if (typeof cell.outputArtifactId === "string") return cell.outputArtifactId;
   if (typeof cell.outputEntityId === "string") return cell.outputEntityId;
@@ -82,7 +94,9 @@ function outputCellArtifactId(
     ? findGenerateVideoOutputCell(document, cell.id)
     : cell.type === "generate_image"
       ? findGenerateImageOutputCell(document, cell.id)
-      : null;
+      : cell.type === "generate_audio"
+        ? findGenerateAudioOutputCell(document, cell.id)
+        : null;
   if (typeof output?.outputCell.outputArtifactId === "string") {
     return output.outputCell.outputArtifactId;
   }
@@ -91,8 +105,8 @@ function outputCellArtifactId(
 
 /**
  * Resolve media artifact for a notebook cell.
- * generate_video / generate_image prefer a dedicated output cell, then fall
- * back to legacy inline outputArtifactId / outputEntityId.
+ * generate_video / generate_image / generate_audio prefer a dedicated output
+ * cell, then fall back to legacy inline outputArtifactId / outputEntityId.
  */
 export function resolveNotebookCellArtifactId(
   document: NotebookGraph,
