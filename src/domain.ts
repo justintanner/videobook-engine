@@ -19,7 +19,10 @@ import { ok } from "./engine-types.js";
 import { normalizeSearchLocation } from "./mvp-time.js";
 import { EngineContext, resultOf, syncResultOf } from "./context.js";
 import { assertUuidV7, newUuidV7 } from "./ids.js";
-import { NOTEBOOK_CELL_TYPES } from "./schema.js";
+import {
+  LEGACY_NOTEBOOK_CELL_TYPE_ALIASES,
+  NOTEBOOK_CELL_TYPES,
+} from "./schema.js";
 import {
   firstEmptyNotebookGridSlots,
   isNotebookGridSlot,
@@ -1762,10 +1765,11 @@ function rowToCell(
 }
 
 function notebookCellType(type: string): NotebookCell["type"] {
-  if (!NOTEBOOK_CELL_TYPE_SET.has(type as NotebookCell["type"])) {
+  const resolved = LEGACY_NOTEBOOK_CELL_TYPE_ALIASES[type] ?? type;
+  if (!NOTEBOOK_CELL_TYPE_SET.has(resolved as NotebookCell["type"])) {
     throw new Error(`Invalid cell type: ${type}`);
   }
-  return type as NotebookCell["type"];
+  return resolved as NotebookCell["type"];
 }
 
 function normalizeCellForWrite(cell: NotebookCell): NotebookCell {

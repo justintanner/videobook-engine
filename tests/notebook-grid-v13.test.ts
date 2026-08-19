@@ -13,6 +13,7 @@ import {
   nextHorizontalSlotFrom,
   nextVerticalSlotFrom,
   nextWaveTileSlot,
+  LEGACY_NOTEBOOK_CELL_TYPE_ALIASES,
   NOTEBOOK_CELL_TYPES,
   NOTEBOOK_GRID_CAPACITY,
   NOTEBOOK_GRID_COLUMN_COUNT,
@@ -86,13 +87,12 @@ const CELLS_TABLE_DDL = `
   );`;
 
 describe("fixed notebook grid schema 22", () => {
-  it("exports the bounded address contract and the fifteen explicit cell types", () => {
+  it("exports the bounded address contract and the fourteen explicit cell types", () => {
     expect(NOTEBOOK_CELL_TYPES).toEqual([
       "audio",
       "image",
       "video",
       "extract_audio",
-      "extract_frame",
       "split_video",
       "prompt",
       "character",
@@ -104,6 +104,9 @@ describe("fixed notebook grid schema 22", () => {
       "concat",
       "splice",
     ]);
+    expect(LEGACY_NOTEBOOK_CELL_TYPE_ALIASES).toEqual({
+      extract_frame: "image",
+    });
     expect(CELLS_TABLE_COLUMNS).toEqual([
       "notebook_id",
       "cell_id",
@@ -324,7 +327,7 @@ describe("fixed notebook grid schema 22", () => {
       reloaded.cells.find((cell) => cell.type === "analyze")?.slot,
     ).toEqual({
       row: 0,
-      column: 8,
+      column: 7,
     });
     expect(
       reloaded.cells.find((cell) => cell.type === "analyze"),
@@ -348,7 +351,7 @@ describe("fixed notebook grid schema 22", () => {
       .get(notebook.id) as Record<string, unknown>;
     expect(Object.keys(raw)).toHaveLength(14);
     expect(raw.grid_row).toBe(0);
-    expect(raw.grid_column).toBe(8);
+    expect(raw.grid_column).toBe(7);
     expect(raw.provider).toBe("kie");
     database.close();
   });
@@ -368,6 +371,68 @@ describe("fixed notebook grid schema 22", () => {
         .run(notebook.id),
     ).toThrow();
     database.close();
+  });
+
+  it("aliases stored extract_frame rows to image on read and rejects new writes", async () => {
+    const { root, engine } = await setup();
+    const notebook = value(await engine.notebooks.create("Legacy frame"));
+    const legacy = engine.notebooks.createCell({
+      type: "image",
+      label: "First frame",
+      slot: { row: 0, column: 1 },
+      inputs: { frameMode: "first" },
+    });
+    value(
+      await engine.notebooks.write({
+        ...notebook,
+        cells: [legacy],
+        edges: [],
+      }),
+    );
+    engine.close();
+
+    // The cells-table CHECK still accepts the retired type on purpose, so
+    // history restores of legacy rows keep working.
+    const database = new DatabaseSync(path.join(root, "data", "videobook.db"));
+    database
+      .prepare(
+        "UPDATE cells SET type='extract_frame' WHERE notebook_id=? AND cell_id=?",
+      )
+      .run(notebook.id, legacy.id);
+    // Dolt-commit the seeded row so the clean-worktree guard accepts the
+    // catalog on reopen.
+    database.prepare("SELECT dolt_add('cells') AS result").get();
+    database
+      .prepare("SELECT dolt_commit('-m', ?, '--author', ?) AS hash")
+      .get("seed legacy extract_frame row", "grid-v13 test <test@videobook>");
+    database.close();
+
+    const reopened = createEngine({ rootDir: root });
+    await reopened.ready;
+    const reloaded = value(reopened.notebooks.read(notebook.id));
+    expect(reloaded.cells).toMatchObject([
+      {
+        id: legacy.id,
+        type: "image",
+        label: "First frame",
+        inputs: { frameMode: "first" },
+      },
+    ]);
+
+    const rejected = await reopened.notebooks.write({
+      ...reloaded,
+      cells: [
+        {
+          ...reloaded.cells[0],
+          type: "extract_frame",
+        } as unknown as NotebookCell,
+      ],
+    });
+    expect(rejected).toMatchObject({
+      ok: false,
+      error: { message: "Invalid cell type: extract_frame" },
+    });
+    reopened.close();
   });
 
   it("allows only one edge per named target input", async () => {

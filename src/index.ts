@@ -160,6 +160,7 @@ export {
 } from "./fork.js";
 export type { StoredObject } from "./cas.js";
 export {
+  LEGACY_NOTEBOOK_CELL_TYPE_ALIASES,
   NOTEBOOK_CELL_TYPES,
   RUNTIME_TABLES,
   SCHEMA_VERSION,

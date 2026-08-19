@@ -6,7 +6,6 @@ export const NOTEBOOK_CELL_TYPES = [
   "image",
   "video",
   "extract_audio",
-  "extract_frame",
   "split_video",
   "prompt",
   "character",
@@ -20,6 +19,16 @@ export const NOTEBOOK_CELL_TYPES = [
 ] as const;
 
 export type NotebookCellType = (typeof NOTEBOOK_CELL_TYPES)[number];
+
+// Cell types that were removed from the union but may still exist in stored
+// rows (the cells-table CHECK below deliberately keeps accepting them so
+// history.restore can reinsert legacy rows). Reads map them to their modern
+// equivalent; writes stay strict.
+export const LEGACY_NOTEBOOK_CELL_TYPE_ALIASES: Readonly<
+  Record<string, NotebookCellType>
+> = {
+  extract_frame: "image",
+};
 
 // The staging allowlist is also the restore table list: history.restore
 // reloads every table below from its dolt_at_* projection, deleting in
