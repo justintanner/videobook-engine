@@ -741,4 +741,83 @@ describe("relocated job queue, pending, failures, locks, and recovery", () => {
     expect(value(reopened.jobs.recoverAll())).toEqual({ recovered: 0 });
     reopened.close();
   });
+
+  it("enqueues, runs a handler, and waits for the native queue result", async () => {
+    const { engine } = await setup();
+    const runner = engine.jobs.queue.createRunner({
+      concurrency: 2,
+      pollIntervalMs: 25,
+      resolveHandler: (type) =>
+        type === "noop"
+          ? async (job) => ({ ok: true, ref: job.payload.ref })
+          : null,
+    });
+    runner.start();
+    try {
+      const enqueued = engine.jobs.queue.enqueue({
+        type: "noop",
+        payload: { ref: "abc" },
+        dedupeKey: "test-job-1",
+      });
+      const result = (await runner.waitFor(enqueued.job.id, 5_000)) as {
+        ok: boolean;
+        ref: string;
+      };
+      expect(result.ok).toBe(true);
+      expect(result.ref).toBe("abc");
+    } finally {
+      await runner.stop();
+    }
+    engine.close();
+  });
+
+  it("keeps completed media ready when an auxiliary semantic job lease expires", async () => {
+    const { engine } = await setup();
+    const artifact = value(await engine.artifacts.create("image", "semantic-expiry"));
+    value(
+      await engine.files.write(
+        artifact.artifactId,
+        "original.jpg",
+        Buffer.from("finished-media"),
+      ),
+    );
+
+    const enqueued = engine.jobs.queue.enqueue({
+      type: "semantic_index",
+      payload: {
+        type: "semantic_index",
+        bookId: engine.book.get().bookId,
+        assetId: artifact.artifactId,
+      },
+    });
+    expect(enqueued.job.artifactId).toBeNull();
+
+    const runner = engine.jobs.queue.createRunner({
+      concurrency: 1,
+      leaseMs: 20,
+      pollIntervalMs: 1,
+      reapIntervalMs: 5,
+      resolveHandler: (type) =>
+        type === "semantic_index"
+          ? async () => {
+              await new Promise((resolve) => setTimeout(resolve, 75));
+              return { success: true };
+            }
+          : null,
+    });
+    runner.start();
+    try {
+      await expect(runner.waitFor(enqueued.job.id, 2_000)).rejects.toThrow(
+        "Job lease expired",
+      );
+    } finally {
+      await runner.stop();
+    }
+
+    expect(await engine.status.get(artifact.artifactId)).toMatchObject({
+      ok: true,
+      value: "ready",
+    });
+    engine.close();
+  });
 });
