@@ -1212,14 +1212,14 @@ function addReferenceSignals(
   }
 }
 
-interface OrderedEmbedding {
-  segment: SegmentRow;
-  range: SourceRange;
-  vector: Float32Array;
-}
-
 interface VectorEmbedding {
   vector: Float32Array;
+  range?: SourceRange;
+}
+
+interface OrderedEmbedding extends VectorEmbedding {
+  segment: SegmentRow;
+  range: SourceRange;
 }
 
 function addOrderedVideoSignals(
@@ -1323,7 +1323,9 @@ function addOrderedVideoVectorSignals(
           sum + cosineSimilarity(item.vector, window[index]!.vector),
         0,
       ) / sample.length;
-      const coherence = transitionCoherence(sample, window);
+      const coherence =
+        transitionCoherence(sample, window) * 0.75
+        + temporalContinuity(window) * 0.25;
       windows.push({
         values: window,
         score: aligned * 0.75 + coherence * 0.25,
@@ -1356,6 +1358,14 @@ function addOrderedVideoVectorSignals(
             first.range.startTick + Math.floor(combined.durationTicks / 2),
         },
         signals: [
+          ...(isExactOrderedWindow(sample, window.values)
+            ? [{
+                kind: "exact" as const,
+                rank: 1,
+                score: 1,
+                explanation: "Exact source bytes and ordered range matched",
+              }]
+            : []),
           {
             kind: "visual",
             rank: index + 1,
@@ -1419,6 +1429,58 @@ function transitionCoherence(
     );
   }
   return score / (query.length - 1);
+}
+
+function temporalContinuity(candidate: OrderedEmbedding[]): number {
+  if (candidate.length < 2) return 1;
+  let score = 0;
+  for (let index = 1; index < candidate.length; index += 1) {
+    const previous = candidate[index - 1]!.range;
+    const current = candidate[index]!.range;
+    const gapMs = Math.max(
+      0,
+      sourceTickToMs(current.startTick, current)
+        - sourceTickToMs(sourceRangeEndTick(previous), previous),
+    );
+    const scaleMs = Math.max(
+      1,
+      (sourceTickToMs(previous.durationTicks, previous)
+        + sourceTickToMs(current.durationTicks, current)) / 2,
+    );
+    score += 1 / (1 + gapMs / scaleMs);
+  }
+  return score / (candidate.length - 1);
+}
+
+function isExactOrderedWindow(
+  query: VectorEmbedding[],
+  candidate: OrderedEmbedding[],
+): boolean {
+  return query.length === candidate.length && query.every((item, index) => {
+    const reference = item.range;
+    const match = candidate[index]?.range;
+    return Boolean(
+      reference
+      && match
+      && reference.objectHash === match.objectHash
+      && nearlyEqual(
+        sourceTickToMs(reference.startTick, reference),
+        sourceTickToMs(match.startTick, match),
+      )
+      && nearlyEqual(
+        sourceTickToMs(reference.durationTicks, reference),
+        sourceTickToMs(match.durationTicks, match),
+      ),
+    );
+  });
+}
+
+function sourceTickToMs(tick: number, range: SourceRange): number {
+  return (tick * range.timeBase.numerator * 1_000) / range.timeBase.denominator;
+}
+
+function nearlyEqual(left: number, right: number): boolean {
+  return Math.abs(left - right) <= 1e-6;
 }
 
 function vectorDifference(
@@ -1493,15 +1555,20 @@ function referenceEmbeddingRows(
   const segments = referenceSegments(context, reference, generation.generation);
   if (segments.length === 0) return [];
   const placeholders = segments.map(() => "?").join(",");
+  const modality = reference.kind === "audio" ? "audio" : "visual";
   return context.store.db
     .prepare(
       `SELECT segment_id, embedding_space, modality, dimensions, vector_blob
        FROM runtime_segment_embeddings
        WHERE segment_id IN (${placeholders})
-         AND embedding_space=?
+         AND embedding_space=? AND modality=?
        ORDER BY segment_id`,
     )
-    .all(...segments, generation.embedding_space) as unknown as EmbeddingRow[];
+    .all(
+      ...segments,
+      generation.embedding_space,
+      modality,
+    ) as unknown as EmbeddingRow[];
 }
 
 function referenceSegments(

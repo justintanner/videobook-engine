@@ -545,6 +545,71 @@ describe("progressive temporal multimodal search", () => {
     engine.close();
   });
 
+  it("keeps non-visual embeddings out of reverse-image references", async () => {
+    const engine = await setup();
+    const target = await media(engine, "video", "visual-target");
+    const distractor = await media(engine, "video", "audio-shaped-distractor");
+    const reference = await still(engine, "mixed-modality-reference");
+    commit(engine, target.artifact, target.stream.objectHash, "visual", [
+      timedObservation(
+        target.artifact,
+        target.stream,
+        0,
+        1_000,
+        [1, 0, 0],
+        [],
+        "visual-target",
+      ),
+    ]);
+    commit(engine, distractor.artifact, distractor.stream.objectHash, "visual", [
+      timedObservation(
+        distractor.artifact,
+        distractor.stream,
+        0,
+        1_000,
+        [0.4, 0.9165, 0],
+        [],
+        "visual-distractor",
+      ),
+    ]);
+    commit(engine, reference.artifact, reference.objectHash, "visual", [{
+      artifactId: reference.artifact.artifactId,
+      objectHash: reference.objectHash,
+      sourcePath: "original.jpg",
+      kind: "frame",
+      segmentationVersion: "fixture-1",
+      texts: [],
+      embeddings: [
+        {
+          modality: "visual",
+          embeddingSpace: manifest.embeddingSpace,
+          vector: [1, 0, 0],
+          sourceHash: `${reference.objectHash}:visual`,
+        },
+        {
+          modality: "audio",
+          embeddingSpace: manifest.embeddingSpace,
+          vector: [0, 1, 0],
+          sourceHash: `${reference.objectHash}:audio`,
+        },
+      ],
+      fingerprints: [],
+    }]);
+    value(engine.temporalSearch.activate(manifest.manifestId, "generation-1"));
+
+    const result = value(
+      await engine.temporalSearch.query({
+        reference: { kind: "image", artifact: reference.artifact.artifactId },
+        sourceArtifactIds: [
+          target.artifact.artifactId,
+          distractor.artifact.artifactId,
+        ],
+      }),
+    );
+    expect(result.hits[0]?.artifactId).toBe(target.artifact.artifactId);
+    engine.close();
+  });
+
   it("combines quoted transcript and OCR evidence with stable pagination", async () => {
     const engine = await setup();
     const first = await media(engine, "video", "speech-one");
@@ -919,6 +984,141 @@ describe("progressive temporal multimodal search", () => {
       ok: false,
       error: { code: "INVALID_INPUT" },
     });
+    engine.close();
+  });
+
+  it("preserves an exact signal for the same ordered source bytes and range", async () => {
+    const engine = await setup();
+    const queryVideo = await media(engine, "video", "identical-action");
+    const duplicate = await media(engine, "video", "identical-action");
+    const vectors = [
+      [1, 0, 0],
+      [0, 1, 0],
+      [0, 0, 1],
+    ];
+    const observations = (
+      item: { artifact: Artifact; stream: ArtifactStream },
+    ) => vectors.map((vector, index) =>
+      timedObservation(
+        item.artifact,
+        item.stream,
+        index * 1_000,
+        1_000,
+        vector,
+        [],
+        `identical-${index}`,
+      )
+    );
+    commit(
+      engine,
+      queryVideo.artifact,
+      queryVideo.stream.objectHash,
+      "visual",
+      observations(queryVideo),
+    );
+    commit(
+      engine,
+      duplicate.artifact,
+      duplicate.stream.objectHash,
+      "visual",
+      observations(duplicate),
+    );
+    value(engine.temporalSearch.activate(manifest.manifestId, "generation-1"));
+
+    const result = value(
+      await engine.temporalSearch.query({
+        reference: {
+          kind: "video",
+          range: {
+            streamId: queryVideo.stream.streamId,
+            objectHash: queryVideo.stream.objectHash,
+            startTick: 0,
+            durationTicks: 3_000,
+            timeBase: queryVideo.stream.timeBase,
+          },
+        },
+        sourceArtifactIds: [duplicate.artifact.artifactId],
+      }),
+    );
+    expect(result.hits[0]?.signals).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "exact" }),
+      expect.objectContaining({ kind: "visual" }),
+    ]));
+    engine.close();
+  });
+
+  it("penalizes ordered video moments separated by large temporal gaps", async () => {
+    const engine = await setup();
+    const queryVideo = await media(engine, "video", "gap-query");
+    const contiguous = await media(engine, "video", "gap-contiguous");
+    const sparse = await media(engine, "video", "gap-sparse");
+    const vectors = [
+      [1, 0, 0],
+      [0, 1, 0],
+      [0, 0, 1],
+    ];
+    const observations = (
+      item: { artifact: Artifact; stream: ArtifactStream },
+      starts: number[],
+    ) => vectors.map((vector, index) =>
+      timedObservation(
+        item.artifact,
+        item.stream,
+        starts[index]!,
+        1_000,
+        vector,
+        [],
+        `${item.artifact.artifactId}-${index}`,
+      )
+    );
+    commit(
+      engine,
+      queryVideo.artifact,
+      queryVideo.stream.objectHash,
+      "visual",
+      observations(queryVideo, [0, 1_000, 2_000]),
+    );
+    commit(
+      engine,
+      contiguous.artifact,
+      contiguous.stream.objectHash,
+      "visual",
+      observations(contiguous, [0, 1_000, 2_000]),
+    );
+    commit(
+      engine,
+      sparse.artifact,
+      sparse.stream.objectHash,
+      "visual",
+      observations(sparse, [0, 10_000, 20_000]),
+    );
+    value(engine.temporalSearch.activate(manifest.manifestId, "generation-1"));
+
+    const result = value(
+      await engine.temporalSearch.query({
+        reference: {
+          kind: "video",
+          range: {
+            streamId: queryVideo.stream.streamId,
+            objectHash: queryVideo.stream.objectHash,
+            startTick: 0,
+            durationTicks: 3_000,
+            timeBase: queryVideo.stream.timeBase,
+          },
+        },
+        sourceArtifactIds: [
+          contiguous.artifact.artifactId,
+          sparse.artifact.artifactId,
+        ],
+      }),
+    );
+    const contiguousScore = result.hits
+      .find((hit) => hit.artifactId === contiguous.artifact.artifactId)
+      ?.signals.find((signal) => signal.kind === "visual")?.score;
+    const sparseScore = result.hits
+      .find((hit) => hit.artifactId === sparse.artifact.artifactId)
+      ?.signals.find((signal) => signal.kind === "visual")?.score;
+    expect(contiguousScore).toBeGreaterThan(sparseScore!);
     engine.close();
   });
 });

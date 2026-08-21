@@ -3,6 +3,7 @@ import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 
 import sharp from "sharp";
@@ -12,9 +13,10 @@ import { createEngine, type Engine } from "../src/engine.js";
 
 const run = promisify(execFile);
 const imageSource = process.env.VIDEOBOOK_E2E_IMAGE ??
-  "/Users/jwt/.codex/attachments/68ea19ef-e59e-4c0b-8d02-47fdcbc1f9e9/image-1.jpg";
-const imageDuplicate = path.resolve("vancat_profile.jpg");
-const videoSource = process.env.VIDEOBOOK_E2E_VIDEO ?? path.resolve("vancat.mp4");
+  fileURLToPath(new URL("../fixtures/media/vancat_profile.jpg", import.meta.url));
+const imageDuplicate = imageSource;
+const videoSource = process.env.VIDEOBOOK_E2E_VIDEO ??
+  fileURLToPath(new URL("../fixtures/media/vancat.mp4", import.meta.url));
 const realDescribe = process.env.VIDEOBOOK_REAL_MEDIA_E2E === "1" ? describe : describe.skip;
 const realAudioDescribe = process.env.VIDEOBOOK_REAL_AUDIO_E2E === "1"
   ? describe
