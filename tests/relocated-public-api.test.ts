@@ -552,6 +552,33 @@ describe("relocated job queue, pending, failures, locks, and recovery", () => {
     engine.close();
   });
 
+  it("dequeues preferred job types before older ordinary work", async () => {
+    const { engine } = await setup();
+    const firstOrdinary = engine.jobs.queue.enqueue({
+      type: "background",
+      payload: { ordinal: 1 },
+    });
+    const preferred = engine.jobs.queue.enqueue({
+      type: "interactive",
+      payload: { ordinal: 2 },
+    });
+    const secondOrdinary = engine.jobs.queue.enqueue({
+      type: "background",
+      payload: { ordinal: 3 },
+    });
+
+    expect(
+      engine.jobs.queue.dequeue(process.pid, 30_000, ["interactive"])?.id,
+    ).toBe(preferred.job.id);
+    expect(
+      engine.jobs.queue.dequeue(process.pid, 30_000, ["interactive"])?.id,
+    ).toBe(firstOrdinary.job.id);
+    expect(
+      engine.jobs.queue.dequeue(process.pid, 30_000, ["interactive"])?.id,
+    ).toBe(secondOrdinary.job.id);
+    engine.close();
+  });
+
   it("heartbeats, lists, counts, looks up by external id, and aborts an artifact's jobs", async () => {
     const { engine } = await setup();
     const artifact = value(await engine.artifacts.create("image", "job-target"));
@@ -765,6 +792,45 @@ describe("relocated job queue, pending, failures, locks, and recovery", () => {
       };
       expect(result.ok).toBe(true);
       expect(result.ref).toBe("abc");
+    } finally {
+      await runner.stop();
+    }
+    engine.close();
+  });
+
+  it("runs preferred job types first while preserving class order", async () => {
+    const { engine } = await setup();
+    const order: number[] = [];
+    const jobs = [
+      engine.jobs.queue.enqueue({
+        type: "background",
+        payload: { ordinal: 1 },
+      }),
+      engine.jobs.queue.enqueue({
+        type: "interactive",
+        payload: { ordinal: 2 },
+      }),
+      engine.jobs.queue.enqueue({
+        type: "background",
+        payload: { ordinal: 3 },
+      }),
+      engine.jobs.queue.enqueue({
+        type: "interactive",
+        payload: { ordinal: 4 },
+      }),
+    ];
+    const runner = engine.jobs.queue.createRunner({
+      concurrency: 1,
+      pollIntervalMs: 5,
+      preferredJobTypes: ["interactive"],
+      resolveHandler: () => async (job) => {
+        order.push(Number(job.payload.ordinal));
+      },
+    });
+    runner.start();
+    try {
+      await Promise.all(jobs.map(({ job }) => runner.waitFor(job.id, 5_000)));
+      expect(order).toEqual([2, 4, 1, 3]);
     } finally {
       await runner.stop();
     }

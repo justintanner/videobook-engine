@@ -160,14 +160,25 @@ export class JobQueue {
     return this.list(options).length;
   }
 
-  dequeue(pid: number, leaseMs: number): Job | null {
+  dequeue(
+    pid: number,
+    leaseMs: number,
+    preferredJobTypes: readonly string[] = [],
+  ): Job | null {
+    const preferredTypes = [...new Set(
+      preferredJobTypes.filter((type) => type.length > 0),
+    )];
+    const preferredOrder = preferredTypes.length > 0
+      ? `CASE WHEN type IN (${preferredTypes.map(() => "?").join(", ")}) THEN 0 ELSE 1 END, `
+      : "";
     return this.store.runtime((now) => {
       const candidate = this.store.db
         .prepare(
           `SELECT id FROM runtime_jobs
-           WHERE state = 'queued' ORDER BY enqueued_at, id LIMIT 1`,
+           WHERE state = 'queued'
+           ORDER BY ${preferredOrder}enqueued_at, id LIMIT 1`,
         )
-        .get() as unknown as { id: number } | undefined;
+        .get(...preferredTypes) as unknown as { id: number } | undefined;
       if (!candidate) return null;
       const changed = this.store.db
         .prepare(
@@ -532,7 +543,11 @@ export class QueueRunner {
   private pump(): void {
     if (!this.running) return;
     while (this.active.size < this.config.concurrency) {
-      const job = this.queue.dequeue(process.pid, this.leaseMs);
+      const job = this.queue.dequeue(
+        process.pid,
+        this.leaseMs,
+        this.config.preferredJobTypes,
+      );
       if (!job) break;
       const task = this.run(job);
       this.active.set(job.id, task);
