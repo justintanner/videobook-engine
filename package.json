@@ -1,6 +1,6 @@
 {
   "name": "videobook-engine",
-  "version": "5.0.2",
+  "version": "5.0.3",
   "description": "Dolt-native local-first storage engine for Videobook",
   "type": "module",
   "exports": {

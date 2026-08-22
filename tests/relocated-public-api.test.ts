@@ -579,6 +579,32 @@ describe("relocated job queue, pending, failures, locks, and recovery", () => {
     engine.close();
   });
 
+  it("restricts dequeue to configured job types", async () => {
+    const { engine } = await setup();
+    const ordinary = engine.jobs.queue.enqueue({
+      type: "background",
+      payload: {},
+    });
+    const interactive = engine.jobs.queue.enqueue({
+      type: "interactive",
+      payload: {},
+    });
+
+    expect(
+      engine.jobs.queue.dequeue(
+        process.pid,
+        30_000,
+        [],
+        ["interactive"],
+      )?.id,
+    ).toBe(interactive.job.id);
+    expect(
+      engine.jobs.queue.dequeue(process.pid, 30_000, [], ["interactive"]),
+    ).toBeNull();
+    expect(engine.jobs.queue.get(ordinary.job.id)?.state).toBe("queued");
+    engine.close();
+  });
+
   it("heartbeats, lists, counts, looks up by external id, and aborts an artifact's jobs", async () => {
     const { engine } = await setup();
     const artifact = value(await engine.artifacts.create("image", "job-target"));
@@ -831,6 +857,34 @@ describe("relocated job queue, pending, failures, locks, and recovery", () => {
     try {
       await Promise.all(jobs.map(({ job }) => runner.waitFor(job.id, 5_000)));
       expect(order).toEqual([2, 4, 1, 3]);
+    } finally {
+      await runner.stop();
+    }
+    engine.close();
+  });
+
+  it("keeps a restricted runner idle until an allowed job arrives", async () => {
+    const { engine } = await setup();
+    const ordinary = engine.jobs.queue.enqueue({
+      type: "background",
+      payload: {},
+    });
+    const runner = engine.jobs.queue.createRunner({
+      concurrency: 1,
+      pollIntervalMs: 5,
+      jobTypes: ["interactive"],
+      resolveHandler: (type) => type === "interactive" ? async () => "ok" : null,
+    });
+    runner.start();
+    try {
+      await new Promise<void>((resolve) => setTimeout(resolve, 25));
+      expect(engine.jobs.queue.get(ordinary.job.id)?.state).toBe("queued");
+      const interactive = engine.jobs.queue.enqueue({
+        type: "interactive",
+        payload: {},
+      });
+      await expect(runner.waitFor(interactive.job.id, 5_000)).resolves.toBe("ok");
+      expect(engine.jobs.queue.get(ordinary.job.id)?.state).toBe("queued");
     } finally {
       await runner.stop();
     }

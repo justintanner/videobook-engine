@@ -164,10 +164,18 @@ export class JobQueue {
     pid: number,
     leaseMs: number,
     preferredJobTypes: readonly string[] = [],
+    jobTypes?: readonly string[],
   ): Job | null {
     const preferredTypes = [...new Set(
       preferredJobTypes.filter((type) => type.length > 0),
     )];
+    const allowedTypes = jobTypes === undefined
+      ? null
+      : [...new Set(jobTypes.filter((type) => type.length > 0))];
+    if (allowedTypes?.length === 0) return null;
+    const allowedFilter = allowedTypes
+      ? ` AND type IN (${allowedTypes.map(() => "?").join(", ")})`
+      : "";
     const preferredOrder = preferredTypes.length > 0
       ? `CASE WHEN type IN (${preferredTypes.map(() => "?").join(", ")}) THEN 0 ELSE 1 END, `
       : "";
@@ -175,10 +183,12 @@ export class JobQueue {
       const candidate = this.store.db
         .prepare(
           `SELECT id FROM runtime_jobs
-           WHERE state = 'queued'
+           WHERE state = 'queued'${allowedFilter}
            ORDER BY ${preferredOrder}enqueued_at, id LIMIT 1`,
         )
-        .get(...preferredTypes) as unknown as { id: number } | undefined;
+        .get(...(allowedTypes ?? []), ...preferredTypes) as unknown as
+          | { id: number }
+          | undefined;
       if (!candidate) return null;
       const changed = this.store.db
         .prepare(
@@ -547,6 +557,7 @@ export class QueueRunner {
         process.pid,
         this.leaseMs,
         this.config.preferredJobTypes,
+        this.config.jobTypes,
       );
       if (!job) break;
       const task = this.run(job);

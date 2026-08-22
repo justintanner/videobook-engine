@@ -635,6 +635,7 @@ export interface RunnerConfig {
   leaseMs?: number;
   pollIntervalMs?: number;
   reapIntervalMs?: number;
+  jobTypes?: readonly string[];
   preferredJobTypes?: readonly string[];
   resolveHandler: (type: string) => JobHandler | null;
 }
