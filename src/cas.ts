@@ -98,7 +98,17 @@ export class ObjectStore {
   async materialize(hash: string, destinationPath: string): Promise<void> {
     await this.ensureLocal(hash);
     await mkdir(path.dirname(destinationPath), { recursive: true });
-    await copyFile(this.pathFor(hash), destinationPath);
+    const temporary = `${destinationPath}.${uuidv7()}.materialize`;
+    try {
+      await copyFile(
+        this.pathFor(hash),
+        temporary,
+        constants.COPYFILE_EXCL,
+      );
+      await rename(temporary, destinationPath);
+    } finally {
+      await rm(temporary, { force: true }).catch(() => undefined);
+    }
   }
 
   async publish(hash: string, expectedSize: number): Promise<void> {
