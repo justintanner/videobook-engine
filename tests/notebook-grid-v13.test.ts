@@ -584,7 +584,7 @@ describe("fixed notebook grid schema 23", () => {
     database.close();
   });
 
-  it.each([11, 12, 18, 19, 20, 21, 22])(
+  it.each([11, 12, 18, 19, 20, 21])(
     "rejects schema-v%s catalogs without migration",
     async (version) => {
       const { root, engine } = await setup();

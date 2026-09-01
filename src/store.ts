@@ -16,6 +16,7 @@ import type {
   SemanticCommitBoundary,
 } from "./engine-types.js";
 import { initialOrderKeys } from "./order-keys.js";
+import { applyV22NotebookGridMigration } from "./migrate-grid-v22.js";
 import {
   RUNTIME_SCHEMA_SQL,
   RUNTIME_TABLES,
@@ -264,7 +265,7 @@ export class DoltStore {
       this.assertOnlyVersionedStaged();
       this.sqlCommit("Initialize Videobook book");
     } else {
-      const row = this.db
+      let row = this.db
         .prepare("SELECT version FROM engine_schema WHERE singleton = 1")
         .get() as unknown as SchemaRow | undefined;
       if (!row) {
@@ -275,6 +276,10 @@ export class DoltStore {
             "Database schema unknown is not supported by engine schema " +
             `${SCHEMA_VERSION}`,
         });
+      }
+      if (row.version === 22) {
+        this.migrateV22ToV23();
+        row = { version: SCHEMA_VERSION };
       }
       if (row.version !== SCHEMA_VERSION) {
         this.db.close();
@@ -316,6 +321,22 @@ export class DoltStore {
     this.assertRuntimeUnstaged();
     this.recoverOutbox();
     this.verifyCleanSemanticWorktree();
+  }
+
+  private migrateV22ToV23(): void {
+    applyV22NotebookGridMigration(this.db);
+    const status = this.db.doltStatus();
+    this.assertOnlyVersionedStaged(status);
+    const dirty = uniqueSemanticTables(
+      status
+        .map((entry) => entry.table_name)
+        .filter(isSemanticTable)
+        .filter((table) => this.hasWorkingDiff(table)),
+    );
+    this.stageTables(
+      dirty.length > 0 ? dirty : ["cells", "engine_schema"],
+    );
+    this.sqlCommit("Migrate notebook grid from schema 22 to 23");
   }
 
   private ensureIgnorePatterns(): void {

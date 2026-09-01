@@ -98,8 +98,7 @@ export const RUNTIME_TABLES = [
   "runtime_text_similarity_chunks",
 ] as const;
 
-const CELLS_TABLE_SQL = `
-  CREATE TABLE IF NOT EXISTS cells (
+export const CELLS_TABLE_DEFINITION = `
     notebook_id TEXT NOT NULL
       REFERENCES notebooks(notebook_id) ON DELETE CASCADE,
     cell_id TEXT NOT NULL,
@@ -125,6 +124,11 @@ const CELLS_TABLE_SQL = `
     output_artifact_id TEXT
       REFERENCES artifacts(artifact_id) ON DELETE RESTRICT,
     PRIMARY KEY(notebook_id, cell_id)
+`;
+
+const CELLS_TABLE_SQL = `
+  CREATE TABLE IF NOT EXISTS cells (
+    ${CELLS_TABLE_DEFINITION}
   );`;
 
 export const SEMANTIC_SCHEMA_SQL = `
