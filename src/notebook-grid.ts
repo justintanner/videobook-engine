@@ -1,10 +1,11 @@
 import type { NotebookGridSlot } from "./notebook/types.js";
 import { NOTEBOOK_GRID_ADDRESS_PATTERN } from "./notebook-mentions.js";
 
-export const NOTEBOOK_GRID_ROW_COUNT = 26;
-export const NOTEBOOK_GRID_COLUMN_COUNT = 13;
+export const NOTEBOOK_GRID_ROW_COUNT = 64;
+export const NOTEBOOK_GRID_COLUMN_COUNT = 8;
 export const NOTEBOOK_GRID_CAPACITY =
   NOTEBOOK_GRID_ROW_COUNT * NOTEBOOK_GRID_COLUMN_COUNT;
+export const NOTEBOOK_GRID_ADDRESS_RANGE = "@a1-@h64";
 export const NOTEBOOK_GRID_FULL_ERROR = "Notebook grid is full";
 
 export function isNotebookGridSlot(
@@ -23,13 +24,13 @@ export function assertNotebookGridSlot(
   label = "Notebook grid slot",
 ): void {
   if (!isNotebookGridSlot(slot)) {
-    throw new Error(`${label} must be within @a1-@z13`);
+    throw new Error(`${label} must be within ${NOTEBOOK_GRID_ADDRESS_RANGE}`);
   }
 }
 
 export function notebookGridAddress(slot: NotebookGridSlot): string {
   assertNotebookGridSlot(slot);
-  return `${String.fromCharCode(97 + slot.row)}${slot.column + 1}`;
+  return `${String.fromCharCode(97 + slot.column)}${slot.row + 1}`;
 }
 
 export function notebookGridTag(slot: NotebookGridSlot): string {
@@ -43,8 +44,8 @@ export function parseNotebookGridAddress(
   if (!match) return undefined;
   const address = match[1]!;
   return {
-    row: address[0]!.toLowerCase().charCodeAt(0) - 97,
-    column: Number(address.slice(1)) - 1,
+    column: address[0]!.toLowerCase().charCodeAt(0) - 97,
+    row: Number(address.slice(1)) - 1,
   };
 }
 
@@ -121,7 +122,7 @@ export function nearestOriginNotebookGridSlot(
 }
 
 /**
- * Next free slot scanning down the letter axis from `anchor` (inclusive).
+ * Next free slot scanning down the row axis from `anchor` (inclusive).
  * Same column first; when exhausted, spill rightward column-by-column from
  * the anchor row; then origin-proximity fallback.
  */
@@ -151,7 +152,7 @@ export function nextVerticalSlotFrom(
 }
 
 /**
- * Next free slot scanning right along the number axis from `anchor` (inclusive).
+ * Next free slot scanning right along the column axis from `anchor` (inclusive).
  * Same row first; when exhausted, spill downward row-by-row from the anchor
  * column; then origin-proximity fallback.
  */

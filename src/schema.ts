@@ -112,8 +112,8 @@ const CELLS_TABLE_SQL = `
       )
     ),
     label TEXT,
-    grid_row INTEGER NOT NULL CHECK (grid_row BETWEEN 0 AND 25),
-    grid_column INTEGER NOT NULL CHECK (grid_column BETWEEN 0 AND 12),
+    grid_row INTEGER NOT NULL CHECK (grid_row BETWEEN 0 AND 63),
+    grid_column INTEGER NOT NULL CHECK (grid_column BETWEEN 0 AND 7),
     output_entity_id TEXT
       REFERENCES entities(entity_id) ON DELETE RESTRICT,
     prompt TEXT,

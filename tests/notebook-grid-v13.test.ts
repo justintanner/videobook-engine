@@ -71,8 +71,8 @@ const CELLS_TABLE_DDL = `
       )
     ),
     label TEXT,
-    grid_row INTEGER NOT NULL CHECK (grid_row BETWEEN 0 AND 25),
-    grid_column INTEGER NOT NULL CHECK (grid_column BETWEEN 0 AND 12),
+    grid_row INTEGER NOT NULL CHECK (grid_row BETWEEN 0 AND 63),
+    grid_column INTEGER NOT NULL CHECK (grid_column BETWEEN 0 AND 7),
     output_entity_id TEXT
       REFERENCES entities(entity_id) ON DELETE RESTRICT,
     prompt TEXT,
@@ -86,7 +86,7 @@ const CELLS_TABLE_DDL = `
     PRIMARY KEY(notebook_id, cell_id)
   );`;
 
-describe("fixed notebook grid schema 22", () => {
+describe("fixed notebook grid schema 23", () => {
   it("exports the bounded address contract and the fourteen explicit cell types", () => {
     expect(NOTEBOOK_CELL_TYPES).toEqual([
       "audio",
@@ -123,16 +123,20 @@ describe("fixed notebook grid schema 22", () => {
       "inputs_json",
       "output_artifact_id",
     ]);
-    expect(SCHEMA_VERSION).toBe(22);
-    expect(NOTEBOOK_GRID_ROW_COUNT).toBe(26);
-    expect(NOTEBOOK_GRID_COLUMN_COUNT).toBe(13);
-    expect(NOTEBOOK_GRID_CAPACITY).toBe(338);
-    expect(parseNotebookGridAddress("@A13")).toEqual({ row: 0, column: 12 });
-    expect(parseNotebookGridAddress("z13")).toEqual({ row: 25, column: 12 });
-    expect(parseNotebookGridAddress("@a14")).toBeUndefined();
+    expect(SCHEMA_VERSION).toBe(23);
+    expect(NOTEBOOK_GRID_ROW_COUNT).toBe(64);
+    expect(NOTEBOOK_GRID_COLUMN_COUNT).toBe(8);
+    expect(NOTEBOOK_GRID_CAPACITY).toBe(512);
+    expect(parseNotebookGridAddress("@H1")).toEqual({ row: 0, column: 7 });
+    expect(parseNotebookGridAddress("a64")).toEqual({ row: 63, column: 0 });
+    expect(parseNotebookGridAddress("h64")).toEqual({ row: 63, column: 7 });
+    expect(parseNotebookGridAddress("@a65")).toBeUndefined();
+    expect(parseNotebookGridAddress("@i1")).toBeUndefined();
     expect(parseNotebookGridAddress("@aa1")).toBeUndefined();
-    expect(notebookGridAddress({ row: 25, column: 12 })).toBe("z13");
+    expect(notebookGridAddress({ row: 63, column: 7 })).toBe("h64");
     expect(notebookGridTag({ row: 0, column: 0 })).toBe("@a1");
+    expect(notebookGridTag({ row: 0, column: 1 })).toBe("@b1");
+    expect(notebookGridTag({ row: 1, column: 0 })).toBe("@a2");
   });
 
   it("pins the label-only cells DDL and its live column projection", async () => {
@@ -580,7 +584,7 @@ describe("fixed notebook grid schema 22", () => {
     database.close();
   });
 
-  it.each([11, 12, 18, 19, 20, 21])(
+  it.each([11, 12, 18, 19, 20, 21, 22])(
     "rejects schema-v%s catalogs without migration",
     async (version) => {
       const { root, engine } = await setup();
@@ -594,7 +598,7 @@ describe("fixed notebook grid schema 22", () => {
       database.close();
 
       expect(() => createEngine({ rootDir: root })).toThrow(
-        `Database schema ${version} is not supported by engine schema 22`,
+        `Database schema ${version} is not supported by engine schema 23`,
       );
     },
   );
@@ -650,14 +654,14 @@ describe("fixed notebook grid schema 22", () => {
 
     const wide = await engine.notebooks.write({
       ...notebook,
-      cells: [{ ...first, slot: { row: 0, column: 13 } }],
+      cells: [{ ...first, slot: { row: 0, column: 8 } }],
       edges: [],
     });
     expect(wide.ok).toBe(false);
 
     const low = await engine.notebooks.write({
       ...notebook,
-      cells: [{ ...first, slot: { row: 26, column: 0 } }],
+      cells: [{ ...first, slot: { row: 64, column: 0 } }],
       edges: [],
     });
     expect(low.ok).toBe(false);
@@ -787,7 +791,7 @@ describe("fixed notebook grid schema 22", () => {
     database.close();
 
     expect(() => createEngine({ rootDir: root })).toThrow(
-      "Database schema 10 is not supported by engine schema 22",
+      "Database schema 10 is not supported by engine schema 23",
     );
   });
 });

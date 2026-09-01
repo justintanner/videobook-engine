@@ -26,6 +26,7 @@ import {
 import {
   firstEmptyNotebookGridSlots,
   isNotebookGridSlot,
+  NOTEBOOK_GRID_ADDRESS_RANGE,
 } from "./notebook-grid.js";
 import {
   canonicalJson,
@@ -1163,7 +1164,7 @@ function validateCellFields(
   }
   if (!isNotebookGridSlot(cell.slot)) {
     throw new Error(
-      `Cell slot must be within @a1-@z13: ${cell.id}`,
+      `Cell slot must be within ${NOTEBOOK_GRID_ADDRESS_RANGE}: ${cell.id}`,
     );
   }
   if (cell.outputEntityId) {

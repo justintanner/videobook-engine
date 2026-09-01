@@ -100,6 +100,7 @@ export {
   nextHorizontalSlotFrom,
   nextVerticalSlotFrom,
   nextWaveTileSlot,
+  NOTEBOOK_GRID_ADDRESS_RANGE,
   NOTEBOOK_GRID_CAPACITY,
   NOTEBOOK_GRID_COLUMN_COUNT,
   NOTEBOOK_GRID_FULL_ERROR,

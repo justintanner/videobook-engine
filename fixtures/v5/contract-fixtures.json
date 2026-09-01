@@ -1,7 +1,7 @@
 {
   "compatibility": {
     "contractVersion": 1,
-    "schemaVersion": 22,
+    "schemaVersion": 23,
     "minimumReaderContractVersion": 1,
     "legacySchemaVersions": [
       4,
@@ -1481,7 +1481,7 @@
   "migrationDryRun": {
     "contractVersion": 1,
     "sourceSchemaVersion": 4,
-    "destinationSchemaVersion": 22,
+    "destinationSchemaVersion": 23,
     "sourceBookId": "0197-book-v4",
     "sourceHeadRevision": "dolt-v4-head",
     "artifactCount": 8,
@@ -1503,7 +1503,7 @@
   "migrationResult": {
     "contractVersion": 1,
     "sourceSchemaVersion": 4,
-    "destinationSchemaVersion": 22,
+    "destinationSchemaVersion": 23,
     "sourceBookId": "0197-book-v4",
     "sourceHeadRevision": "dolt-v4-head",
     "artifactCount": 8,

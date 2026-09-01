@@ -13,19 +13,20 @@ describe("notebook mention grammar", () => {
     expect(scanNotebookMentions("@a2 likes @img-foo")).toEqual([
       { raw: "@a2", reference: "a2", index: 0, end: 3 },
     ]);
-    expect(scanNotebookMentions("Use @A2, @z13. Keep @vid-yt-3h3i_td5kce whole.")).toEqual([
+    expect(scanNotebookMentions("Use @A2, @h64. Keep @vid-yt-3h3i_td5kce whole.")).toEqual([
       { raw: "@A2", reference: "a2", index: 4, end: 7 },
-      { raw: "@z13", reference: "z13", index: 9, end: 13 },
+      { raw: "@h64", reference: "h64", index: 9, end: 13 },
     ]);
     // Word and hyphen continuations are not grid mentions.
-    expect(scanNotebookMentions("@a2-set @a14 @aa1")).toEqual([]);
+    expect(scanNotebookMentions("@a2-set @a65 @aa1 @i1")).toEqual([]);
   });
 
   it("accepts only in-bounds grid addresses", () => {
     expect(isNotebookGridAddress("@a1")).toBe(true);
-    expect(isNotebookGridAddress("Z13")).toBe(true);
+    expect(isNotebookGridAddress("H64")).toBe(true);
     expect(isNotebookGridAddress(" @A2 ")).toBe(true);
-    expect(isNotebookGridAddress("a14")).toBe(false);
+    expect(isNotebookGridAddress("a65")).toBe(false);
+    expect(isNotebookGridAddress("i1")).toBe(false);
     expect(isNotebookGridAddress("aa1")).toBe(false);
     expect(isNotebookGridAddress("a0")).toBe(false);
     expect(isNotebookGridAddress("@img-foo")).toBe(false);
@@ -33,17 +34,17 @@ describe("notebook mention grammar", () => {
 
   it("reports the active mention prefix at the end of the input", () => {
     expect(notebookMentionPrefixAtEnd("combine @a")).toBe("a");
-    expect(notebookMentionPrefixAtEnd("combine @A13")).toBe("a13");
+    expect(notebookMentionPrefixAtEnd("combine @H64")).toBe("h64");
     expect(notebookMentionPrefixAtEnd("combine @")).toBe("");
     expect(notebookMentionPrefixAtEnd("no mention")).toBeUndefined();
   });
 
   it("replaces exact grid mentions longest-first without prefix collisions", () => {
     expect(replaceNotebookMentions(
-      "Blend @a1 with @A13.",
+      "Blend @a1 with @H64.",
       [
         { reference: "a1", replacement: "the sketch" },
-        { reference: "@a13", replacement: "the render" },
+        { reference: "@h64", replacement: "the render" },
       ],
     )).toBe("Blend the sketch with the render.");
   });
