@@ -61,6 +61,8 @@ export function createMetadataApi(context: EngineContext) {
         artifact: string,
       ): Promise<Result<AudioWaveformRecord, EngineError>> =>
         readWaveform(context, artifact),
+      exists: (artifact: string): Promise<Result<boolean, EngineError>> =>
+        waveformExists(context, artifact),
       delete: (artifact: string): Promise<Result<boolean, EngineError>> =>
         deleteWaveform(context, artifact),
     },
@@ -124,6 +126,20 @@ async function deleteBookMetadata(
       },
     );
     return true;
+  });
+}
+
+/** Whether a waveform is stored, without decoding its peaks. */
+async function waveformExists(
+  context: EngineContext,
+  artifactReference: string,
+): Promise<Result<boolean, EngineError>> {
+  return resultOf(async () => {
+    const artifact = context.artifactRow(artifactReference);
+    const row = context.store.db
+      .prepare("SELECT 1 AS present FROM audio_waveforms WHERE artifact_id=?")
+      .get(artifact.artifact_id);
+    return row !== undefined;
   });
 }
 

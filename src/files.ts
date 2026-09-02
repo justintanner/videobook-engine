@@ -533,17 +533,77 @@ async function evictWorkspace(
   });
 }
 
+interface WorkspaceEntryRow {
+  path: string;
+  hydrated_at: number | null;
+  invalidated_at: number | null;
+  last_accessed_at: number;
+}
+
+/** Bulk manifest reads refresh a hydrated workspace's access time this often. */
+const WORKSPACE_TOUCH_INTERVAL_MS = 60_000;
+
+function workspaceEntry(
+  context: EngineContext,
+  artifactId: string,
+): WorkspaceEntryRow | undefined {
+  return context.store.db
+    .prepare(
+      `SELECT path, hydrated_at, invalidated_at, last_accessed_at
+       FROM runtime_workspace_entries WHERE artifact_id=?`,
+    )
+    .get(artifactId) as unknown as WorkspaceEntryRow | undefined;
+}
+
+function workspaceHydrated(
+  entry: WorkspaceEntryRow | undefined,
+  workspace: string,
+): entry is WorkspaceEntryRow {
+  return entry !== undefined
+    && entry.path === workspace
+    && entry.hydrated_at !== null
+    && entry.invalidated_at === null;
+}
+
+async function isRegularFile(destination: string): Promise<boolean> {
+  try {
+    return (await stat(destination)).isFile();
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
+    throw error;
+  }
+}
+
+/**
+ * Ensures every catalog file of the artifact is present in its workspace.
+ *
+ * A workspace whose runtime entry is hydrated and not invalidated already
+ * holds the current objects: file writes place their new object themselves,
+ * and edits, history restores, merges and evictions clear the hydration
+ * flag. Such a workspace is only checked for files missing on disk, so bulk
+ * manifest reads neither copy bytes nor open a runtime transaction. Anything
+ * else copies every object and records the hydration.
+ */
 export async function materializeArtifact(
   context: EngineContext,
   artifactId: string,
 ): Promise<string> {
   const artifact = context.artifactRowById(artifactId);
   const workspace = context.ensureArtifactWorkspace(artifact.artifact_id);
+  const entry = workspaceEntry(context, artifact.artifact_id);
+  const hydrated = workspaceHydrated(entry, workspace);
+  let copied = 0;
   for (const row of filesForArtifact(context, artifact.artifact_id)) {
-    await context.objects.materialize(
-      row.object_hash,
-      path.join(workspace, ...row.path.split("/")),
-    );
+    const destination = path.join(workspace, ...row.path.split("/"));
+    if (hydrated && await isRegularFile(destination)) continue;
+    await context.objects.materialize(row.object_hash, destination);
+    copied += 1;
+  }
+  if (hydrated && copied === 0) {
+    if (Date.now() - entry.last_accessed_at >= WORKSPACE_TOUCH_INTERVAL_MS) {
+      touchWorkspace(context, artifact.artifact_id);
+    }
+    return workspace;
   }
   context.store.runtime((now) => {
     context.store.db
