@@ -1,4 +1,5 @@
-export const NOTEBOOK_GRID_ADDRESS_SOURCE = "[a-h](?:6[0-4]|[1-5][0-9]|[1-9])";
+// Rows are letters (a-z, then aa-az, ba-bl for 64 rows); columns are 1-8.
+export const NOTEBOOK_GRID_ADDRESS_SOURCE = "(?:a[a-z]|b[a-l]|[a-z])[1-8]";
 
 export const NOTEBOOK_GRID_ADDRESS_PATTERN = new RegExp(
   `^@?(${NOTEBOOK_GRID_ADDRESS_SOURCE})$`,

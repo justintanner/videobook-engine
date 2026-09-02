@@ -5,8 +5,11 @@ export const NOTEBOOK_GRID_ROW_COUNT = 64;
 export const NOTEBOOK_GRID_COLUMN_COUNT = 8;
 export const NOTEBOOK_GRID_CAPACITY =
   NOTEBOOK_GRID_ROW_COUNT * NOTEBOOK_GRID_COLUMN_COUNT;
-export const NOTEBOOK_GRID_ADDRESS_RANGE = "@a1-@h64";
+export const NOTEBOOK_GRID_ADDRESS_RANGE = "@a1-@bl8";
 export const NOTEBOOK_GRID_FULL_ERROR = "Notebook grid is full";
+
+const ROW_LETTER_BASE = 26;
+const ROW_LETTER_CODE = 97;
 
 export function isNotebookGridSlot(
   slot: NotebookGridSlot,
@@ -28,9 +31,34 @@ export function assertNotebookGridSlot(
   }
 }
 
+/**
+ * Bijective base-26 row label: row 0 is "a", 25 is "z", 26 is "aa" and the
+ * last row (63) is "bl". Rows run down the board; columns are numbered 1-8
+ * across it, so the top row reads @a1 through @a8.
+ */
+export function notebookGridRowLetters(row: number): string {
+  let letters = "";
+  let remaining = row + 1;
+  while (remaining > 0) {
+    const digit = (remaining - 1) % ROW_LETTER_BASE;
+    letters = String.fromCharCode(ROW_LETTER_CODE + digit) + letters;
+    remaining = Math.floor((remaining - 1) / ROW_LETTER_BASE);
+  }
+  return letters;
+}
+
+/** Inverse of `notebookGridRowLetters`; "a" is 0, "z" is 25, "aa" is 26. */
+export function notebookGridRowIndex(letters: string): number {
+  let row = 0;
+  for (const letter of letters.toLowerCase()) {
+    row = row * ROW_LETTER_BASE + (letter.charCodeAt(0) - ROW_LETTER_CODE + 1);
+  }
+  return row - 1;
+}
+
 export function notebookGridAddress(slot: NotebookGridSlot): string {
   assertNotebookGridSlot(slot);
-  return `${String.fromCharCode(97 + slot.column)}${slot.row + 1}`;
+  return `${notebookGridRowLetters(slot.row)}${slot.column + 1}`;
 }
 
 export function notebookGridTag(slot: NotebookGridSlot): string {
@@ -43,9 +71,10 @@ export function parseNotebookGridAddress(
   const match = NOTEBOOK_GRID_ADDRESS_PATTERN.exec(value.trim());
   if (!match) return undefined;
   const address = match[1]!;
+  const letters = address.replace(/\d+$/u, "");
   return {
-    column: address[0]!.toLowerCase().charCodeAt(0) - 97,
-    row: Number(address.slice(1)) - 1,
+    row: notebookGridRowIndex(letters),
+    column: Number(address.slice(letters.length)) - 1,
   };
 }
 

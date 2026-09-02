@@ -33,12 +33,12 @@ function value<T>(
 }
 
 describe("schema 22 notebook grid migration", () => {
-  it("parses v22 letter-row addresses and encodes spreadsheet v23 tags", () => {
+  it("parses v22 letter-row addresses and re-encodes them on the 8-wide grid", () => {
     expect(parseV22GridAddress("@a2")).toEqual({ row: 0, column: 1 });
     expect(parseV22GridAddress("b1")).toEqual({ row: 1, column: 0 });
     expect(parseV22GridAddress("@z13")).toEqual({ row: 25, column: 12 });
-    expect(notebookGridTag({ row: 0, column: 1 })).toBe("@b1");
-    expect(notebookGridTag({ row: 1, column: 0 })).toBe("@a2");
+    expect(notebookGridTag({ row: 0, column: 1 })).toBe("@a2");
+    expect(notebookGridTag({ row: 1, column: 0 })).toBe("@b1");
   });
 
   it("keeps in-bounds slots and reflows columns 8-12 onto free 8-wide squares", () => {
@@ -56,16 +56,18 @@ describe("schema 22 notebook grid migration", () => {
     expect(map.get("2:9")).toEqual({ row: 2, column: 0 });
   });
 
-  it("rewrites occupied and in-bounds empty mentions to spreadsheet addresses", () => {
+  it("rewrites relocated mentions and leaves in-bounds addresses in place", () => {
     const map = relocateV22Slots([
       { row: 0, column: 0 },
       { row: 0, column: 1 },
       { row: 0, column: 8 },
     ]);
     expect(rewriteV22Mentions("use @a2 and @b1 plus @a9", map))
-      .toBe("use @b1 and @a2 plus @c1");
+      .toBe("use @a2 and @b1 plus @a3");
     expect(rewriteV22Mentions("empty @a4 stays at {0,3}", map))
-      .toBe("empty @d1 stays at {0,3}");
+      .toBe("empty @a4 stays at {0,3}");
+    expect(rewriteV22Mentions("beyond @a13 and @z13", map))
+      .toBe("beyond @a13 and @z13");
   });
 
   it("rebuilds cells, relocates overflow, and rewrites prompts", () => {
@@ -127,7 +129,7 @@ describe("schema 22 notebook grid migration", () => {
       }>;
     expect(rows).toEqual([
       { cell_id: "origin", grid_row: 0, grid_column: 0, prompt: "start" },
-      { cell_id: "overflow", grid_row: 0, grid_column: 2, prompt: "from @c1 and empty @d1" },
+      { cell_id: "overflow", grid_row: 0, grid_column: 2, prompt: "from @a3 and empty @a4" },
       { cell_id: "right", grid_row: 0, grid_column: 1, prompt: "use @a1" },
     ]);
     const sql = (
@@ -221,12 +223,12 @@ describe("schema 22 notebook grid migration", () => {
     const document = upgraded.notebooks.read(notebook.id);
     if (!document.ok) throw new Error(document.error.message);
     const byId = new Map(document.value.cells.map((cell) => [cell.id, cell]));
-    expect(byId.get(neighbor.id)?.prompt).toBe("see @b1");
+    expect(byId.get(neighbor.id)?.prompt).toBe("see @a2");
     expect(byId.get(neighbor.id)?.slot).toEqual({ row: 0, column: 1 });
     expect(byId.get("overflow")?.slot).toEqual({ row: 0, column: 2 });
-    expect(byId.get("overflow")?.prompt).toBe("edge @c1");
+    expect(byId.get("overflow")?.prompt).toBe("edge @a3");
     expect(document.value.edges).toEqual([edge]);
-    expect(notebookGridAddress({ row: 0, column: 1 })).toBe("b1");
+    expect(notebookGridAddress({ row: 0, column: 1 })).toBe("a2");
     upgraded.close();
   });
 });

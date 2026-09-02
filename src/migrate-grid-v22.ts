@@ -7,6 +7,7 @@ import {
   NOTEBOOK_GRID_ROW_COUNT,
   notebookGridAddress,
 } from "./notebook-grid.js";
+import { rewriteCatalogMentions } from "./migrate-grid-text.js";
 import { CELLS_TABLE_DEFINITION } from "./schema.js";
 
 const V22_ADDRESS_SOURCE = "[a-z](?:1[0-3]|[1-9])";
@@ -21,9 +22,6 @@ interface CellRow {
   cell_id: string;
   grid_row: number;
   grid_column: number;
-  prompt: string | null;
-  label: string | null;
-  inputs_json: string;
 }
 
 interface V22GridMigrationResult {
@@ -46,7 +44,7 @@ export function parseV22GridAddress(
   };
 }
 
-function firstFreeV23Slot(
+function firstFreeSlot(
   occupied: ReadonlySet<string>,
   startRow = 0,
 ): NotebookGridSlot {
@@ -92,7 +90,7 @@ export function relocateV22Slots(
   const occupied = new Set(kept.map(slotKey));
   for (const slot of kept) relocated.set(slotKey(slot), slot);
   for (const slot of overflow) {
-    const next = firstFreeV23Slot(occupied, Math.max(0, slot.row));
+    const next = firstFreeSlot(occupied, Math.max(0, slot.row));
     occupied.add(slotKey(next));
     relocated.set(slotKey(slot), next);
   }
@@ -142,39 +140,13 @@ function mergeNotebookMaps(
   return merged;
 }
 
-function tableExists(db: DatabaseSync, name: string): boolean {
-  const row = db
-    .prepare(
-      "SELECT 1 AS present FROM sqlite_master WHERE type='table' AND name=?",
-    )
-    .get(name) as unknown as { present?: number } | undefined;
-  return row?.present === 1;
-}
-
-function tableColumns(db: DatabaseSync, name: string): Set<string> {
-  const rows = db.prepare(`PRAGMA table_info(${name})`).all() as unknown as Array<{
-    name: string;
-  }>;
-  return new Set(rows.map((row) => row.name));
-}
-
-function tableHasColumns(
-  db: DatabaseSync,
-  name: string,
-  columns: readonly string[],
-): boolean {
-  if (!tableExists(db, name)) return false;
-  const present = tableColumns(db, name);
-  return columns.every((column) => present.has(column));
-}
-
 function rebuildCellsTable(db: DatabaseSync): void {
   db.exec("PRAGMA foreign_keys=OFF");
-  db.exec("DROP TABLE IF EXISTS cells_v23");
-  db.exec(`CREATE TABLE cells_v23 (${CELLS_TABLE_DEFINITION})`);
-  db.exec("INSERT INTO cells_v23 SELECT * FROM cells");
+  db.exec("DROP TABLE IF EXISTS cells_next");
+  db.exec(`CREATE TABLE cells_next (${CELLS_TABLE_DEFINITION})`);
+  db.exec("INSERT INTO cells_next SELECT * FROM cells");
   db.exec("DROP TABLE cells");
-  db.exec("ALTER TABLE cells_v23 RENAME TO cells");
+  db.exec("ALTER TABLE cells_next RENAME TO cells");
   db.exec(
     "CREATE INDEX IF NOT EXISTS cells_output_entity ON cells(output_entity_id)",
   );
@@ -194,8 +166,7 @@ export function applyV22NotebookGridMigration(
 ): V22GridMigrationResult {
   const cells = db
     .prepare(
-      `SELECT notebook_id, cell_id, grid_row, grid_column, prompt, label, inputs_json
-       FROM cells`,
+      "SELECT notebook_id, cell_id, grid_row, grid_column FROM cells",
     )
     .all() as unknown as CellRow[];
 
@@ -238,162 +209,16 @@ export function applyV22NotebookGridMigration(
     updateSlot.run(next.row, next.column, cell.notebook_id, cell.cell_id);
   }
 
-  let rewritten = 0;
-  const updateText = db.prepare(
-    `UPDATE cells SET prompt=?, label=?, inputs_json=?
-     WHERE notebook_id=? AND cell_id=?`,
-  );
-  for (const cell of cells) {
-    const map = maps.get(cell.notebook_id);
-    if (!map) continue;
-    const prompt = typeof cell.prompt === "string"
-      ? rewriteV22Mentions(cell.prompt, map)
-      : cell.prompt;
-    const label = typeof cell.label === "string"
-      ? rewriteV22Mentions(cell.label, map)
-      : cell.label;
-    const inputs = rewriteV22Mentions(cell.inputs_json, map);
-    if (
-      prompt === cell.prompt
-      && label === cell.label
-      && inputs === cell.inputs_json
-    ) continue;
-    updateText.run(prompt, label, inputs, cell.notebook_id, cell.cell_id);
-    rewritten += 1;
-  }
-
   const bookMap = mergeNotebookMaps(maps);
-  rewritten += rewriteAttachedText(db, maps, bookMap);
+  const rewritten = rewriteCatalogMentions(db, (notebookId) => {
+    const map = notebookId === null
+      ? bookMap
+      : (maps.get(notebookId) ?? bookMap);
+    return (text) => rewriteV22Mentions(text, map);
+  });
 
   rebuildCellsTable(db);
   db.prepare("UPDATE engine_schema SET version=? WHERE singleton=1")
     .run(SCHEMA_VERSION);
   return { relocated, rewritten };
-}
-
-function rewriteAttachedText(
-  db: DatabaseSync,
-  maps: ReadonlyMap<string, Map<string, NotebookGridSlot>>,
-  bookMap: ReadonlyMap<string, NotebookGridSlot>,
-): number {
-  let rewritten = 0;
-
-  const rewriteByNotebook = (
-    table: string,
-    idColumn: string,
-    columns: readonly string[],
-  ): void => {
-    if (!tableHasColumns(db, table, ["notebook_id", idColumn, ...columns])) {
-      return;
-    }
-    const select = db.prepare(
-      `SELECT notebook_id, ${idColumn} AS row_id, ${columns.join(", ")} FROM ${table}`,
-    );
-    const rows = select.all() as unknown as Array<Record<string, string | null>>;
-    for (const row of rows) {
-      const map = maps.get(String(row.notebook_id)) ?? bookMap;
-      const values: Array<string | null> = [];
-      let changed = false;
-      for (const column of columns) {
-        const current = row[column];
-        if (typeof current !== "string") {
-          values.push(current ?? null);
-          continue;
-        }
-        const next = rewriteV22Mentions(current, map);
-        values.push(next);
-        if (next !== current) changed = true;
-      }
-      if (!changed) continue;
-      const assignments = columns.map((column) => `${column}=?`).join(", ");
-      db.prepare(
-        `UPDATE ${table} SET ${assignments} WHERE notebook_id=? AND ${idColumn}=?`,
-      ).run(...values, row.notebook_id, row.row_id);
-      rewritten += 1;
-    }
-  };
-
-  rewriteByNotebook("generations", "generation_id", ["prompt", "resolved_prompt"]);
-  rewriteByNotebook("notebook_generation_plans", "plan_id", ["plan_json"]);
-  rewriteByNotebook(
-    "notebook_run_plans",
-    "plan_id",
-    ["plan_json", "outputs_json"],
-  );
-
-  if (tableHasColumns(db, "entities", [
-    "entity_id",
-    "prompt",
-    "description",
-    "data_json",
-  ])) {
-    const rows = db
-      .prepare("SELECT entity_id, prompt, description, data_json FROM entities")
-      .all() as unknown as Array<{
-        entity_id: string;
-        prompt: string | null;
-        description: string | null;
-        data_json: string;
-      }>;
-    const update = db.prepare(
-      `UPDATE entities SET prompt=?, description=?, data_json=? WHERE entity_id=?`,
-    );
-    for (const row of rows) {
-      const prompt = typeof row.prompt === "string"
-        ? rewriteV22Mentions(row.prompt, bookMap)
-        : row.prompt;
-      const description = typeof row.description === "string"
-        ? rewriteV22Mentions(row.description, bookMap)
-        : row.description;
-      const dataJson = rewriteV22Mentions(row.data_json, bookMap);
-      if (
-        prompt === row.prompt
-        && description === row.description
-        && dataJson === row.data_json
-      ) continue;
-      update.run(prompt, description, dataJson, row.entity_id);
-      rewritten += 1;
-    }
-  }
-
-  if (tableHasColumns(db, "prompt_entries", [
-    "prompt_id",
-    "prompt",
-    "context_json",
-  ])) {
-    const rows = db
-      .prepare("SELECT prompt_id, prompt, context_json FROM prompt_entries")
-      .all() as unknown as Array<{
-        prompt_id: string;
-        prompt: string;
-        context_json: string;
-      }>;
-    const update = db.prepare(
-      "UPDATE prompt_entries SET prompt=?, context_json=? WHERE prompt_id=?",
-    );
-    for (const row of rows) {
-      const prompt = rewriteV22Mentions(row.prompt, bookMap);
-      const context = rewriteV22Mentions(row.context_json, bookMap);
-      if (prompt === row.prompt && context === row.context_json) continue;
-      update.run(prompt, context, row.prompt_id);
-      rewritten += 1;
-    }
-  }
-
-  if (tableHasColumns(db, "messages", ["message_id", "body_json"])) {
-    const rows = db
-      .prepare("SELECT message_id, body_json FROM messages")
-      .all() as unknown as Array<{ message_id: string; body_json: string }>;
-    const update = db.prepare(
-      "UPDATE messages SET body_json=? WHERE message_id=?",
-    );
-    for (const row of rows) {
-      const next = rewriteV22Mentions(row.body_json, bookMap);
-      if (next === row.body_json) continue;
-      update.run(next, row.message_id);
-      rewritten += 1;
-    }
-  }
-
-  return rewritten;
 }

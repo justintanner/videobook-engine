@@ -493,8 +493,8 @@ describe("relocated notebooks, streams, status, settings, and logs", () => {
     await engine.initialize();
     expect(engine.jobs.checkSchema()).toMatchObject({
       ok: true,
-      currentVersion: 23,
-      supportedVersion: 23,
+      currentVersion: 24,
+      supportedVersion: 24,
     });
     expect(engine.temporalSearch.providers.list()).toEqual([]);
     expect(engine.temporalSearch.manifests.list()).toEqual([]);

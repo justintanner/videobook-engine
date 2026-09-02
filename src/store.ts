@@ -17,6 +17,7 @@ import type {
 } from "./engine-types.js";
 import { initialOrderKeys } from "./order-keys.js";
 import { applyV22NotebookGridMigration } from "./migrate-grid-v22.js";
+import { applyV23NotebookGridMigration } from "./migrate-grid-v23.js";
 import {
   RUNTIME_SCHEMA_SQL,
   RUNTIME_TABLES,
@@ -278,7 +279,11 @@ export class DoltStore {
         });
       }
       if (row.version === 22) {
-        this.migrateV22ToV23();
+        this.migrateNotebookGrid(applyV22NotebookGridMigration, 22);
+        row = { version: SCHEMA_VERSION };
+      }
+      if (row.version === 23) {
+        this.migrateNotebookGrid(applyV23NotebookGridMigration, 23);
         row = { version: SCHEMA_VERSION };
       }
       if (row.version !== SCHEMA_VERSION) {
@@ -323,8 +328,11 @@ export class DoltStore {
     this.verifyCleanSemanticWorktree();
   }
 
-  private migrateV22ToV23(): void {
-    applyV22NotebookGridMigration(this.db);
+  private migrateNotebookGrid(
+    apply: (db: DatabaseSync) => unknown,
+    fromVersion: number,
+  ): void {
+    apply(this.db);
     const status = this.db.doltStatus();
     this.assertOnlyVersionedStaged(status);
     const dirty = uniqueSemanticTables(
@@ -336,7 +344,9 @@ export class DoltStore {
     this.stageTables(
       dirty.length > 0 ? dirty : ["cells", "engine_schema"],
     );
-    this.sqlCommit("Migrate notebook grid from schema 22 to 23");
+    this.sqlCommit(
+      `Migrate notebook grid from schema ${fromVersion} to ${SCHEMA_VERSION}`,
+    );
   }
 
   private ensureIgnorePatterns(): void {

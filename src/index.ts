@@ -106,6 +106,8 @@ export {
   NOTEBOOK_GRID_FULL_ERROR,
   NOTEBOOK_GRID_ROW_COUNT,
   notebookGridAddress,
+  notebookGridRowIndex,
+  notebookGridRowLetters,
   notebookGridTag,
   parseNotebookGridAddress,
 } from "./notebook-grid.js";

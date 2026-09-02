@@ -20,6 +20,8 @@ import {
   NOTEBOOK_GRID_FULL_ERROR,
   NOTEBOOK_GRID_ROW_COUNT,
   notebookGridAddress,
+  notebookGridRowIndex,
+  notebookGridRowLetters,
   notebookGridTag,
   parseNotebookGridAddress,
   SCHEMA_VERSION,
@@ -86,7 +88,7 @@ const CELLS_TABLE_DDL = `
     PRIMARY KEY(notebook_id, cell_id)
   );`;
 
-describe("fixed notebook grid schema 23", () => {
+describe("fixed notebook grid schema 24", () => {
   it("exports the bounded address contract and the fourteen explicit cell types", () => {
     expect(NOTEBOOK_CELL_TYPES).toEqual([
       "audio",
@@ -123,20 +125,42 @@ describe("fixed notebook grid schema 23", () => {
       "inputs_json",
       "output_artifact_id",
     ]);
-    expect(SCHEMA_VERSION).toBe(23);
+    expect(SCHEMA_VERSION).toBe(24);
     expect(NOTEBOOK_GRID_ROW_COUNT).toBe(64);
     expect(NOTEBOOK_GRID_COLUMN_COUNT).toBe(8);
     expect(NOTEBOOK_GRID_CAPACITY).toBe(512);
-    expect(parseNotebookGridAddress("@H1")).toEqual({ row: 0, column: 7 });
-    expect(parseNotebookGridAddress("a64")).toEqual({ row: 63, column: 0 });
-    expect(parseNotebookGridAddress("h64")).toEqual({ row: 63, column: 7 });
-    expect(parseNotebookGridAddress("@a65")).toBeUndefined();
-    expect(parseNotebookGridAddress("@i1")).toBeUndefined();
-    expect(parseNotebookGridAddress("@aa1")).toBeUndefined();
-    expect(notebookGridAddress({ row: 63, column: 7 })).toBe("h64");
+    // Rows are letters (a-z, aa-az, ba-bl); columns are numbers 1-8.
+    expect(parseNotebookGridAddress("@A8")).toEqual({ row: 0, column: 7 });
+    expect(parseNotebookGridAddress("z1")).toEqual({ row: 25, column: 0 });
+    expect(parseNotebookGridAddress("aa1")).toEqual({ row: 26, column: 0 });
+    expect(parseNotebookGridAddress("@AZ8")).toEqual({ row: 51, column: 7 });
+    expect(parseNotebookGridAddress("bl8")).toEqual({ row: 63, column: 7 });
+    expect(parseNotebookGridAddress("@a9")).toBeUndefined();
+    expect(parseNotebookGridAddress("@a0")).toBeUndefined();
+    expect(parseNotebookGridAddress("@a10")).toBeUndefined();
+    expect(parseNotebookGridAddress("@bm1")).toBeUndefined();
+    expect(parseNotebookGridAddress("@aaa1")).toBeUndefined();
+    expect(notebookGridAddress({ row: 63, column: 7 })).toBe("bl8");
     expect(notebookGridTag({ row: 0, column: 0 })).toBe("@a1");
-    expect(notebookGridTag({ row: 0, column: 1 })).toBe("@b1");
-    expect(notebookGridTag({ row: 1, column: 0 })).toBe("@a2");
+    expect(notebookGridTag({ row: 0, column: 1 })).toBe("@a2");
+    expect(notebookGridTag({ row: 0, column: 7 })).toBe("@a8");
+    expect(notebookGridTag({ row: 1, column: 0 })).toBe("@b1");
+    expect(notebookGridTag({ row: 25, column: 0 })).toBe("@z1");
+    expect(notebookGridTag({ row: 26, column: 0 })).toBe("@aa1");
+    expect(notebookGridTag({ row: 52, column: 0 })).toBe("@ba1");
+    expect(notebookGridRowLetters(0)).toBe("a");
+    expect(notebookGridRowLetters(25)).toBe("z");
+    expect(notebookGridRowLetters(26)).toBe("aa");
+    expect(notebookGridRowLetters(51)).toBe("az");
+    expect(notebookGridRowLetters(52)).toBe("ba");
+    expect(notebookGridRowLetters(63)).toBe("bl");
+    for (let row = 0; row < NOTEBOOK_GRID_ROW_COUNT; row += 1) {
+      expect(notebookGridRowIndex(notebookGridRowLetters(row))).toBe(row);
+      for (let column = 0; column < NOTEBOOK_GRID_COLUMN_COUNT; column += 1) {
+        expect(parseNotebookGridAddress(notebookGridTag({ row, column })))
+          .toEqual({ row, column });
+      }
+    }
   });
 
   it("pins the label-only cells DDL and its live column projection", async () => {
@@ -598,7 +622,7 @@ describe("fixed notebook grid schema 23", () => {
       database.close();
 
       expect(() => createEngine({ rootDir: root })).toThrow(
-        `Database schema ${version} is not supported by engine schema 23`,
+        `Database schema ${version} is not supported by engine schema 24`,
       );
     },
   );
@@ -791,7 +815,7 @@ describe("fixed notebook grid schema 23", () => {
     database.close();
 
     expect(() => createEngine({ rootDir: root })).toThrow(
-      "Database schema 10 is not supported by engine schema 23",
+      "Database schema 10 is not supported by engine schema 24",
     );
   });
 });
