@@ -1,22 +1,27 @@
 import { spawn } from "node:child_process";
 import { mkdir } from "node:fs/promises";
 
-import {
-  AutoProcessor,
-  AutoTokenizer,
-  ClapAudioModelWithProjection,
-  ClapTextModelWithProjection,
-  CLIPTextModelWithProjection,
-  pipeline,
-  RawImage,
-} from "@huggingface/transformers";
-import sharp from "sharp";
-
 import type {
   IndexManifest,
   TemporalSearchProvider,
 } from "./mvp-contracts.js";
 import { EngineFault } from "./store.js";
+
+type TransformersModule = typeof import("@huggingface/transformers");
+type SharpFn = typeof import("sharp")["default"];
+
+let transformersModule: Promise<TransformersModule> | undefined;
+let sharpModule: Promise<SharpFn> | undefined;
+
+function loadTransformers(): Promise<TransformersModule> {
+  transformersModule ??= import("@huggingface/transformers");
+  return transformersModule;
+}
+
+function loadSharp(): Promise<SharpFn> {
+  sharpModule ??= import("sharp").then((mod) => mod.default);
+  return sharpModule;
+}
 
 export const LOCAL_CLIP_MODEL_ID = "Xenova/clip-vit-base-patch32";
 export const LOCAL_CLIP_MODEL_REVISION =
@@ -68,7 +73,7 @@ export interface LocalClapTemporalProviderOptions {
 }
 
 type ImagePipeline = (
-  images: RawImage | RawImage[],
+  images: unknown,
 ) => Promise<{ data: Float32Array; dims: number[] }>;
 
 type ClipTokenizer = (
@@ -159,6 +164,7 @@ export class LocalClipTemporalProvider implements TemporalSearchProvider {
     if (this.imagePipeline) return this.imagePipeline;
     await mkdir(this.options.modelCacheDir, { recursive: true });
     try {
+      const { pipeline } = await loadTransformers();
       this.imagePipeline = await pipeline(
         "image-feature-extraction",
         LOCAL_CLIP_MODEL_ID,
@@ -189,6 +195,8 @@ export class LocalClipTemporalProvider implements TemporalSearchProvider {
         local_files_only: this.options.allowModelDownload === false,
         revision: LOCAL_CLIP_MODEL_REVISION,
       };
+      const { AutoTokenizer, CLIPTextModelWithProjection } =
+        await loadTransformers();
       this.tokenizer = await AutoTokenizer.from_pretrained(
         LOCAL_CLIP_MODEL_ID,
         options,
@@ -266,6 +274,8 @@ export class LocalClapTemporalProvider implements TemporalSearchProvider {
         this.options.allowModelDownload,
         LOCAL_CLAP_MODEL_REVISION,
       );
+      const { AutoProcessor, ClapAudioModelWithProjection } =
+        await loadTransformers();
       this.processor = await AutoProcessor.from_pretrained(
         LOCAL_CLAP_MODEL_ID,
         options,
@@ -298,6 +308,8 @@ export class LocalClapTemporalProvider implements TemporalSearchProvider {
         this.options.allowModelDownload,
         LOCAL_CLAP_MODEL_REVISION,
       );
+      const { AutoTokenizer, ClapTextModelWithProjection } =
+        await loadTransformers();
       this.tokenizer = await AutoTokenizer.from_pretrained(
         LOCAL_CLAP_MODEL_ID,
         options,
@@ -317,7 +329,11 @@ export class LocalClapTemporalProvider implements TemporalSearchProvider {
   }
 }
 
-async function readNormalizedImage(sourcePath: string): Promise<RawImage> {
+async function readNormalizedImage(sourcePath: string): Promise<unknown> {
+  const [sharp, { RawImage }] = await Promise.all([
+    loadSharp(),
+    loadTransformers(),
+  ]);
   const decoded = await sharp(sourcePath, { animated: false })
     .rotate()
     .toColourspace("srgb")

@@ -89,6 +89,7 @@ export class EngineContext {
         ? { author: `${config.identity.name} <${config.identity.email}>` }
         : {}),
       ...(config.catalogBackup ? { catalogBackup: config.catalogBackup } : {}),
+      ...(config.catalogGc ? { catalogGc: config.catalogGc } : {}),
     });
     this.objects = new ObjectStore(
       this.store.objectsDir,

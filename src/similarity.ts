@@ -1,22 +1,12 @@
 import { createHash } from "node:crypto";
+import { createRequire } from "node:module";
 import { readFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import { mkdtemp, mkdir, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 
-import {
-  AutoProcessor,
-  ClapAudioModelWithProjection,
-  pipeline,
-  RawImage,
-} from "@huggingface/transformers";
-import sharp from "sharp";
-import {
-  Index,
-  MetricKind,
-  ScalarKind,
-} from "usearch";
+import type { Index } from "usearch";
 
 import {
   err,
@@ -87,8 +77,31 @@ const TEXT_ARTIFACT_KINDS = new Set<ArtifactKind>([
   "final",
 ]);
 
+type TransformersModule = typeof import("@huggingface/transformers");
+type UsearchModule = typeof import("usearch");
+type SharpFn = typeof import("sharp")["default"];
+
+let transformersModule: Promise<TransformersModule> | undefined;
+let sharpModule: Promise<SharpFn> | undefined;
+let usearchModule: UsearchModule | undefined;
+
+function loadTransformers(): Promise<TransformersModule> {
+  transformersModule ??= import("@huggingface/transformers");
+  return transformersModule;
+}
+
+function loadSharp(): Promise<SharpFn> {
+  sharpModule ??= import("sharp").then((mod) => mod.default);
+  return sharpModule;
+}
+
+function loadUsearch(): UsearchModule {
+  usearchModule ??= createRequire(import.meta.url)("usearch") as UsearchModule;
+  return usearchModule;
+}
+
 type FeaturePipeline = (
-  images: RawImage | RawImage[],
+  images: unknown,
 ) => Promise<{ data: Float32Array; dims: number[] }>;
 
 interface TextTokenizer {
@@ -1215,6 +1228,7 @@ class LocalSimilarityApi implements SimilarityApi {
     const key = indexKey("text", embeddingSpace);
     const current = this.indexes.get(key);
     if (current) return current;
+    const { Index, MetricKind, ScalarKind } = loadUsearch();
     const index = new Index({
       dimensions,
       metric: MetricKind.Cos,
@@ -1254,6 +1268,7 @@ class LocalSimilarityApi implements SimilarityApi {
     const key = indexKey(kind, embeddingSpace);
     const current = this.indexes.get(key);
     if (current) return current;
+    const { Index, MetricKind, ScalarKind } = loadUsearch();
     const index = new Index({
       dimensions,
       metric: MetricKind.Cos,
@@ -1519,6 +1534,7 @@ class LocalClipProvider implements SimilarityEmbeddingProvider {
     await mkdir(cacheDir, { recursive: true });
     const modelId = this.config.modelId ?? DEFAULT_MODEL_ID;
     try {
+      const { pipeline } = await loadTransformers();
       this.embedder = await pipeline("image-feature-extraction", modelId, {
         dtype: "q8",
         cache_dir: cacheDir,
@@ -1621,6 +1637,8 @@ class LocalClapAudioProvider implements SimilarityAudioEmbeddingProvider {
       ? { revision: DEFAULT_AUDIO_MODEL_REVISION }
       : {};
     try {
+      const { AutoProcessor, ClapAudioModelWithProjection } =
+        await loadTransformers();
       const processor = await AutoProcessor.from_pretrained(modelId, {
         cache_dir: cacheDir,
         local_files_only: allowDownload === false,
@@ -1713,6 +1731,7 @@ class LocalTextProvider implements SimilarityTextEmbeddingProvider {
     const allowDownload = this.config.allowModelDownload ??
       this.sharedConfig.allowModelDownload;
     try {
+      const { pipeline } = await loadTransformers();
       this.embedder = await pipeline("feature-extraction", modelId, {
         dtype: "q4",
         cache_dir: cacheDir,
@@ -1763,7 +1782,11 @@ function similarityKind(artifact: ArtifactRow): SimilarityKind {
   });
 }
 
-async function readNormalizedImage(sourcePath: string): Promise<RawImage> {
+async function readNormalizedImage(sourcePath: string): Promise<unknown> {
+  const [sharp, { RawImage }] = await Promise.all([
+    loadSharp(),
+    loadTransformers(),
+  ]);
   const decoded = await sharp(sourcePath, { animated: false })
     .rotate()
     .toColourspace("srgb")

@@ -1,4 +1,4 @@
-import { mkdirSync, existsSync } from "node:fs";
+import { mkdirSync, existsSync, statSync } from "node:fs";
 import * as path from "node:path";
 
 import {
@@ -11,10 +11,14 @@ import { v7 as uuidv7 } from "uuid";
 
 import type {
   CatalogBackupConfig,
+  CatalogGcConfig,
+  CatalogGcReport,
+  CatalogGcTrigger,
   EngineError,
   OperationInput,
   SemanticCommitBoundary,
 } from "./engine-types.js";
+import { DEFAULT_CATALOG_GC_BYTES_THRESHOLD } from "./engine-types.js";
 import { initialOrderKeys } from "./order-keys.js";
 import { applyV22NotebookGridMigration } from "./migrate-grid-v22.js";
 import { applyV23NotebookGridMigration } from "./migrate-grid-v23.js";
@@ -82,6 +86,13 @@ export class DoltStore {
   private readonly semanticCommitBoundary:
     | ((boundary: SemanticCommitBoundary, operationId: string) => void)
     | undefined;
+  private readonly catalogGcConfig: {
+    bytesThreshold: number;
+    onOpen: boolean;
+    onClose: boolean;
+  };
+  private writeCount = 0;
+  lastCatalogGc: CatalogGcReport | undefined;
 
   constructor(input: {
     dataDir: string;
@@ -89,6 +100,7 @@ export class DoltStore {
     initialBook?: { bookId: string; name: string };
     catalogBackup?: CatalogBackupConfig;
     author?: string;
+    catalogGc?: CatalogGcConfig;
     semanticCommitBoundary?: (
       boundary: SemanticCommitBoundary,
       operationId: string,
@@ -99,6 +111,12 @@ export class DoltStore {
     this.databasePath = path.join(this.dataDir, "videobook.db");
     this.author = input.author ?? DEFAULT_COMMIT_AUTHOR;
     this.semanticCommitBoundary = input.semanticCommitBoundary;
+    this.catalogGcConfig = {
+      bytesThreshold:
+        input.catalogGc?.bytesThreshold ?? DEFAULT_CATALOG_GC_BYTES_THRESHOLD,
+      onOpen: input.catalogGc?.onOpen !== false,
+      onClose: input.catalogGc?.onClose !== false,
+    };
     this.objectsDir = path.join(this.dataDir, "objects", "sha256");
     mkdirSync(this.dataDir, { recursive: true });
     mkdirSync(this.objectsDir, { recursive: true });
@@ -106,6 +124,9 @@ export class DoltStore {
 
     const existed = existsSync(this.databasePath);
     this.db = new DatabaseSync(this.databasePath);
+    // GC before configureConnection/initialize prepare any statement so
+    // workingDiffProbes never holds a pre-GC StatementSync.
+    if (existed) this.maybeGcOnOpen();
     this.configureConnection();
     this.initialize(existed, input.initialBook);
     if (input.catalogBackup) this.configureRemote(input.catalogBackup);
@@ -120,6 +141,13 @@ export class DoltStore {
   }
 
   close(): void {
+    if (this.catalogGcConfig.onClose && this.writeCount > 0) {
+      try {
+        this.gcCatalog("close");
+      } catch {
+        // Best-effort: the handle must still drop even if GC fails.
+      }
+    }
     this.db.close();
   }
 
@@ -160,6 +188,7 @@ export class DoltStore {
 
       this.semanticCommitBoundary?.("after-sql-commit", operationId);
       const revision = this.commitOutbox(operationId);
+      this.writeCount += 1;
       return { value, revision, operationId };
     });
   }
@@ -170,6 +199,7 @@ export class DoltStore {
     try {
       const value = mutate(Date.now());
       this.commitSql();
+      this.writeCount += 1;
       return value;
     } catch (error) {
       this.rollback();
@@ -192,7 +222,64 @@ export class DoltStore {
    * readable summary such as "3 chunks removed, 42 chunks kept".
    */
   doltGc(): string {
-    this.assertRuntimeUnstaged();
+    return this.gcCatalog("manual").summary;
+  }
+
+  gcCatalog(trigger: CatalogGcTrigger): CatalogGcReport {
+    if (trigger !== "open") this.assertRuntimeUnstaged();
+    const bytesBefore = statSync(this.databasePath).size;
+    const summary = this.runDoltGc();
+    this.workingDiffProbes.clear();
+    this.writeCount = 0;
+    try {
+      this.db.exec("PRAGMA wal_checkpoint(TRUNCATE)");
+    } catch {
+      // doltlite builds that do not expose WAL checkpoints still truncate
+      // the catalog file from dolt_gc itself.
+    }
+    const bytesAfter = statSync(this.databasePath).size;
+    const parsed = parseDoltGcSummary(summary);
+    const report: CatalogGcReport = {
+      trigger,
+      summary,
+      bytesBefore,
+      bytesAfter,
+      chunksRemoved: parsed.chunksRemoved,
+      chunksKept: parsed.chunksKept,
+    };
+    this.lastCatalogGc = report;
+    return report;
+  }
+
+  tableRowCounts(): Record<string, number> {
+    const tables = this.db
+      .prepare(
+        `SELECT name
+         FROM sqlite_master
+         WHERE type = 'table'
+           AND name NOT LIKE 'sqlite_%'
+         ORDER BY name`,
+      )
+      .all() as unknown as Array<{ name: string }>;
+    const counts: Record<string, number> = {};
+    for (const { name } of tables) {
+      if (!/^[A-Za-z0-9_]+$/.test(name)) continue;
+      const row = this.db
+        .prepare(`SELECT COUNT(*) AS n FROM ${name}`)
+        .get() as unknown as { n: number };
+      counts[name] = Number(row.n);
+    }
+    return counts;
+  }
+
+  private maybeGcOnOpen(): void {
+    if (!this.catalogGcConfig.onOpen) return;
+    const size = statSync(this.databasePath).size;
+    if (size < this.catalogGcConfig.bytesThreshold) return;
+    this.gcCatalog("open");
+  }
+
+  private runDoltGc(): string {
     const row = this.db
       .prepare("SELECT dolt_gc() AS result")
       .get() as unknown as { result: string } | undefined;
@@ -863,6 +950,18 @@ export function parseCommitMessage(message: string): CommitOperation | null {
       trailers.get("details") ?? "{}",
       {},
     ),
+  };
+}
+
+function parseDoltGcSummary(summary: string): {
+  chunksRemoved: number | null;
+  chunksKept: number | null;
+} {
+  const match = /(\d+)\s+chunks removed,\s+(\d+)\s+chunks kept/i.exec(summary);
+  if (!match) return { chunksRemoved: null, chunksKept: null };
+  return {
+    chunksRemoved: Number(match[1]),
+    chunksKept: Number(match[2]),
   };
 }
 

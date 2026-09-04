@@ -490,7 +490,14 @@ the engine deliberately does not implement it.
 - doltlite exposes `dolt_gc()` as a SQL function (verified: it returns a
   `"N chunks removed, M chunks kept"` summary). `gc({ doltGc: true })` runs
   it after collecting to physically reclaim chunks left behind by dropped
-  table data in the versioned catalog.
+  table data in the versioned catalog. The store also GC's automatically
+  at open when `videobook.db` exceeds 32 MiB (configurable via
+  `EngineConfig.catalogGc`) and at close after any runtime or semantic
+  write, returning a `CatalogGcReport` (`engine.lastCatalogGc` /
+  `engine.gcCatalog()`) with the summary and byte delta. GC never mints a
+  commit. Periodic GC-after-N-writes is not implemented: cached prepared
+  statements would have to be dropped, and `dolt_gc` cannot run inside
+  `serial()` or an open transaction.
 - Run `deleteObject` and `gc` only while no imports are in flight; CAS puts
   happen outside the serialized write chain, so a concurrent import could
   race the sweep.

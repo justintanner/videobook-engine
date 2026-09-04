@@ -110,6 +110,14 @@ interface EngineConfigBase {
     boundary: SemanticCommitBoundary,
     operationId: string,
   ) => void;
+  /**
+   * Catalog `dolt_gc` policy. Default: GC on open when the catalog file is
+   * larger than 32 MiB, and GC on close after any runtime or semantic write.
+   * Periodic GC-after-N-writes is not offered: cached prepared statements
+   * would have to be dropped, and `dolt_gc` cannot run inside `serial()` or
+   * an open transaction.
+   */
+  catalogGc?: CatalogGcConfig;
 }
 
 export type EngineConfig = EngineConfigBase &
@@ -117,6 +125,40 @@ export type EngineConfig = EngineConfigBase &
     | { rootDir: string; dataDir?: never; workspaceDir?: never }
     | { rootDir?: never; dataDir: string; workspaceDir: string }
   );
+
+/** Bytes above which an existing catalog is GC'd at open. */
+export const DEFAULT_CATALOG_GC_BYTES_THRESHOLD = 32 * 1024 * 1024;
+
+export interface CatalogGcConfig {
+  /** File size that triggers GC-at-open. Default 32 MiB. */
+  bytesThreshold?: number;
+  /** Run `dolt_gc` at open when the catalog is bloated. Default true. */
+  onOpen?: boolean;
+  /** Run `dolt_gc` at close after any write in this session. Default true. */
+  onClose?: boolean;
+}
+
+export type CatalogGcTrigger = "open" | "close" | "manual";
+
+export interface CatalogGcReport {
+  trigger: CatalogGcTrigger;
+  /** Human-readable `dolt_gc()` summary, e.g. "3 chunks removed, 42 chunks kept". */
+  summary: string;
+  bytesBefore: number;
+  bytesAfter: number;
+  chunksRemoved: number | null;
+  chunksKept: number | null;
+}
+
+export interface CatalogIntegritySnapshot {
+  head: string;
+  logCount: number;
+  book: Book;
+  artifacts: Array<{ artifactId: string; kind: ArtifactKind; label: string | null }>;
+  notebooks: Array<{ notebookId: string; name: string }>;
+  doltStatus: Array<{ table_name: string; staged: number; status: string }>;
+  tableRowCounts: Record<string, number>;
+}
 
 export type SimilarityKind = "image" | "video" | "audio" | "text";
 

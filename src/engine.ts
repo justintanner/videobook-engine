@@ -1,4 +1,6 @@
 import type {
+  CatalogGcReport,
+  CatalogIntegritySnapshot,
   EngineConfig,
   Job,
   JobState,
@@ -108,6 +110,54 @@ export class Engine {
 
   get head(): string {
     return this.context.store.head;
+  }
+
+  get lastCatalogGc(): CatalogGcReport | undefined {
+    return this.context.store.lastCatalogGc;
+  }
+
+  gcCatalog(): CatalogGcReport {
+    return this.context.store.gcCatalog("manual");
+  }
+
+  catalogIntegrity(): CatalogIntegritySnapshot {
+    const store = this.context.store;
+    const artifacts = store.db
+      .prepare(
+        `SELECT artifact_id, kind, label FROM artifacts ORDER BY artifact_id`,
+      )
+      .all() as unknown as Array<{
+      artifact_id: string;
+      kind: CatalogIntegritySnapshot["artifacts"][number]["kind"];
+      label: string | null;
+    }>;
+    const notebooks = store.db
+      .prepare(
+        `SELECT notebook_id, name FROM notebooks ORDER BY notebook_id`,
+      )
+      .all() as unknown as Array<{ notebook_id: string; name: string }>;
+    return {
+      head: store.head,
+      logCount: store.db.doltLog().length,
+      book: this.book.get(),
+      artifacts: artifacts.map((row) => ({
+        artifactId: row.artifact_id,
+        kind: row.kind,
+        label: row.label,
+      })),
+      notebooks: notebooks.map((row) => ({
+        notebookId: row.notebook_id,
+        name: row.name,
+      })),
+      doltStatus: store.status
+        .map((entry) => ({
+          table_name: entry.table_name,
+          staged: entry.staged,
+          status: entry.status,
+        }))
+        .sort((left, right) => left.table_name.localeCompare(right.table_name)),
+      tableRowCounts: store.tableRowCounts(),
+    };
   }
 
   async initialize(): Promise<void> {
