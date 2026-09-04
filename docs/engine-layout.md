@@ -491,7 +491,7 @@ the engine deliberately does not implement it.
   `"N chunks removed, M chunks kept"` summary). `gc({ doltGc: true })` runs
   it after collecting to physically reclaim chunks left behind by dropped
   table data in the versioned catalog. The store also GC's automatically
-  at open when `videobook.db` exceeds 32 MiB (configurable via
+  at open when `videobook.db` exceeds 64 MiB (configurable via
   `EngineConfig.catalogGc`) and at close after any runtime or semantic
   write, returning a `CatalogGcReport` (`engine.lastCatalogGc` /
   `engine.gcCatalog()`) with the summary and byte delta. GC never mints a

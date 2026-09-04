@@ -112,7 +112,7 @@ interface EngineConfigBase {
   ) => void;
   /**
    * Catalog `dolt_gc` policy. Default: GC on open when the catalog file is
-   * larger than 32 MiB, and GC on close after any runtime or semantic write.
+   * larger than 64 MiB, and GC on close after any runtime or semantic write.
    * Periodic GC-after-N-writes is not offered: cached prepared statements
    * would have to be dropped, and `dolt_gc` cannot run inside `serial()` or
    * an open transaction.
@@ -127,10 +127,10 @@ export type EngineConfig = EngineConfigBase &
   );
 
 /** Bytes above which an existing catalog is GC'd at open. */
-export const DEFAULT_CATALOG_GC_BYTES_THRESHOLD = 32 * 1024 * 1024;
+export const DEFAULT_CATALOG_GC_BYTES_THRESHOLD = 64 * 1024 * 1024;
 
 export interface CatalogGcConfig {
-  /** File size that triggers GC-at-open. Default 32 MiB. */
+  /** File size that triggers GC-at-open. Default 64 MiB. */
   bytesThreshold?: number;
   /** Run `dolt_gc` at open when the catalog is bloated. Default true. */
   onOpen?: boolean;
