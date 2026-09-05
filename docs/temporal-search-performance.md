@@ -172,3 +172,15 @@ Consumers should queue preparation, show its progress, and retry after the job
 finishes. The index's preparation result separates loaded indexes, changed
 vectors, and persisted indexes. `--prepare-existing` in the benchmark measures
 explicit recovery before closing and reopening a retained older fixture.
+
+The [full persisted run](../benchmarks/results/temporal-100k-persisted.json)
+measured the preparation implementation committed as `a7c3703` on the same
+M1 Pro/16 GB device. Indexing and preparation took 291.4 seconds across 4,000
+batches; preparation accounted for 148.3 seconds of that total. Initial
+searchable coverage appeared after 40 ms, and every resume cursor passed.
+After close/reopen, open plus summary took 919 ms and the first image query,
+including verified graph loading, took 2.90 seconds. The 50-query warm p95s
+were 62 ms (image), 162 ms (video), and 361 ms (hybrid); peak RSS was 3.58 GiB.
+All harness gates passed. This includes incremental construction and persisted
+reopen, but does not remove the separate fresh-process catalog GC or corpus
+quality release gates.
