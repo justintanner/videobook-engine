@@ -1,13 +1,14 @@
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import { readFile } from "node:fs/promises";
-import { spawn } from "node:child_process";
 import { mkdtemp, mkdir, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 
 import type { Index } from "usearch";
-import type Sharp from "sharp";
+import { decodeModelImage } from "./media-image.js";
+import { runMediaProcess, checkMediaCancellation } from "./media-process.js";
+import type { MediaOperationOptions } from "./engine-types.js";
 
 import {
   err,
@@ -80,20 +81,13 @@ const TEXT_ARTIFACT_KINDS = new Set<ArtifactKind>([
 
 type TransformersModule = typeof import("./transformers-runtime.js");
 type UsearchModule = typeof import("usearch");
-type SharpFn = typeof Sharp;
 
 let transformersModule: Promise<TransformersModule> | undefined;
-let sharpModule: Promise<SharpFn> | undefined;
 let usearchModule: UsearchModule | undefined;
 
 function loadTransformers(): Promise<TransformersModule> {
   transformersModule ??= import("./transformers-runtime.js");
   return transformersModule;
-}
-
-function loadSharp(): Promise<SharpFn> {
-  sharpModule ??= import("sharp").then((mod) => mod.default);
-  return sharpModule;
 }
 
 function loadUsearch(): UsearchModule {
@@ -251,6 +245,7 @@ class LocalSimilarityApi implements SimilarityApi {
     >
   > {
     return resultOf(async () => {
+      checkMediaCancellation(options);
       const kinds = options.kind
         ? [options.kind]
         : ([
@@ -264,12 +259,12 @@ class LocalSimilarityApi implements SimilarityApi {
       for (const kind of kinds) {
         if (kind === "text") {
           const provider = this.requireTextProvider();
-          await provider.prepare();
+          await provider.prepare(options);
           spaces.text = provider.embeddingSpace;
         } else {
           const provider = this.providerFor(kind);
           if (!preparedMedia.has(provider)) {
-            await provider.prepare();
+            await provider.prepare(options);
             preparedMedia.add(provider);
           }
           spaces[kind] = provider.embeddingSpace;
@@ -287,6 +282,7 @@ class LocalSimilarityApi implements SimilarityApi {
     options: SimilarityIndexOptions = {},
   ): Promise<Result<SimilarityIndexResult, EngineError>> {
     return resultOf(async () => {
+      checkMediaCancellation(options);
       const artifact = this.context.artifactRow(artifactReference);
       const kind = similarityKind(artifact);
       if (kind === "text") {
@@ -297,9 +293,10 @@ class LocalSimilarityApi implements SimilarityApi {
   }
 
   async rebuild(
-    options: { kind?: SimilarityKind; force?: boolean } = {},
+    options: { kind?: SimilarityKind; force?: boolean } & MediaOperationOptions = {},
   ): Promise<Result<SimilarityIndexResult[], EngineError>> {
     return resultOf(async () => {
+      checkMediaCancellation(options);
       const allowedKinds = options.kind
         ? [options.kind]
         : ([
@@ -324,9 +321,7 @@ class LocalSimilarityApi implements SimilarityApi {
         const kind = similarityKind(artifact);
         if (!allowedKinds.includes(kind)) continue;
         if (kind === "text" && !this.hasTextSource(artifact.artifact_id)) continue;
-        const result = await this.index(artifact.artifact_id, {
-          force: options.force,
-        });
+        const result = await this.index(artifact.artifact_id, options);
         if (!result.ok) throw new EngineFault(result.error);
         indexed.push(result.value);
       }
@@ -452,6 +447,7 @@ class LocalSimilarityApi implements SimilarityApi {
     options: SimilarityQueryOptions = {},
   ): Promise<Result<SimilarityMatch[], EngineError>> {
     return resultOf(async () => {
+      checkMediaCancellation(options);
       const artifact = this.context.artifactRow(artifactReference);
       const kind = similarityKind(artifact);
       if (kind === "text") {
@@ -467,6 +463,7 @@ class LocalSimilarityApi implements SimilarityApi {
   ): Promise<Result<SimilarityMatch[], EngineError>> {
     return resultOf(async () => {
       const provider = this.requireTextProvider();
+      checkMediaCancellation(options);
       const normalizedQuery = normalizePlainText(query);
       if (normalizedQuery.text.length === 0) {
         throw new EngineFault({
@@ -481,7 +478,7 @@ class LocalSimilarityApi implements SimilarityApi {
           message: `Text similarity queries cannot exceed ${maxBytes} bytes`,
         });
       }
-      const chunks = await this.embedText(normalizedQuery.text);
+      const chunks = await this.embedText(normalizedQuery.text, options);
       return this.searchText(
         null,
         null,
@@ -527,7 +524,8 @@ class LocalSimilarityApi implements SimilarityApi {
           frameCount: reusable.frame_count,
           reused: true,
         }
-      : await this.embedMediaSource(source);
+      : await this.embedMediaSource(source, options);
+    checkMediaCancellation(options);
     const row = this.context.store.runtime((now) => {
       if (existing) {
         this.context.store.db
@@ -607,7 +605,7 @@ class LocalSimilarityApi implements SimilarityApi {
           endOffset: chunk.end_offset,
           vector: vectorFromBlob(chunk),
         }))
-      : await this.embedText(normalizedSource.text);
+      : await this.embedText(normalizedSource.text, options);
     const maxChunks = checkedTextMaxChunks(this.context.config.similarity?.text);
     if (embeddedChunks.length > maxChunks) {
       throw new EngineFault({
@@ -621,6 +619,7 @@ class LocalSimilarityApi implements SimilarityApi {
       provider.dimensions,
     );
     this.indexes.delete(indexKey("text", provider.embeddingSpace));
+    checkMediaCancellation(options);
     const row = this.context.store.runtime((now) => {
       let documentId: number;
       if (existing) {
@@ -953,7 +952,7 @@ class LocalSimilarityApi implements SimilarityApi {
       .slice(0, limit);
   }
 
-  private async embedMediaSource(source: SelectedSource): Promise<{
+  private async embedMediaSource(source: SelectedSource, options: MediaOperationOptions): Promise<{
     vector: Float32Array;
     frameCount: number | null;
     reused: boolean;
@@ -963,22 +962,22 @@ class LocalSimilarityApi implements SimilarityApi {
     );
     if (source.kind === "audio") {
       const provider = this.requireAudioProvider();
-      await provider.prepare();
+      await provider.prepare(options);
       return {
-        vector: normalized(await provider.embedAudio(localPath)),
+        vector: normalized(await provider.embedAudio(localPath, options)),
         frameCount: null,
         reused: false,
       };
     }
-    await this.provider.prepare();
+    await this.provider.prepare(options);
     if (source.kind === "image") {
       return {
-        vector: normalized(await this.provider.embedImage(localPath)),
+        vector: normalized(await this.provider.embedImage(localPath, options)),
         frameCount: null,
         reused: false,
       };
     }
-    const video = await this.provider.embedVideo(localPath);
+    const video = await this.provider.embedVideo(localPath, options);
     return {
       vector: normalized(video.vector),
       frameCount: video.frameCount,
@@ -986,10 +985,11 @@ class LocalSimilarityApi implements SimilarityApi {
     };
   }
 
-  private async embedText(text: string): Promise<SimilarityTextChunk[]> {
+  private async embedText(text: string, options: MediaOperationOptions): Promise<SimilarityTextChunk[]> {
     const provider = this.requireTextProvider();
-    await provider.prepare();
-    const chunks = await provider.embedText(text);
+    await provider.prepare(options);
+    const chunks = await provider.embedText(text, options);
+    checkMediaCancellation(options);
     this.validateTextChunks(text, chunks, provider.dimensions);
     const maxChunks = checkedTextMaxChunks(this.context.config.similarity?.text);
     if (chunks.length > maxChunks) {
@@ -1468,24 +1468,27 @@ class LocalClipProvider implements SimilarityEmbeddingProvider {
     private readonly config: SimilarityConfig,
   ) {}
 
-  async prepare(): Promise<void> {
+  async prepare(options: MediaOperationOptions = {}): Promise<void> {
+    checkMediaCancellation(options);
     await this.loadEmbedder();
+    checkMediaCancellation(options);
   }
 
-  async embedImage(sourcePath: string): Promise<Float32Array> {
-    const vectors = await this.embedImages([sourcePath]);
+  async embedImage(sourcePath: string, options: MediaOperationOptions = {}): Promise<Float32Array> {
+    const vectors = await this.embedImages([sourcePath], options);
     const vector = vectors[0];
     if (!vector) throw new Error("Image embedder returned no vector");
     return vector;
   }
 
-  async embedVideo(sourcePath: string): Promise<{
+  async embedVideo(sourcePath: string, options: MediaOperationOptions = {}): Promise<{
     vector: Float32Array;
     frameCount: number;
   }> {
     const duration = await probeDuration(
       this.config.ffprobePath ?? "ffprobe",
       sourcePath,
+      options,
     );
     const frameCount = Math.min(120, Math.max(1, Math.ceil(duration / 2)));
     const framesDir = await mkdtemp(path.join(tmpdir(), "videobook-sim-"));
@@ -1495,6 +1498,7 @@ class LocalClipProvider implements SimilarityEmbeddingProvider {
         "-hide_banner",
         "-loglevel",
         "error",
+        "-nostdin", "-protocol_whitelist", "file,pipe",
         "-i",
         sourcePath,
         "-an",
@@ -1503,7 +1507,7 @@ class LocalClipProvider implements SimilarityEmbeddingProvider {
         "-frames:v",
         String(frameCount),
         path.join(framesDir, "frame-%04d.png"),
-      ]);
+      ], options);
       const frames = (await readdir(framesDir))
         .filter((name) => name.endsWith(".png"))
         .sort()
@@ -1516,7 +1520,7 @@ class LocalClipProvider implements SimilarityEmbeddingProvider {
       }
       const vectors: Float32Array[] = [];
       for (let offset = 0; offset < frames.length; offset += 8) {
-        vectors.push(...(await this.embedImages(frames.slice(offset, offset + 8))));
+        vectors.push(...(await this.embedImages(frames.slice(offset, offset + 8), options)));
       }
       return { vector: normalizedCentroid(vectors), frameCount: vectors.length };
     } finally {
@@ -1553,10 +1557,12 @@ class LocalClipProvider implements SimilarityEmbeddingProvider {
     }
   }
 
-  private async embedImages(sourcePaths: string[]): Promise<Float32Array[]> {
+  private async embedImages(sourcePaths: string[], options: MediaOperationOptions): Promise<Float32Array[]> {
     const embedder = await this.loadEmbedder();
-    const images = await Promise.all(sourcePaths.map(readNormalizedImage));
+    checkMediaCancellation(options);
+    const images = await Promise.all(sourcePaths.map((source) => readNormalizedImage(source, options)));
     const output = await embedder(images);
+    checkMediaCancellation(options);
     const batch = output.dims[0];
     const dimensions = output.dims[1];
     if (batch !== sourcePaths.length || dimensions !== this.dimensions) {
@@ -1590,20 +1596,25 @@ class LocalClapAudioProvider implements SimilarityAudioEmbeddingProvider {
         : DEFAULT_AUDIO_EMBEDDING_SPACE;
   }
 
-  async prepare(): Promise<void> {
+  async prepare(options: MediaOperationOptions = {}): Promise<void> {
+    checkMediaCancellation(options);
     await this.loadModel();
+    checkMediaCancellation(options);
   }
 
-  async embedAudio(sourcePath: string): Promise<Float32Array> {
+  async embedAudio(sourcePath: string, options: MediaOperationOptions = {}): Promise<Float32Array> {
+    checkMediaCancellation(options);
     const { processor, model } = await this.loadModel();
     const audio = await decodeAudioToMono(
       this.config.ffmpegPath ?? this.sharedConfig.ffmpegPath ?? "ffmpeg",
       sourcePath,
       this.sampleRate,
       this.maxSamples,
+      options,
     );
     const inputs = await processor(audio);
     const output = await model(inputs);
+    checkMediaCancellation(options);
     const dimensions = output.audio_embeds.dims;
     if (
       dimensions.length !== 2 ||
@@ -1689,15 +1700,19 @@ class LocalTextProvider implements SimilarityTextEmbeddingProvider {
       : DEFAULT_TEXT_EMBEDDING_SPACE;
   }
 
-  async prepare(): Promise<void> {
+  async prepare(options: MediaOperationOptions = {}): Promise<void> {
+    checkMediaCancellation(options);
     await this.loadEmbedder();
+    checkMediaCancellation(options);
   }
 
-  async embedText(text: string): Promise<SimilarityTextChunk[]> {
+  async embedText(text: string, options: MediaOperationOptions = {}): Promise<SimilarityTextChunk[]> {
+    checkMediaCancellation(options);
     const embedder = await this.loadEmbedder();
     const ranges = makeTextRanges(text, embedder.tokenizer);
     const chunks: SimilarityTextChunk[] = [];
     for (let offset = 0; offset < ranges.length; offset += 32) {
+      checkMediaCancellation(options);
       const batchRanges = ranges.slice(offset, offset + 32);
       const output = await embedder(
         batchRanges.map((range) => text.slice(range.startOffset, range.endOffset)),
@@ -1783,29 +1798,15 @@ function similarityKind(artifact: ArtifactRow): SimilarityKind {
   });
 }
 
-async function readNormalizedImage(sourcePath: string): Promise<unknown> {
-  const [sharp, { RawImage }] = await Promise.all([
-    loadSharp(),
-    loadTransformers(),
-  ]);
-  const decoded = await sharp(sourcePath, { animated: false })
-    .rotate()
-    .toColourspace("srgb")
-    .removeAlpha()
-    .raw()
-    .toBuffer({ resolveWithObject: true });
-  if (decoded.info.width <= 0 || decoded.info.height <= 0) {
-    throw new Error(`Invalid image dimensions: ${sourcePath}`);
-  }
-  if (decoded.info.channels !== 3) {
-    throw new Error(`Expected RGB image after conversion: ${sourcePath}`);
-  }
+async function readNormalizedImage(sourcePath: string, options: MediaOperationOptions = {}): Promise<unknown> {
+  const [{ RawImage }, decoded] = await Promise.all([loadTransformers(), decodeModelImage(sourcePath, options)]);
   return new RawImage(decoded.data, decoded.info.width, decoded.info.height, 3);
 }
 
 async function probeDuration(
   ffprobePath: string,
   sourcePath: string,
+  options: MediaOperationOptions,
 ): Promise<number> {
   const result = await runCommand(ffprobePath, [
     "-v",
@@ -1814,8 +1815,9 @@ async function probeDuration(
     "format=duration",
     "-of",
     "default=noprint_wrappers=1:nokey=1",
+    "-protocol_whitelist", "file,pipe",
     sourcePath,
-  ]);
+  ], { ...options, maxStdoutBytes: 64 * 1024 });
   const duration = Number.parseFloat(result.stdout.trim());
   if (!Number.isFinite(duration) || duration <= 0) {
     throw new EngineFault({
@@ -1831,12 +1833,14 @@ async function decodeAudioToMono(
   sourcePath: string,
   sampleRate: number,
   maxSamples: number,
+  options: MediaOperationOptions,
 ): Promise<Float32Array> {
-  const output = await runBinaryCommand(ffmpegPath, [
+  const output = await runMediaProcess(ffmpegPath, [
     "-hide_banner",
     "-loglevel",
     "error",
     "-nostdin",
+    "-protocol_whitelist", "file,pipe",
     "-i",
     sourcePath,
     "-map",
@@ -1853,7 +1857,7 @@ async function decodeAudioToMono(
     "-acodec",
     "pcm_f32le",
     "pipe:1",
-  ]);
+  ], { ...options, maxStdoutBytes: maxSamples * Float32Array.BYTES_PER_ELEMENT });
   if (output.stdout.byteLength === 0) {
     throw new EngineFault({
       code: "INVALID_INPUT",
@@ -1874,49 +1878,13 @@ async function decodeAudioToMono(
 async function runCommand(
   command: string,
   args: string[],
+  options: MediaOperationOptions & { maxStdoutBytes?: number } = {},
 ): Promise<{ stdout: string; stderr: string }> {
-  const output = await runBinaryCommand(command, args);
+  const output = await runMediaProcess(command, args, options);
   return {
     stdout: output.stdout.toString("utf8"),
     stderr: output.stderr,
   };
-}
-
-function runBinaryCommand(
-  command: string,
-  args: string[],
-): Promise<{ stdout: Buffer; stderr: string }> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(command, args, { stdio: ["ignore", "pipe", "pipe"] });
-    const stdout: Buffer[] = [];
-    const stderr: Buffer[] = [];
-    child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
-    child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
-    child.once("error", (error) => {
-      reject(
-        new EngineFault({
-          code: "FEATURE_UNAVAILABLE",
-          message: `Unable to start ${command}: ${errorMessage(error)}`,
-        }),
-      );
-    });
-    child.once("close", (code) => {
-      const output = {
-        stdout: Buffer.concat(stdout),
-        stderr: Buffer.concat(stderr).toString("utf8"),
-      };
-      if (code === 0) {
-        resolve(output);
-        return;
-      }
-      reject(
-        new EngineFault({
-          code: "INVALID_INPUT",
-          message: `${command} exited with code ${code}: ${output.stderr.trim()}`,
-        }),
-      );
-    });
-  });
 }
 
 function normalizePlainText(raw: string): NormalizedText {

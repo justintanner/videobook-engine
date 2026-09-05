@@ -1,6 +1,7 @@
-import { spawn } from "node:child_process";
 import { mkdir } from "node:fs/promises";
-import type Sharp from "sharp";
+import type { MediaOperationOptions } from "./engine-types.js";
+import { decodeModelImage } from "./media-image.js";
+import { runMediaProcess, checkMediaCancellation } from "./media-process.js";
 
 import type {
   IndexManifest,
@@ -9,19 +10,12 @@ import type {
 import { EngineFault } from "./store.js";
 
 type TransformersModule = typeof import("./transformers-runtime.js");
-type SharpFn = typeof Sharp;
 
 let transformersModule: Promise<TransformersModule> | undefined;
-let sharpModule: Promise<SharpFn> | undefined;
 
 function loadTransformers(): Promise<TransformersModule> {
   transformersModule ??= import("./transformers-runtime.js");
   return transformersModule;
-}
-
-function loadSharp(): Promise<SharpFn> {
-  sharpModule ??= import("sharp").then((mod) => mod.default);
-  return sharpModule;
 }
 
 export const LOCAL_CLIP_MODEL_ID = "Xenova/clip-vit-base-patch32";
@@ -123,16 +117,20 @@ export class LocalClipTemporalProvider implements TemporalSearchProvider {
 
   constructor(private readonly options: LocalClipTemporalProviderOptions) {}
 
-  async prepare(): Promise<void> {
+  async prepare(options: MediaOperationOptions = {}): Promise<void> {
+    checkMediaCancellation(options);
     await Promise.all([this.loadImagePipeline(), this.loadTextModel()]);
+    checkMediaCancellation(options);
   }
 
-  async embedText(text: string): Promise<Float32Array> {
+  async embedText(text: string, options: MediaOperationOptions = {}): Promise<Float32Array> {
+    checkMediaCancellation(options);
     const { tokenizer, model } = await this.loadTextModel();
     const output = await model(tokenizer([text], {
       padding: true,
       truncation: true,
     }));
+    checkMediaCancellation(options);
     if (
       output.text_embeds.dims.length !== 2
       || output.text_embeds.dims[0] !== 1
@@ -145,10 +143,12 @@ export class LocalClipTemporalProvider implements TemporalSearchProvider {
     return normalized(output.text_embeds.data.slice());
   }
 
-  async embedImage(sourcePath: string): Promise<Float32Array> {
+  async embedImage(sourcePath: string, options: MediaOperationOptions = {}): Promise<Float32Array> {
+    checkMediaCancellation(options);
     const embedder = await this.loadImagePipeline();
-    const image = await readNormalizedImage(sourcePath);
+    const image = await readNormalizedImage(sourcePath, options);
     const output = await embedder(image);
+    checkMediaCancellation(options);
     if (
       output.dims.length !== 2
       || output.dims[0] !== 1
@@ -224,16 +224,20 @@ export class LocalClapTemporalProvider implements TemporalSearchProvider {
 
   constructor(private readonly options: LocalClapTemporalProviderOptions) {}
 
-  async prepare(): Promise<void> {
+  async prepare(options: MediaOperationOptions = {}): Promise<void> {
+    checkMediaCancellation(options);
     await Promise.all([this.loadAudioModel(), this.loadTextModel()]);
+    checkMediaCancellation(options);
   }
 
-  async embedText(text: string): Promise<Float32Array> {
+  async embedText(text: string, options: MediaOperationOptions = {}): Promise<Float32Array> {
+    checkMediaCancellation(options);
     const { tokenizer, model } = await this.loadTextModel();
     const output = await model(tokenizer([text], {
       padding: true,
       truncation: true,
     }));
+    checkMediaCancellation(options);
     return checkedEmbedding(
       output.text_embeds,
       this.dimensions,
@@ -245,15 +249,19 @@ export class LocalClapTemporalProvider implements TemporalSearchProvider {
     sourcePath: string,
     startSeconds = 0,
     durationSeconds = 10,
+    options: MediaOperationOptions = {},
   ): Promise<Float32Array> {
+    checkMediaCancellation(options);
     const { processor, model } = await this.loadAudioModel();
     const decoded = await decodeAudio(
       this.options.ffmpegPath ?? "ffmpeg",
       sourcePath,
       startSeconds,
       durationSeconds,
+      options,
     );
     const output = await model(await processor(decoded));
+    checkMediaCancellation(options);
     return checkedEmbedding(
       output.audio_embeds,
       this.dimensions,
@@ -330,30 +338,9 @@ export class LocalClapTemporalProvider implements TemporalSearchProvider {
   }
 }
 
-async function readNormalizedImage(sourcePath: string): Promise<unknown> {
-  const [sharp, { RawImage }] = await Promise.all([
-    loadSharp(),
-    loadTransformers(),
-  ]);
-  const decoded = await sharp(sourcePath, { animated: false })
-    .rotate()
-    .toColourspace("srgb")
-    .removeAlpha()
-    .raw()
-    .toBuffer({ resolveWithObject: true });
-  if (
-    decoded.info.width <= 0
-    || decoded.info.height <= 0
-    || decoded.info.channels !== 3
-  ) {
-    throw new Error(`Unable to normalize image for CLIP: ${sourcePath}`);
-  }
-  return new RawImage(
-    decoded.data,
-    decoded.info.width,
-    decoded.info.height,
-    3,
-  );
+async function readNormalizedImage(sourcePath: string, options: MediaOperationOptions): Promise<unknown> {
+  const [{ RawImage }, decoded] = await Promise.all([loadTransformers(), decodeModelImage(sourcePath, options)]);
+  return new RawImage(decoded.data, decoded.info.width, decoded.info.height, 3);
 }
 
 function normalized(vector: Float32Array): Float32Array {
@@ -395,77 +382,28 @@ function modelOptions(
   };
 }
 
-function decodeAudio(
+async function decodeAudio(
   ffmpegPath: string,
   sourcePath: string,
   startSeconds: number,
   durationSeconds: number,
+  options: MediaOperationOptions,
 ): Promise<Float32Array> {
-  if (
-    !Number.isFinite(startSeconds)
-    || startSeconds < 0
-    || !Number.isFinite(durationSeconds)
-    || durationSeconds <= 0
-  ) {
-    throw new Error("CLAP audio range must have a non-negative start and positive duration");
+  if (!Number.isFinite(startSeconds) || startSeconds < 0 || !Number.isFinite(durationSeconds) || durationSeconds <= 0) {
+    throw new EngineFault({ code: "INVALID_INPUT", message: "CLAP audio range must have a non-negative start and positive duration" });
   }
-  return new Promise((resolve, reject) => {
-    const child = spawn(ffmpegPath, [
-      "-hide_banner",
-      "-loglevel",
-      "error",
-      "-nostdin",
-      "-ss",
-      String(startSeconds),
-      "-i",
-      sourcePath,
-      "-map",
-      "0:a:0",
-      "-vn",
-      "-ac",
-      "1",
-      "-ar",
-      "48000",
-      "-t",
-      String(Math.min(durationSeconds, 10)),
-      "-f",
-      "f32le",
-      "-acodec",
-      "pcm_f32le",
-      "pipe:1",
-    ], { stdio: ["ignore", "pipe", "pipe"] });
-    const stdout: Buffer[] = [];
-    const stderr: Buffer[] = [];
-    child.stdout.on("data", (chunk: Buffer) => stdout.push(chunk));
-    child.stderr.on("data", (chunk: Buffer) => stderr.push(chunk));
-    child.once("error", (error) => reject(localModelFault(
-      "CLAP audio decoder",
-      error,
-      true,
-    )));
-    child.once("close", (code) => {
-      if (code !== 0) {
-        reject(new EngineFault({
-          code: "INVALID_INPUT",
-          message: `Unable to decode audio for CLAP: ${
-            Buffer.concat(stderr).toString("utf8").trim()
-          }`,
-        }));
-        return;
-      }
-      const buffer = Buffer.concat(stdout);
-      if (
-        buffer.byteLength === 0
-        || buffer.byteLength % Float32Array.BYTES_PER_ELEMENT !== 0
-      ) {
-        reject(new Error("CLAP audio decoder returned invalid PCM"));
-        return;
-      }
-      const bytes = new Uint8Array(buffer.byteLength);
-      bytes.set(buffer);
-      resolve(new Float32Array(bytes.buffer));
-    });
-  });
+  const duration = Math.min(durationSeconds, 10);
+  const { stdout: buffer } = await runMediaProcess(ffmpegPath, [
+    "-hide_banner", "-loglevel", "error", "-nostdin", "-ss", String(startSeconds),
+    "-protocol_whitelist", "file,pipe", "-i", sourcePath, "-map", "0:a:0", "-vn", "-ac", "1", "-ar", "48000",
+    "-t", String(duration), "-f", "f32le", "-acodec", "pcm_f32le", "pipe:1",
+  ], { ...options, maxStdoutBytes: Math.ceil(duration * 48000) * Float32Array.BYTES_PER_ELEMENT });
+  if (buffer.byteLength === 0 || buffer.byteLength % Float32Array.BYTES_PER_ELEMENT !== 0) {
+    throw new EngineFault({ code: "INVALID_INPUT", message: "CLAP audio decoder returned invalid PCM" });
+  }
+  const bytes = new Uint8Array(buffer.byteLength);
+  bytes.set(buffer);
+  return new Float32Array(bytes.buffer);
 }
 
 function modelFault(

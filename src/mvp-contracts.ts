@@ -2,6 +2,7 @@ import type {
   ArtifactKind,
   EngineError,
   EngineErrorCode,
+  MediaOperationOptions,
 } from "./engine-types.js";
 import type {
   MediaSourceSnapshot,
@@ -811,8 +812,8 @@ export interface TemporalIndexPlan {
 
 export interface TemporalSearchProvider {
   readonly manifestId: string;
-  prepare(): Promise<void>;
-  embedText(text: string): Promise<Float32Array>;
+  prepare(options?: MediaOperationOptions): Promise<void>;
+  embedText(text: string, options?: MediaOperationOptions): Promise<Float32Array>;
 }
 
 export interface TemporalSearchStats {

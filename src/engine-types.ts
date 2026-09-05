@@ -171,12 +171,17 @@ export interface CatalogIntegritySnapshot {
 
 export type SimilarityKind = "image" | "video" | "audio" | "text";
 
+export interface MediaOperationOptions {
+  signal?: AbortSignal;
+  timeoutMs?: number;
+}
+
 export interface SimilarityEmbeddingProvider {
   readonly embeddingSpace: string;
   readonly dimensions: number;
-  prepare(): Promise<void>;
-  embedImage(sourcePath: string): Promise<Float32Array>;
-  embedVideo(sourcePath: string): Promise<{
+  prepare(options?: MediaOperationOptions): Promise<void>;
+  embedImage(sourcePath: string, options?: MediaOperationOptions): Promise<Float32Array>;
+  embedVideo(sourcePath: string, options?: MediaOperationOptions): Promise<{
     vector: Float32Array;
     frameCount: number;
   }>;
@@ -191,15 +196,15 @@ export interface SimilarityTextChunk {
 export interface SimilarityTextEmbeddingProvider {
   readonly embeddingSpace: string;
   readonly dimensions: number;
-  prepare(): Promise<void>;
-  embedText(text: string): Promise<SimilarityTextChunk[]>;
+  prepare(options?: MediaOperationOptions): Promise<void>;
+  embedText(text: string, options?: MediaOperationOptions): Promise<SimilarityTextChunk[]>;
 }
 
 export interface SimilarityAudioEmbeddingProvider {
   readonly embeddingSpace: string;
   readonly dimensions: number;
-  prepare(): Promise<void>;
-  embedAudio(sourcePath: string): Promise<Float32Array>;
+  prepare(options?: MediaOperationOptions): Promise<void>;
+  embedAudio(sourcePath: string, options?: MediaOperationOptions): Promise<Float32Array>;
 }
 
 export interface SimilarityAudioConfig {
@@ -247,11 +252,11 @@ export interface SimilarityConfig {
   text?: SimilarityTextConfig;
 }
 
-export interface SimilarityIndexOptions {
+export interface SimilarityIndexOptions extends MediaOperationOptions {
   force?: boolean;
 }
 
-export interface SimilarityQueryOptions {
+export interface SimilarityQueryOptions extends MediaOperationOptions {
   limit?: number;
   minScore?: number;
   includeSelf?: boolean;
@@ -309,7 +314,7 @@ export interface SimilarityStats {
   embeddingSpaces: Partial<Record<SimilarityKind, string>>;
 }
 
-export interface SimilarityPrepareOptions {
+export interface SimilarityPrepareOptions extends MediaOperationOptions {
   kind?: SimilarityKind;
 }
 
@@ -335,7 +340,7 @@ export interface SimilarityApi {
   rebuild(options?: {
     kind?: SimilarityKind;
     force?: boolean;
-  }): Promise<Result<SimilarityIndexResult[], EngineError>>;
+  } & MediaOperationOptions): Promise<Result<SimilarityIndexResult[], EngineError>>;
   status(artifact: string): Result<SimilarityStatus, EngineError>;
   stats(): Result<SimilarityStats, EngineError>;
   findSimilar(

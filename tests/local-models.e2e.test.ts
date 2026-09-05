@@ -1,5 +1,5 @@
 import { execFile } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -39,7 +39,7 @@ describe.runIf(enabled)("pinned local semantic models", () => {
     }).png().toFile(imagePath);
     const provider = new LocalClipTemporalProvider({
       modelCacheDir: join(homedir(), ".cache", "videobook", "models"),
-      allowModelDownload: true,
+      allowModelDownload: false,
     });
     const [text, image] = await Promise.all([
       provider.embedText("a solid red image"),
@@ -63,7 +63,7 @@ describe.runIf(enabled)("pinned local semantic models", () => {
     const provider = new LocalClapTemporalProvider({
       modelCacheDir: join(homedir(), ".cache", "videobook", "models"),
       ffmpegPath: "ffmpeg",
-      allowModelDownload: true,
+      allowModelDownload: false,
     });
     const [text, audio] = await Promise.all([
       provider.embedText("a steady electronic tone"),
@@ -72,6 +72,17 @@ describe.runIf(enabled)("pinned local semantic models", () => {
     expectNormalized(text, 512);
     expectNormalized(audio, 512);
     expect(dot(text, audio)).toBeGreaterThan(-1);
+    await expect(provider.embedAudio(audioPath, 0, 2, { timeoutMs: 1 }))
+      .rejects.toMatchObject({ error: { code: "TIMEOUT" } });
+    const controller = new AbortController();
+    const cancelled = provider.embedAudio(audioPath, 0, 2, { signal: controller.signal });
+    const assertion = expect(cancelled).rejects.toMatchObject({ error: { code: "CANCELLED" } });
+    setTimeout(() => controller.abort(), 1);
+    await assertion;
+    const malformed = join(root, "malformed.wav");
+    await writeFile(malformed, "not audio");
+    await expect(provider.embedAudio(malformed)).rejects.toMatchObject({ error: { code: "INVALID_INPUT" } });
+    expectNormalized(await provider.embedAudio(audioPath, 0, 2), 512);
   }, 15 * 60_000);
 });
 
