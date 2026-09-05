@@ -184,3 +184,20 @@ were 62 ms (image), 162 ms (video), and 361 ms (hybrid); peak RSS was 3.58 GiB.
 All harness gates passed. This includes incremental construction and persisted
 reopen, but does not remove the separate fresh-process catalog GC or corpus
 quality release gates.
+
+## Healthy catalog reopen in a fresh process
+
+The [fresh-process run](../benchmarks/results/temporal-100k-fresh-process.json)
+reuses the persisted 100,000-moment fixture after recording successful catalog
+compaction. It runs in a new Node process on the same M1 Pro/16 GB device.
+Open plus book/search summary took 1.14 seconds, compared with 4.76 seconds
+when the same fixture first required compaction. The first image query took
+4.14 seconds including vector and verified graph loading. Fifty warm queries
+per mode passed with p95s of 95 ms (image), 154 ms (video), and 378 ms (hybrid).
+This query process peaked at 2.02 GiB and passed all harness gates; its indexing
+metrics describe the earlier fixture creation, not new indexing work.
+
+The store now skips size-triggered GC only when its disposable compaction
+record matches the catalog file. Writes invalidate the record, and missing or
+damaged metadata falls back to GC. This resolves the repeated healthy-catalog
+compaction measured above; frozen-corpus quality remains a separate gate.

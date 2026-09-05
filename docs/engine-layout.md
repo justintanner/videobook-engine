@@ -491,13 +491,21 @@ the engine deliberately does not implement it.
   `"N chunks removed, M chunks kept"` summary). `gc({ doltGc: true })` runs
   it after collecting to physically reclaim chunks left behind by dropped
   table data in the versioned catalog. The store also GC's automatically
-  at open when `videobook.db` exceeds 64 MiB (configurable via
+  at open when `videobook.db` exceeds 64 MiB without a verified compaction
+  record (configurable via
   `EngineConfig.catalogGc`) and at close after any runtime or semantic
   write, returning a `CatalogGcReport` (`engine.lastCatalogGc` /
   `engine.gcCatalog()`) with the summary and byte delta. GC never mints a
   commit. Periodic GC-after-N-writes is not implemented: cached prepared
   statements would have to be dropped, and `dolt_gc` cannot run inside
   `serial()` or an open transaction.
+- After successful GC, a clean close atomically writes `videobook.db.gc.json`
+  with the catalog's device, inode, size, and nanosecond modification/change
+  times. An unchanged catalog can then skip repeated open-time compaction.
+  Transactions invalidate this disposable record before writing. Missing,
+  malformed, mismatched records and nonempty WAL/journal files preserve the
+  size-triggered GC fallback. Runtime schema metadata is only rewritten when
+  its version changes, avoiding a write on every read-only open.
 - Run `deleteObject` and `gc` only while no imports are in flight; CAS puts
   happen outside the serialized write chain, so a concurrent import could
   race the sweep.

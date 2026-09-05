@@ -1,4 +1,4 @@
-import { mkdtemp, rm, stat } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
 import { performance } from "node:perf_hooks";
@@ -94,6 +94,50 @@ function stripVolatile(snapshot: CatalogIntegritySnapshot): CatalogIntegritySnap
 }
 
 describe("catalog dolt_gc", () => {
+  it("reuses verified compaction across repeated read-only opens above the size threshold", async () => {
+    const { engine, root, dataDir } = await setup("healthy-large", { bytesThreshold: 1 });
+    churnRuntimeJobs(engine, 20);
+    engine.close();
+    const marker = `${catalogPath(dataDir)}.gc.json`;
+    expect(JSON.parse(await readFile(marker, "utf8"))).toMatchObject({ version: 1 });
+    for (let index = 0; index < 3; index++) {
+      const next = reopen(dataDir, path.join(root, "workspace"), { bytesThreshold: 1 });
+      expect(next.engine.lastCatalogGc).toBeUndefined();
+      expect(next.engine.jobs.queue.count()).toBe(20);
+      next.engine.close();
+    }
+  });
+
+  it("invalidates compaction before writes even when automatic close GC is disabled", async () => {
+    const { engine, root, dataDir } = await setup("changed-after-gc", { bytesThreshold: 1, onClose: false });
+    churnRuntimeJobs(engine, 20);
+    engine.gcCatalog();
+    engine.close();
+    const next = reopen(dataDir, path.join(root, "workspace"), { bytesThreshold: 1, onClose: false }).engine;
+    expect(next.lastCatalogGc).toBeUndefined();
+    churnRuntimeJobs(next, 20);
+    await expect(readFile(`${catalogPath(dataDir)}.gc.json`)).rejects.toMatchObject({ code: "ENOENT" });
+    next.close();
+    const recovered = reopen(dataDir, path.join(root, "workspace"), { bytesThreshold: 1 }).engine;
+    expect(recovered.lastCatalogGc?.trigger).toBe("open");
+    expect(recovered.jobs.queue.count()).toBe(20);
+  });
+
+  it("rejects incomplete compaction records and externally changed catalog fingerprints", async () => {
+    const { engine, root, dataDir } = await setup("invalid-gc-marker", { bytesThreshold: 1 });
+    churnRuntimeJobs(engine, 20);
+    engine.close();
+    await writeFile(`${catalogPath(dataDir)}.gc.json`, '{"version":1');
+    const recovered = reopen(dataDir, path.join(root, "workspace"), { bytesThreshold: 1 }).engine;
+    expect(recovered.lastCatalogGc?.trigger).toBe("open");
+    recovered.close();
+    const prior = await stat(catalogPath(dataDir));
+    await utimes(catalogPath(dataDir), prior.atime, new Date(prior.mtimeMs + 10_000));
+    const changed = reopen(dataDir, path.join(root, "workspace"), { bytesThreshold: 1 }).engine;
+    expect(changed.lastCatalogGc?.trigger).toBe("open");
+    expect(changed.jobs.queue.count()).toBe(20);
+  });
+
   it(
     "keeps a churned catalog size-bounded and reopening under 200 ms",
     { timeout: 60_000 },

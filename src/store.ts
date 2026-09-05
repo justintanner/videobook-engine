@@ -19,6 +19,7 @@ import type {
   SemanticCommitBoundary,
 } from "./engine-types.js";
 import { DEFAULT_CATALOG_GC_BYTES_THRESHOLD } from "./engine-types.js";
+import { forgetCatalogCompaction, isCatalogCompacted, rememberCatalogCompaction } from "./catalog-gc-state.js";
 import { initialOrderKeys } from "./order-keys.js";
 import { applyV22NotebookGridMigration } from "./migrate-grid-v22.js";
 import { applyV23NotebookGridMigration } from "./migrate-grid-v23.js";
@@ -93,6 +94,7 @@ export class DoltStore {
   };
   private writeCount = 0;
   private semanticChangeCount = 0;
+  private catalogCompacted = false;
   lastCatalogGc: CatalogGcReport | undefined;
 
   constructor(input: {
@@ -124,6 +126,7 @@ export class DoltStore {
     mkdirSync(this.workspaceDir, { recursive: true });
 
     const existed = existsSync(this.databasePath);
+    this.catalogCompacted = existed && isCatalogCompacted(this.databasePath);
     this.db = new DatabaseSync(this.databasePath);
     // GC before configureConnection/initialize prepare any statement so
     // workingDiffProbes never holds a pre-GC StatementSync.
@@ -154,6 +157,7 @@ export class DoltStore {
       }
     }
     this.db.close();
+    if (this.catalogCompacted) rememberCatalogCompaction(this.databasePath);
   }
 
   async semantic<T>(
@@ -233,6 +237,7 @@ export class DoltStore {
 
   gcCatalog(trigger: CatalogGcTrigger): CatalogGcReport {
     if (trigger !== "open") this.assertRuntimeUnstaged();
+    this.invalidateCompaction();
     const bytesBefore = statSync(this.databasePath).size;
     const summary = this.runDoltGc();
     this.workingDiffProbes.clear();
@@ -254,6 +259,7 @@ export class DoltStore {
       chunksKept: parsed.chunksKept,
     };
     this.lastCatalogGc = report;
+    this.catalogCompacted = true;
     return report;
   }
 
@@ -279,7 +285,7 @@ export class DoltStore {
   }
 
   private maybeGcOnOpen(): void {
-    if (!this.catalogGcConfig.onOpen) return;
+    if (!this.catalogGcConfig.onOpen || this.catalogCompacted) return;
     const size = statSync(this.databasePath).size;
     if (size < this.catalogGcConfig.bytesThreshold) return;
     this.gcCatalog("open");
@@ -407,15 +413,20 @@ export class DoltStore {
     }
 
     this.db.exec(RUNTIME_SCHEMA_SQL);
-    this.db
-      .prepare(
-        `INSERT INTO runtime_meta(key, value_json, updated_at)
-         VALUES ('schema_version', ?, ?)
-         ON CONFLICT(key) DO UPDATE SET
-           value_json=excluded.value_json,
-           updated_at=excluded.updated_at`,
-      )
-      .run(String(SCHEMA_VERSION), Date.now());
+    const runtimeSchema = this.db.prepare("SELECT value_json FROM runtime_meta WHERE key='schema_version'")
+      .get() as { value_json: string } | undefined;
+    if (runtimeSchema?.value_json !== String(SCHEMA_VERSION)) {
+      this.invalidateCompaction();
+      this.db
+        .prepare(
+          `INSERT INTO runtime_meta(key, value_json, updated_at)
+           VALUES ('schema_version', ?, ?)
+           ON CONFLICT(key) DO UPDATE SET
+             value_json=excluded.value_json,
+             updated_at=excluded.updated_at`,
+        )
+        .run(String(SCHEMA_VERSION), Date.now());
+    }
     this.assertRuntimeUnstaged();
     this.recoverOutbox();
     this.verifyCleanSemanticWorktree();
@@ -425,6 +436,7 @@ export class DoltStore {
     apply: (db: DatabaseSync) => unknown,
     fromVersion: number,
   ): void {
+    this.invalidateCompaction();
     apply(this.db);
     const status = this.db.doltStatus();
     this.assertOnlyVersionedStaged(status);
@@ -467,6 +479,7 @@ export class DoltStore {
       }
       return;
     }
+    this.invalidateCompaction();
     this.db
       .prepare("SELECT dolt_remote('add', ?, ?) AS result")
       .get(remote.name, remote.url);
@@ -771,7 +784,13 @@ export class DoltStore {
   }
 
   private begin(): void {
+    this.invalidateCompaction();
     this.db.exec("BEGIN IMMEDIATE");
+  }
+
+  private invalidateCompaction(): void {
+    if (this.catalogCompacted) forgetCatalogCompaction(this.databasePath);
+    this.catalogCompacted = false;
   }
 
   private commitSql(): void {
