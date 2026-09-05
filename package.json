@@ -43,6 +43,7 @@
     "fixtures"
   ],
   "scripts": {
+    "test:package": "node scripts/package-smoke.mjs",
     "benchmark:api": "tsx benchmarks/run-api-benchmark.ts",
     "benchmark:api:smoke": "tsx benchmarks/run-api-benchmark.ts --quick",
     "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",

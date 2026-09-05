@@ -17,7 +17,7 @@ import { createEngine } from "videobook-engine";
 
 const engine = createEngine({
   rootDir: ".videobook",
-  initialBookSlug: "my-story",
+  initialBookName: "My Story",
 });
 
 const book = engine.book.get();
@@ -25,28 +25,33 @@ const book = engine.book.get();
 
 const script = await engine.artifacts.create({
   kind: "script",
-  name: "opening draft",
+  label: "opening draft",
 });
 if (!script.ok) throw new Error(script.error.message);
 
-await engine.files.write(
+const written = await engine.files.write(
   script.value.artifactId,
   "original.md",
   "# Opening\n\nA small cat waits by the window.",
 );
+if (!written.ok) throw new Error(written.error.message);
 
 const history = engine.history.artifact(script.value.artifactId);
 engine.close();
 ```
 
-`initialBookSlug` is required only when `videobook.db` does not exist yet. On
+`initialBookName` is required only when `data/videobook.db` does not exist yet. On
 later opens it is optional and never changes the stored book. Rename the book
 explicitly with `await engine.book.rename("new-name")`.
+
+`npm run test:package` packs the engine, installs it in a clean temporary
+project, executes this quick start from the installed README, and verifies
+that reopening the catalog preserves the book and artifact.
 
 ## MVP contracts
 
 Contract version 1, introduced with schema v5 and carried by the current
-schema v19 catalog, defines the media-time, stream, transcript, sequence,
+schema v24 catalog, defines the media-time, stream, transcript, sequence,
 temporal-search, edit-intent, job, and copy-forward migration boundary:
 
 ```ts
@@ -87,21 +92,20 @@ versioned `runtime_%` ignore policy, and are never staged. Semantic surrogate
 identities are UUIDv7 values. Artifact labels are free-text display names and can be
 reused after hard deletion; immutable CAS objects remain available to history.
 
-The current catalog format is schema version 20. Valid schema version 19
-catalogs upgrade in place. Catalogs with cells outside the fixed 26-by-13
-notebook grid are rejected, and older catalogs require an explicit migration
+The current catalog format is schema version 24. Valid schema version 22 and 23
+catalogs upgrade in place. Catalogs with cells outside the fixed 64-by-8
+notebook grid are rejected, and other catalog versions require an explicit migration
 or a fresh engine root.
 
-The 34 versioned semantic tables are `engine_schema`, `book`, `artifacts`,
+The 33 versioned semantic tables are `engine_schema`, `book`, `artifacts`,
 `objects`, `artifact_files`, `artifact_streams`, `book_metadata`,
 `artifact_metadata`, `entities`, `notebooks`, `notebook_fields`, `cells`,
 `notebook_cell_executions`, `notebook_generation_plans`,
-`notebook_run_plans`, `notebook_transcript_edits`,
-`notebook_transcript_attachments`, `edges`, `runs`, `cell_references`,
+`notebook_run_plans`, `edges`, `runs`, `cell_references`,
 `pinned_search_results`, `transcripts`, `transcript_segments`,
 `transcript_words`, `sequences`, `sequence_tracks`, `sequence_clips`,
 `clip_links`, `clip_transforms`, `transitions`, `caption_cues`,
-`audio_waveforms`, `prompt_entries`, and `messages`. Dolt's versioned
+`audio_waveforms`, `prompt_entries`, `messages`, and `generations`. Dolt's versioned
 `dolt_ignore` configuration table carries the local-table policy. Provenance
 is the commit log itself: every semantic commit carries its operation,
 parameters, and write set in a structured commit message, authored by the
@@ -213,7 +217,7 @@ local CLIP configuration. Text similarity is enabled separately.
 ```ts
 const engine = createEngine({
   rootDir: ".videobook",
-  initialBookSlug: "reference-library",
+  initialBookName: "Reference Library",
   similarity: {
     audio: {},
     text: {},
