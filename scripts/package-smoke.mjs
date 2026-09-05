@@ -44,7 +44,9 @@ try {
   assert.ok(example, "Installed README must contain an executable quick start");
   await writeFile(join(root, "smoke.mjs"), `
 import assert from "node:assert/strict";
-import { existsSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
+import { createRequire } from "node:module";
+import { pathToFileURL } from "node:url";
 ${example}
 assert.equal(book.name, "My Story");
 assert.equal(script.value.label, "opening draft");
@@ -55,13 +57,37 @@ try {
   assert.equal(reopened.book.get().bookId, book.bookId);
   assert.equal(reopened.artifacts.get(script.value.artifactId).value.label, "opening draft");
 } finally { reopened.close(); }
+const engineRequire = createRequire(import.meta.resolve("videobook-engine"));
+const transformersPath = engineRequire.resolve("@huggingface/transformers");
+const transformersRequire = createRequire(transformersPath);
+const sharpPath = engineRequire.resolve("sharp");
+assert.equal(realpathSync(sharpPath), realpathSync(transformersRequire.resolve("sharp")),
+  "Engine and Transformers must resolve one Sharp binary");
+const { default: sharp } = await import(pathToFileURL(sharpPath));
+const transformers = await import(pathToFileURL(transformersPath));
+const RawImage = transformers.RawImage ?? transformers.default.RawImage;
+const pixels = await sharp({ create: {
+  width: 16, height: 12, channels: 3, background: { r: 220, g: 20, b: 20 },
+} }).png().toBuffer();
+const decoded = await RawImage.fromBlob(new Blob([pixels]));
+assert.equal(decoded.width, 16);
+assert.equal(decoded.height, 12);
 console.log("Packaged README quick start and catalog reopen passed");
 `);
   const result = await run(process.execPath, [join(root, "smoke.mjs")], {
     cwd: root, maxBuffer: 16 * 1024 * 1024,
   });
   process.stdout.write(result.stdout);
+  assert.doesNotMatch(result.stderr,
+    /Class .+ is implemented in both|GNotificationCenterDelegate|duplicate.*libvips/i,
+    "Media smoke must not load competing native image libraries");
   process.stderr.write(result.stderr);
+  const resolutions = await run(npm, ["ls", "sharp", "--all", "--parseable"], {
+    cwd: root, env: installEnv,
+  });
+  assert.equal(resolutions.stdout.trim().split(/\r?\n/).filter(Boolean).length, 1,
+    "Clean installation must contain one Sharp resolution");
+  process.stdout.write("Single Sharp resolution and media decode passed\n");
 } finally {
   await rm(root, { recursive: true, force: true, maxRetries: 3 });
 }

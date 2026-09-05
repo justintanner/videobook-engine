@@ -1,5 +1,6 @@
 import { spawn } from "node:child_process";
 import { mkdir } from "node:fs/promises";
+import type Sharp from "sharp";
 
 import type {
   IndexManifest,
@@ -8,7 +9,7 @@ import type {
 import { EngineFault } from "./store.js";
 
 type TransformersModule = typeof import("@huggingface/transformers");
-type SharpFn = typeof import("sharp")["default"];
+type SharpFn = typeof Sharp;
 
 let transformersModule: Promise<TransformersModule> | undefined;
 let sharpModule: Promise<SharpFn> | undefined;

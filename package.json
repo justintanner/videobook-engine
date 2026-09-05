@@ -64,7 +64,7 @@
     "@dolthub/doltlite": "^0.11.37",
     "@huggingface/transformers": "4.2.0",
     "node-gyp": "12.1.0",
-    "sharp": "0.35.3",
+    "sharp": "0.34.5",
     "usearch": "2.26.0",
     "uuid": "^14.0.0"
   },
@@ -79,8 +79,7 @@
   "overrides": {
     "adm-zip": "0.6.0",
     "esbuild": "0.28.1",
-    "postcss": "^8.5.23",
-    "sharp": "0.35.3"
+    "postcss": "^8.5.23"
   },
   "allowScripts": {
     "@dolthub/doltlite@0.11.37": true,
@@ -88,6 +87,7 @@
     "fsevents@2.3.3": true,
     "onnxruntime-node@1.24.3": true,
     "protobufjs@7.6.5": true,
-    "usearch@2.26.0": true
+    "usearch@2.26.0": true,
+    "sharp@0.34.5": true
   }
 }

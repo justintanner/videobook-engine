@@ -48,6 +48,12 @@ explicitly with `await engine.book.rename("new-name")`.
 project, executes this quick start from the installed README, and verifies
 that reopening the catalog preserves the book and artifact.
 
+The engine and Transformers use the same Sharp 0.34.5 image decoder. Keep
+Sharp within Transformers' supported range when updating either dependency;
+the published package must deduplicate without a consumer override.
+The package smoke checks both resolution paths, `npm ls sharp`, and image
+decoding for duplicate native-library warnings.
+
 ## MVP contracts
 
 Contract version 1, introduced with schema v5 and carried by the current

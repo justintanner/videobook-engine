@@ -7,6 +7,7 @@ import { tmpdir } from "node:os";
 import * as path from "node:path";
 
 import type { Index } from "usearch";
+import type Sharp from "sharp";
 
 import {
   err,
@@ -79,7 +80,7 @@ const TEXT_ARTIFACT_KINDS = new Set<ArtifactKind>([
 
 type TransformersModule = typeof import("@huggingface/transformers");
 type UsearchModule = typeof import("usearch");
-type SharpFn = typeof import("sharp")["default"];
+type SharpFn = typeof Sharp;
 
 let transformersModule: Promise<TransformersModule> | undefined;
 let sharpModule: Promise<SharpFn> | undefined;
