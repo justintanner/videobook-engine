@@ -94,6 +94,7 @@ export class DoltStore {
   };
   private writeCount = 0;
   private semanticChangeCount = 0;
+  private pendingSemanticCommit = false;
   private catalogCompacted = false;
   lastCatalogGc: CatalogGcReport | undefined;
 
@@ -165,12 +166,15 @@ export class DoltStore {
     mutate: (operationId: string, now: number) => T,
   ): Promise<SemanticMutation<T>> {
     return this.serial(async () => {
+      if (this.pendingSemanticCommit) this.recoverOutbox();
+      this.pendingSemanticCommit = true;
       const operationId = uuidv7();
       const now = Date.now();
       this.begin();
       let value: T;
       try {
         value = mutate(operationId, now);
+        this.semanticCommitBoundary?.("after-semantic-mutation", operationId);
         this.db
           .prepare(
             `INSERT INTO runtime_commit_outbox(
@@ -198,6 +202,7 @@ export class DoltStore {
 
       this.semanticCommitBoundary?.("after-sql-commit", operationId);
       const revision = this.commitOutbox(operationId);
+      this.pendingSemanticCommit = false;
       this.writeCount += 1;
       return { value, revision, operationId };
     });
@@ -559,11 +564,11 @@ export class DoltStore {
       )
       .all() as unknown as OutboxRow[];
     for (const row of rows) {
-      this.commitOutbox(row.operation_id);
+      this.commitOutbox(row.operation_id, true);
     }
   }
 
-  private commitOutbox(operationId: string): string {
+  private commitOutbox(operationId: string, recovering = false): string {
     const row = this.db
       .prepare(
         `SELECT operation_id, tables_json, message
@@ -574,6 +579,14 @@ export class DoltStore {
     if (!row) return this.head;
     const declared = parseOutboxTables(row.tables_json);
     const dirty = declared.tables.filter((table) => this.hasWorkingDiff(table));
+    if (recovering && declared.allowEmpty && dirty.length === 0) {
+      const committed = this.db.doltLog().find((entry) =>
+        parseCommitMessage(entry.message)?.operationId === operationId);
+      if (committed) {
+        this.clearOutboxRow(operationId);
+        return committed.commit_hash;
+      }
+    }
     if (dirty.length === 0 && !declared.allowEmpty) {
       // Either the mutation only touched ignored runtime tables (bookkeeping
       // mints no commit), or this is recovery after a crash that followed the
@@ -588,14 +601,16 @@ export class DoltStore {
     // covers the post-staging assertion too.
     const status = this.db.doltStatus();
     this.assertOnlyVersionedStaged(status);
-    this.stageTables(dirty);
+    this.stageTables(dirty, operationId);
     if (
       status.some(
         (entry) => entry.table_name === "dolt_ignore" && entry.staged === 0,
       )
     ) {
       this.db.prepare("SELECT dolt_add('dolt_ignore') AS result").get();
+      this.semanticCommitBoundary?.("after-table-stage", operationId);
     }
+    this.semanticCommitBoundary?.("before-dolt-commit", operationId);
     const revision = this.sqlCommit(row.message, dirty.length === 0);
     this.semanticCommitBoundary?.("after-dolt-commit", operationId);
     // The commit is durable at this point: clear the outbox row before
@@ -612,14 +627,17 @@ export class DoltStore {
     // added safety.
     this.begin();
     try {
+      this.semanticCommitBoundary?.("before-outbox-delete", operationId);
       this.db
         .prepare("DELETE FROM runtime_commit_outbox WHERE operation_id = ?")
         .run(operationId);
+      this.semanticCommitBoundary?.("before-outbox-clear-commit", operationId);
       this.commitSql();
     } catch (error) {
       this.rollback();
       throw error;
     }
+    this.semanticCommitBoundary?.("after-outbox-clear", operationId);
   }
 
   private sqlCommit(message: string, allowEmpty = false): string {
@@ -639,7 +657,7 @@ export class DoltStore {
     return hash;
   }
 
-  private stageTables(tables: readonly SemanticTable[]): void {
+  private stageTables(tables: readonly SemanticTable[], operationId?: string): void {
     // One dolt_add per table: the multi-argument form silently falls back
     // to staging every table doltStatus over-reports as modified, which
     // would commit unrelated storage noise (and, worse, ride over the
@@ -647,6 +665,7 @@ export class DoltStore {
     const unique = uniqueSemanticTables(tables);
     for (const table of unique) {
       this.db.prepare("SELECT dolt_add(?) AS result").get(table);
+      if (operationId) this.semanticCommitBoundary?.("after-table-stage", operationId);
     }
   }
 

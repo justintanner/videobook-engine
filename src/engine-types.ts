@@ -94,7 +94,15 @@ export interface EngineIdentity {
 }
 
 export type SemanticCommitBoundary =
-  "before-sql-commit" | "after-sql-commit" | "after-dolt-commit";
+  | "after-semantic-mutation"
+  | "before-sql-commit"
+  | "after-sql-commit"
+  | "after-table-stage"
+  | "before-dolt-commit"
+  | "after-dolt-commit"
+  | "before-outbox-delete"
+  | "before-outbox-clear-commit"
+  | "after-outbox-clear";
 
 interface EngineConfigBase {
   /** Required only when initializing an empty engine root. */

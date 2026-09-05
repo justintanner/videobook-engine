@@ -1,7 +1,8 @@
 # MVP release evidence
 
 Audit date: September 6, 2026 (Asia/Bangkok). Engine source: `cb6acbf`;
-consumer source: `9ef526a3`. This is an assessment of the requirements in
+consumer source: `9ef526a3`. Subsequent verification updates are noted below.
+This is an assessment of the requirements in
 `docs/mvp-prd.md`, not a release approval. E4, E5 and the MVP remain incomplete.
 Beads contains the work assignments and current status; this report records
 the evidence and its limits at these revisions.
@@ -21,7 +22,7 @@ their actual hardware qualification; none is an M2 Pro acceptance run.
 | VE-NFR-005: 100-operation preview on 1,000 clips, p95 <250 ms, no mutation | `tests/edit-transactions.test.ts` seeds the correct scale but measures one preview and allows 500 ms; other edit tests check deterministic preview | Existing timing assertion is weaker than the requirement. Repeated strict distribution and storage invariants required by `ve-ovz.9`. |
 | VE-NFR-006: same commit batch, p95 <1 s | Same test measures one commit under 1 s | One sample cannot establish p95. `ve-ovz.9`. |
 | VE-NFR-007: 100k query/index structures <4 GB RSS beyond loaded model | Full persisted run peak 3.58 GiB including fixture construction; safe-cache query/rebuild process 2.27 GiB; no model loaded | Supported for measured synthetic workload. Reference/current-source run remains in `ve-ovz.9`. |
-| VE-NFR-008: forced termination at every SQL/outbox/Dolt boundary | Edit tests throw at three callbacks, call `close()`, then reopen | Exception recovery with graceful close is insufficient. Actual kill matrix and full boundary inventory: `ve-ovz.10`. |
+| VE-NFR-008: forced termination at every SQL/outbox/Dolt boundary | Baseline edit tests only threw exceptions and closed normally. Subsequent `tests/semantic-crash.test.ts` covers real SIGKILL at each semantic/outbox/table-staging/Dolt boundary for a multi-table edit and provenance operation, including interrupted recovery and an intervening write. | Kill matrix exposed and corrected duplicate provenance replay. See `docs/semantic-durability.md` for scope and invariants; tracked in `ve-ovz.10`. |
 | VE-NFR-009: stable search ordering, identical canonical previews/hashes | Temporal benchmark repeats queries against unchanged generations; temporal/edit regressions assert stable ordering and equivalent previews | Functional evidence present; include exact repeated large edit workload in `ve-ovz.9`. |
 | VE-NFR-010: every application frozen-corpus quality threshold | E4 evaluator and small real-model fixtures exist | Full rights-cleared frozen corpus and judged ranges absent. `ve-s84` remains incomplete; synthetic scale data cannot replace it. |
 | VE-NFR-011: cached search/index/edit/history initiates no network | Model policy HTTP counters and real cached CLIP/CLAP inference pass | Does not cover every complete operation, remote-backed missing media or injected providers. `ve-ovz.12` and `ve-ovz.14`. |
