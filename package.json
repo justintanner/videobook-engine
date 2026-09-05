@@ -55,7 +55,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "example:basic": "npm run build && tsx examples/basic-usage.ts",
-    "examples": "npm run example:basic"
+    "examples": "npm run example:basic",
+    "benchmark:temporal": "tsx benchmarks/run-temporal-benchmark.ts"
   },
   "engines": {
     "node": ">=22"

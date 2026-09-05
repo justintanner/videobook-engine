@@ -168,6 +168,11 @@ project ID.
 
 ### Full API benchmark
 
+For the separate 100,000-moment temporal search workload, run
+`npm run benchmark:temporal -- --output /tmp/temporal-search.json --assert`.
+See [the measurement method and initial baseline](docs/temporal-search-performance.md)
+for workload limits, fixture reuse, and the outstanding latency gate.
+
 The deterministic benchmark exercises every top-level `Engine` API group,
 reports latency distributions per operation, and identifies the smallest set
 of operations responsible for at least 80% of measured time:
