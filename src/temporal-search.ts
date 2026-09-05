@@ -34,6 +34,7 @@ import {
 import { EngineContext, resultOf, syncResultOf } from "./context.js";
 import { newUuidV7 } from "./ids.js";
 import { canonicalJson, EngineFault, parseJson } from "./store.js";
+import { TemporalVectorIndex } from "./temporal-vector-index.js";
 
 interface ManifestRow {
   manifest_id: string;
@@ -108,6 +109,36 @@ interface Candidate {
   signals: SearchSignal[];
   excerpt?: string;
   score: number;
+}
+
+interface CachedVector {
+  segment: SegmentRow;
+  vector: Float32Array;
+  range: SourceRange | null;
+}
+
+interface RetrievalState {
+  semanticVersion: number;
+  generationKey: string;
+  generations: Set<string>;
+  segments: Map<string, SegmentRow>;
+  texts?: Map<string, TextRow[]>;
+  vectors: Map<string, TemporalVectorIndex<CachedVector>>;
+  ordered: Map<string, Map<string, OrderedEmbedding[]>>;
+  pending: Set<string>;
+}
+
+const retrievalStates = new WeakMap<EngineContext, RetrievalState>();
+const VECTOR_CANDIDATES = 1_000;
+const continuityPrefixes = new WeakMap<OrderedEmbedding[], Float64Array>();
+const SEGMENT_SELECT = `SELECT s.segment_id, s.artifact_id, a.label AS artifact_label,
+  a.kind AS artifact_kind, a.created_at AS artifact_created_at,
+  s.stream_id, s.object_hash, s.source_range_json, s.source_path, s.segment_kind,
+  s.representative_tick, s.generation, s.manifest_id
+  FROM runtime_media_segments s JOIN artifacts a ON a.artifact_id=s.artifact_id`;
+
+export function clearTemporalSearchCache(context: EngineContext): void {
+  retrievalStates.delete(context);
 }
 
 interface StreamValidationRow {
@@ -495,6 +526,10 @@ function commitIndexBatch(
         now,
       );
   });
+  const cache = retrievalStates.get(context);
+  if (cache?.generations.has(input.generation)) {
+    for (const observation of observations) cache.pending.add(observation.segmentId);
+  }
   return result;
 }
 
@@ -841,7 +876,8 @@ async function queryTemporalIndex(
       active.map((item) => [item.embedding_space, item.generation]),
     );
     const offset = decodeCursor(query.cursor, generationKey);
-    const segments = querySegments(context, active, query);
+    const orderedVideo = prepared?.reference.kind === "video" || query.reference?.kind === "video";
+    const segments = querySegments(context, active, orderedVideo ? { ...query, durationMs: undefined } : query);
     const candidates = new Map<string, Candidate>(
       segments.map((segment) => [
         segment.segment_id,
@@ -880,7 +916,8 @@ async function queryTemporalIndex(
           (!query.sourceArtifactIds
             || query.sourceArtifactIds.includes(candidate.segment.artifact_id))
           && (!query.artifactKinds
-            || query.artifactKinds.includes(candidate.segment.artifact_kind)),
+            || query.artifactKinds.includes(candidate.segment.artifact_kind))
+          && segmentMatchesDuration(candidate.segment, query.durationMs),
       )
       .map((candidate) => ({
         ...candidate,
@@ -952,27 +989,162 @@ function activeGenerations(context: EngineContext): GenerationRow[] {
     .all() as unknown as GenerationRow[];
 }
 
+function retrievalState(context: EngineContext, active = activeGenerations(context)): RetrievalState {
+  const generationKey = canonicalJson(active.map((item) => [item.generation, item.embedding_space, item.manifest_id]));
+  let state = retrievalStates.get(context);
+  if (!state || state.generationKey !== generationKey) {
+    const generations = [...new Set(active.map((item) => item.generation))];
+    const rows = generations.length === 0 ? [] : context.store.db.prepare(
+      `${SEGMENT_SELECT} WHERE s.generation IN (${generations.map(() => "?").join(",")}) ORDER BY s.segment_id`,
+    ).all(...generations) as unknown as SegmentRow[];
+    state = {
+      semanticVersion: context.store.semanticVersion, generationKey, generations: new Set(generations),
+      segments: new Map(rows.map((row) => [row.segment_id, row])),
+      vectors: new Map(), ordered: new Map(), pending: new Set(),
+    };
+    retrievalStates.set(context, state);
+  }
+  if (state.semanticVersion !== context.store.semanticVersion) {
+    const generations = [...state.generations];
+    const rows = generations.length === 0 ? [] : context.store.db.prepare(
+      `${SEGMENT_SELECT} WHERE s.generation IN (${generations.map(() => "?").join(",")}) ORDER BY s.segment_id`,
+    ).all(...generations) as unknown as SegmentRow[];
+    state.segments = new Map(rows.map((row) => [row.segment_id, row]));
+    for (const [key, index] of state.vectors) {
+      for (const [segmentId, entry] of index.entries) {
+        const segment = state.segments.get(segmentId);
+        if (segment) entry.value.segment = segment;
+        else index.delete(segmentId);
+      }
+      if (index.entries.size === 0) state.vectors.delete(key);
+    }
+    state.texts = undefined;
+    state.ordered.clear();
+    state.semanticVersion = context.store.semanticVersion;
+  }
+  if (state.pending.size > 0) refreshRetrievalState(context, state);
+  return state;
+}
+
+function refreshRetrievalState(context: EngineContext, state: RetrievalState): void {
+  const pending = [...state.pending];
+  for (let start = 0; start < pending.length; start += 400) {
+    const keys = pending.slice(start, start + 400);
+    const placeholders = keys.map(() => "?").join(",");
+    for (const key of keys) {
+      state.segments.delete(key);
+      state.texts?.delete(key);
+      for (const index of state.vectors.values()) index.delete(key);
+    }
+    const rows = context.store.db.prepare(
+      `${SEGMENT_SELECT} WHERE s.segment_id IN (${placeholders}) ORDER BY s.segment_id`,
+    ).all(...keys) as unknown as SegmentRow[];
+    for (const row of rows) {
+      if (state.generations.has(row.generation)) state.segments.set(row.segment_id, row);
+    }
+    if (state.texts) {
+      const texts = context.store.db.prepare(
+        `SELECT segment_id, kind, text FROM runtime_segment_text
+         WHERE segment_id IN (${placeholders}) ORDER BY segment_id, kind, text`,
+      ).all(...keys) as unknown as TextRow[];
+      for (const row of texts) addCachedText(state.texts, row);
+    }
+    for (const [key, index] of state.vectors) {
+      const [generation, embeddingSpace, modality] = JSON.parse(key) as string[];
+      const vectors = context.store.db.prepare(
+        `SELECT segment_id, dimensions, vector_blob FROM runtime_segment_embeddings
+         WHERE generation=? AND embedding_space=? AND modality=?
+           AND segment_id IN (${placeholders}) ORDER BY segment_id`,
+      ).all(generation!, embeddingSpace!, modality!, ...keys) as unknown as EmbeddingRow[];
+      for (const row of vectors) addCachedVector(state, index, row);
+    }
+  }
+  state.ordered.clear();
+  state.pending.clear();
+}
+
+function cachedTextRows(context: EngineContext, active: GenerationRow[]): TextRow[] {
+  const state = retrievalState(context, active);
+  if (!state.texts) {
+    state.texts = new Map();
+    const generations = [...state.generations];
+    const rows = generations.length === 0 ? [] : context.store.db.prepare(
+      `SELECT segment_id, kind, text FROM runtime_segment_text
+       WHERE generation IN (${generations.map(() => "?").join(",")}) ORDER BY segment_id, kind, text`,
+    ).all(...generations) as unknown as TextRow[];
+    for (const row of rows) addCachedText(state.texts, row);
+  }
+  return [...state.texts.values()].flat();
+}
+
+function addCachedText(texts: Map<string, TextRow[]>, row: TextRow): void {
+  const rows = texts.get(row.segment_id) ?? [];
+  rows.push(row);
+  texts.set(row.segment_id, rows);
+}
+
+function addCachedVector(state: RetrievalState, index: TemporalVectorIndex<CachedVector>, row: EmbeddingRow): void {
+  const segment = state.segments.get(row.segment_id);
+  if (!segment) return;
+  if (row.dimensions !== index.dimensions) {
+    throw new EngineFault({ code: "MANIFEST_INCOMPATIBLE", message: "Stored vector dimensions do not match the index manifest" });
+  }
+  const vector = blobToVector(row.vector_blob, row.dimensions);
+  index.set(row.segment_id, vector, { segment, vector, range: segmentRange(segment) });
+}
+
+function vectorIndex(
+  context: EngineContext, generation: GenerationRow,
+  modality: Exclude<SearchModality, "auto" | "metadata">,
+): TemporalVectorIndex<CachedVector> {
+  const state = retrievalState(context);
+  const key = canonicalJson([generation.generation, generation.embedding_space, modality]);
+  const cached = state.vectors.get(key);
+  if (cached) return cached;
+  const index = new TemporalVectorIndex<CachedVector>(requiredManifest(context, generation.manifest_id).dimensions);
+  let after = "";
+  for (;;) {
+    const rows = context.store.db.prepare(
+      `SELECT segment_id, dimensions, vector_blob FROM runtime_segment_embeddings
+       WHERE generation=? AND embedding_space=? AND modality=? AND segment_id>?
+       ORDER BY segment_id LIMIT 512`,
+    ).all(generation.generation, generation.embedding_space, modality, after) as unknown as EmbeddingRow[];
+    for (const row of rows) addCachedVector(state, index, row);
+    if (rows.length < 512) break;
+    after = rows.at(-1)!.segment_id;
+  }
+  state.vectors.set(key, index);
+  return index;
+}
+
+function orderedStreams(context: EngineContext, generation: GenerationRow): Map<string, OrderedEmbedding[]> {
+  const state = retrievalState(context);
+  const key = canonicalJson([generation.generation, generation.embedding_space]);
+  const cached = state.ordered.get(key);
+  if (cached) return cached;
+  const streams = new Map<string, OrderedEmbedding[]>();
+  for (const { value } of vectorIndex(context, generation, "visual").entries.values()) {
+    if (!value.range) continue;
+    const stream = streams.get(value.range.streamId) ?? [];
+    stream.push({ segment: value.segment, vector: value.vector, range: value.range });
+    streams.set(value.range.streamId, stream);
+  }
+  for (const stream of streams.values()) stream.sort((left, right) =>
+    left.range.startTick - right.range.startTick || left.segment.segment_id.localeCompare(right.segment.segment_id));
+  state.ordered.set(key, streams);
+  return streams;
+}
+
 function querySegments(
   context: EngineContext,
   active: GenerationRow[],
   query: SearchQuery,
 ): SegmentRow[] {
   if (active.length === 0) return [];
-  const generations = active.map((item) => item.generation);
-  const placeholders = generations.map(() => "?").join(",");
-  const rows = context.store.db
-    .prepare(
-      `SELECT s.segment_id, s.artifact_id, a.label AS artifact_label,
-              a.kind AS artifact_kind, a.created_at AS artifact_created_at,
-              s.stream_id, s.object_hash,
-              s.source_range_json, s.source_path, s.segment_kind,
-              s.representative_tick, s.generation, s.manifest_id
-       FROM runtime_media_segments s
-       JOIN artifacts a ON a.artifact_id=s.artifact_id
-       WHERE s.generation IN (${placeholders})
-       ORDER BY s.artifact_id, s.stream_id, s.representative_tick, s.segment_id`,
-    )
-    .all(...generations) as unknown as SegmentRow[];
+  const rows = [...retrievalState(context, active).segments.values()];
+  const labelMatches = new Map<string, boolean>();
+  const orientations = new Map<string, "landscape" | "portrait" | "square">();
+  const indexingStates = new Map<string, IndexCoverage["state"]>();
   return rows.filter((row) => {
     if (query.artifactKinds && !query.artifactKinds.includes(row.artifact_kind)) {
       return false;
@@ -995,41 +1167,30 @@ function querySegments(
     ) {
       return false;
     }
-    if (query.labels && !artifactHasLabels(context, row.artifact_id, query.labels)) {
-      return false;
+    if (query.labels) {
+      if (!labelMatches.has(row.artifact_id)) labelMatches.set(row.artifact_id, artifactHasLabels(context, row.artifact_id, query.labels));
+      if (!labelMatches.get(row.artifact_id)) return false;
     }
-    if (
-      query.orientations
-      && !query.orientations.includes(artifactOrientation(context, row.artifact_id))
-    ) {
-      return false;
+    if (query.orientations) {
+      if (!orientations.has(row.artifact_id)) orientations.set(row.artifact_id, artifactOrientation(context, row.artifact_id));
+      if (!query.orientations.includes(orientations.get(row.artifact_id)!)) return false;
     }
-    if (
-      query.indexingStates
-      && !query.indexingStates.includes(
-        artifactGenerationState(context, row.artifact_id, row.generation),
-      )
-    ) {
-      return false;
+    if (query.indexingStates) {
+      const key = `${row.artifact_id}:${row.generation}`;
+      if (!indexingStates.has(key)) indexingStates.set(key, artifactGenerationState(context, row.artifact_id, row.generation));
+      if (!query.indexingStates.includes(indexingStates.get(key)!)) return false;
     }
-    if (query.durationMs) {
-      const range = segmentRange(row);
-      if (range) {
-        const durationMs =
-          (range.durationTicks * range.timeBase.numerator * 1_000)
-          / range.timeBase.denominator;
-        if (
-          (query.durationMs.min !== undefined
-            && durationMs < query.durationMs.min)
-          || (query.durationMs.max !== undefined
-            && durationMs > query.durationMs.max)
-        ) {
-          return false;
-        }
-      }
-    }
-    return true;
+    return segmentMatchesDuration(row, query.durationMs);
   });
+}
+
+function segmentMatchesDuration(segment: SegmentRow, requested: SearchQuery["durationMs"]): boolean {
+  if (!requested) return true;
+  const range = segmentRange(segment);
+  if (!range) return true;
+  const durationMs = sourceTickToMs(range.durationTicks, range);
+  return (requested.min === undefined || durationMs >= requested.min)
+    && (requested.max === undefined || durationMs <= requested.max);
 }
 
 function artifactHasLabels(
@@ -1094,14 +1255,7 @@ function addLexicalSignals(
 ): void {
   const generations = active.map((item) => item.generation);
   if (generations.length === 0) return;
-  const rows = context.store.db
-    .prepare(
-      `SELECT segment_id, kind, text
-       FROM runtime_segment_text
-       WHERE generation IN (${generations.map(() => "?").join(",")})
-       ORDER BY segment_id, kind, text`,
-    )
-    .all(...generations) as unknown as TextRow[];
+  const rows = cachedTextRows(context, active);
   const normalized = text.trim().toLocaleLowerCase();
   const quoted = [...text.matchAll(/"([^"]+)"/g)]
     .map((match) => match[1]?.trim().toLocaleLowerCase())
@@ -1315,35 +1469,25 @@ function addOrderedVideoVectorSignals(
   durationMs: number,
 ): void {
   if (sample.length === 0) return;
-  const all = orderedEmbeddings(context, generation, () => true);
-  const byStream = new Map<string, OrderedEmbedding[]>();
-  for (const item of all) {
-    const values = byStream.get(item.range.streamId) ?? [];
-    values.push(item);
-    byStream.set(item.range.streamId, values);
-  }
+  const byStream = orderedStreams(context, generation);
+  const starts = orderedCandidateStarts(context, candidates, sample, generation, byStream);
+  const queryVectors = new Map<number, Float32Array>();
   const windows: Array<{
     values: OrderedEmbedding[];
     score: number;
     coherence: number;
     durationTicks: number;
   }> = [];
-  for (const values of byStream.values()) {
-    values.sort(
-      (left, right) =>
-        left.range.startTick - right.range.startTick
-        || left.segment.segment_id.localeCompare(right.segment.segment_id),
-    );
-    for (let start = 0; start < values.length; start += 1) {
+  for (const [streamId, positions] of starts) {
+    const values = byStream.get(streamId)!;
+    for (const start of [...positions].sort((left, right) => left - right)) {
       const first = values[start]!;
       const startMs = sourceTickToMs(first.range.startTick, first.range);
-      const window: OrderedEmbedding[] = [];
-      for (let index = start; index < values.length; index += 1) {
-        const item = values[index]!;
-        if (sourceTickToMs(item.range.startTick, item.range) >= startMs + durationMs) break;
-        window.push(item);
-      }
-      const last = window.at(-1)!;
+      const end = orderedPosition(values, startMs + durationMs);
+      const count = end - start;
+      const window = Array.from({ length: Math.min(count, 16) }, (_, index) =>
+        values[start + (count === 1 ? 0 : Math.round(index * (count - 1) / (Math.min(count, 16) - 1)))]!);
+      const last = values[end - 1]!;
       const availableMs = Math.min(durationMs,
         sourceTickToMs(sourceRangeEndTick(last.range), last.range) - startMs);
       const timedWindow = window.map((item) => ({
@@ -1355,7 +1499,11 @@ function addOrderedVideoVectorSignals(
         .filter((offset) => offset >= 0 && offset < availableMs))]
         .sort((left, right) => left - right);
       if (offsets.length === 0) continue;
-      const query = offsets.map((offset) => ({ vector: videoVectorAt(sample, offset) }));
+      const query = offsets.map((offset) => {
+        let vector = queryVectors.get(offset);
+        if (!vector) { vector = videoVectorAt(sample, offset); queryVectors.set(offset, vector); }
+        return { vector };
+      });
       const target = offsets.map((offset) => ({ vector: videoVectorAt(timedWindow, offset) }));
       const aligned = query.reduce(
         (sum, item, index) =>
@@ -1364,7 +1512,7 @@ function addOrderedVideoVectorSignals(
       ) / query.length;
       const coherence =
         transitionCoherence(query, target) * 0.75
-        + temporalContinuity(window) * 0.25;
+        + temporalContinuity(values, start, end) * 0.25;
       windows.push({
         values: window,
         score: (aligned * 0.75 + coherence * 0.25) * availableMs / durationMs,
@@ -1423,10 +1571,47 @@ function addOrderedVideoVectorSignals(
     });
 }
 
+function orderedCandidateStarts(
+  context: EngineContext, candidates: Map<string, Candidate>, sample: TimedVectorEmbedding[],
+  generation: GenerationRow, streams: Map<string, OrderedEmbedding[]>,
+): Map<string, Set<number>> {
+  const starts = new Map<string, Set<number>>();
+  const index = vectorIndex(context, generation, "visual");
+  const timedCandidates = new Map([...candidates].filter(([, candidate]) => candidate.segment.source_range_json !== null));
+  const seedCount = Math.max(32, Math.floor(512 / sample.length));
+  for (const querySample of sample) {
+    for (const { value } of index.nearest(querySample.vector, seedCount, timedCandidates)) {
+      if (!value.range) continue;
+      const stream = streams.get(value.range.streamId)!;
+      const desiredMs = sourceTickToMs(value.range.startTick, value.range) - querySample.offsetMs;
+      const low = orderedPosition(stream, desiredMs);
+      const positions = starts.get(value.range.streamId) ?? new Set<number>();
+      for (const position of [low - 1, low, low + 1]) {
+        const item = stream[position];
+        if (item && candidates.has(item.segment.segment_id)) positions.add(position);
+      }
+      starts.set(value.range.streamId, positions);
+    }
+  }
+  return starts;
+}
+
+function orderedPosition(stream: OrderedEmbedding[], milliseconds: number): number {
+  let low = 0;
+  let high = stream.length;
+  while (low < high) {
+    const middle = (low + high) >>> 1;
+    const item = stream[middle]!;
+    if (sourceTickToMs(item.range.startTick, item.range) < milliseconds) low = middle + 1;
+    else high = middle;
+  }
+  return low;
+}
+
 function videoVectorAt(samples: TimedVectorEmbedding[], offsetMs: number): Float32Array {
   const next = samples.findIndex((sample) => sample.offsetMs >= offsetMs);
   if (next === -1) return samples.at(-1)!.vector;
-  if (next === 0) return samples[0]!.vector;
+  if (next === 0 || samples[next]!.offsetMs === offsetMs) return samples[next]!.vector;
   const before = samples[next - 1]!;
   const after = samples[next]!;
   const fraction = (offsetMs - before.offsetMs) / (after.offsetMs - before.offsetMs);
@@ -1439,33 +1624,8 @@ function orderedEmbeddings(
   generation: GenerationRow,
   include: (range: SourceRange) => boolean,
 ): OrderedEmbedding[] {
-  const rows = context.store.db
-    .prepare(
-      `SELECT s.segment_id, s.artifact_id, a.label AS artifact_label,
-              a.kind AS artifact_kind, a.created_at AS artifact_created_at,
-              s.stream_id, s.object_hash, s.source_range_json,
-              s.source_path, s.segment_kind, s.representative_tick,
-              s.generation, s.manifest_id, e.dimensions, e.vector_blob
-       FROM runtime_media_segments s
-       JOIN artifacts a ON a.artifact_id=s.artifact_id
-       JOIN runtime_segment_embeddings e ON e.segment_id=s.segment_id
-       WHERE s.generation=? AND e.embedding_space=?
-         AND e.modality='visual' AND s.source_range_json IS NOT NULL
-       ORDER BY s.stream_id, s.representative_tick, s.segment_id`,
-    )
-    .all(generation.generation, generation.embedding_space) as unknown as Array<
-    SegmentRow & { dimensions: number; vector_blob: Uint8Array }
-  >;
-  return rows.flatMap((row) => {
-    const range = segmentRange(row);
-    return range && include(range)
-      ? [{
-          segment: row,
-          range,
-          vector: blobToVector(row.vector_blob, row.dimensions),
-        }]
-      : [];
-  });
+  return [...orderedStreams(context, generation).values()]
+    .flatMap((rows) => rows.filter((row) => include(row.range)));
 }
 
 function transitionCoherence(
@@ -1486,25 +1646,23 @@ function transitionCoherence(
   return score / (query.length - 1);
 }
 
-function temporalContinuity(candidate: OrderedEmbedding[]): number {
-  if (candidate.length < 2) return 1;
-  let score = 0;
-  for (let index = 1; index < candidate.length; index += 1) {
-    const previous = candidate[index - 1]!.range;
-    const current = candidate[index]!.range;
-    const gapMs = Math.max(
-      0,
-      sourceTickToMs(current.startTick, current)
-        - sourceTickToMs(sourceRangeEndTick(previous), previous),
-    );
-    const scaleMs = Math.max(
-      1,
-      (sourceTickToMs(previous.durationTicks, previous)
-        + sourceTickToMs(current.durationTicks, current)) / 2,
-    );
-    score += 1 / (1 + gapMs / scaleMs);
+function temporalContinuity(candidate: OrderedEmbedding[], start: number, end: number): number {
+  if (end - start < 2) return 1;
+  let prefix = continuityPrefixes.get(candidate);
+  if (!prefix) {
+    prefix = new Float64Array(candidate.length);
+    for (let index = 1; index < candidate.length; index++) {
+      const previous = candidate[index - 1]!.range;
+      const current = candidate[index]!.range;
+      const gapMs = Math.max(0, sourceTickToMs(current.startTick, current)
+        - sourceTickToMs(sourceRangeEndTick(previous), previous));
+      const scaleMs = Math.max(1, (sourceTickToMs(previous.durationTicks, previous)
+        + sourceTickToMs(current.durationTicks, current)) / 2);
+      prefix[index] = prefix[index - 1]! + 1 / (1 + gapMs / scaleMs);
+    }
+    continuityPrefixes.set(candidate, prefix);
   }
-  return score / (candidate.length - 1);
+  return (prefix[end - 1]! - prefix[start]!) / (end - start - 1);
 }
 
 function isExactOrderedWindow(
@@ -1566,39 +1724,12 @@ function rankVectorRows(
   modality: Exclude<SearchModality, "auto" | "metadata">,
   explanation: string,
 ): void {
-  const rows = context.store.db
-    .prepare(
-      `SELECT segment_id, embedding_space, modality, dimensions, vector_blob
-       FROM runtime_segment_embeddings
-       WHERE generation=? AND embedding_space=?
-         AND modality=?
-       ORDER BY segment_id`,
-    )
-    .all(generation.generation, generation.embedding_space, modality) as unknown as
-    EmbeddingRow[];
-  rows
-    .map((row) => ({
-      row,
-      score: cosineSimilarity(
-        queryVector,
-        blobToVector(row.vector_blob, row.dimensions),
-      ),
-    }))
-    .filter((item) => Number.isFinite(item.score))
-    .sort(
-      (left, right) =>
-        right.score - left.score
-        || left.row.segment_id.localeCompare(right.row.segment_id),
-    )
+  vectorIndex(context, generation, modality)
+    .nearest(queryVector, VECTOR_CANDIDATES, candidates)
     .forEach((item, index) => {
-      const candidate = candidates.get(item.row.segment_id);
+      const candidate = candidates.get(item.key);
       if (!candidate) return;
-      candidate.signals.push({
-        kind: modality,
-        rank: index + 1,
-        score: item.score,
-        explanation,
-      });
+      candidate.signals.push({ kind: modality, rank: index + 1, score: item.score, explanation });
     });
 }
 

@@ -220,6 +220,58 @@ function commit(
 }
 
 describe("progressive temporal multimodal search", () => {
+  it("updates ANN candidates and lexical caches after batches, rename, filters, and deletion", async () => {
+    const engine = await setup();
+    try {
+      const target = await media(engine, "video", "indexed-target");
+      const control = await still(engine, "indexed-control");
+      const observation = (index: number, updated = false) => timedObservation(
+        target.artifact, target.stream, index * 10, 10,
+        index === 0 ? (updated ? [1, 0, 0] : [0, 1, 0]) : [-1, (index % 100) / 100, 0],
+        [{ kind: "description", text: index === 0 ? (updated ? "fresh phrase" : "obsolete phrase") : "filler" }],
+        `cache-${index}`,
+      );
+      const batch = (start: number, observations: TemporalIndexObservation[]) => value(engine.temporalSearch.commitBatch({
+        artifactId: target.artifact.artifactId, objectHash: target.stream.objectHash,
+        manifestId: manifest.manifestId, generation: "generation-1", phase: "visual", cursor: String(start),
+        maxUnits: 100, observations, coveredRanges: observations.map((item) => item.range!),
+        totalUnits: 1200, complete: true,
+      }));
+      for (let start = 0; start < 1200; start += 100) {
+        batch(start, Array.from({ length: 100 }, (_, offset) => observation(start + offset)));
+      }
+      commit(engine, control.artifact, control.objectHash, "visual", [{
+        artifactId: control.artifact.artifactId, objectHash: control.objectHash,
+        sourcePath: "original.jpg", kind: "frame", segmentationVersion: "fixture-1", texts: [],
+        embeddings: [{ modality: "visual", embeddingSpace: manifest.embeddingSpace,
+          vector: [1, 0.1, 0], sourceHash: control.objectHash }], fingerprints: [],
+      }]);
+      value(engine.temporalSearch.activate(manifest.manifestId, "generation-1"));
+      const reference = { kind: "image" as const, embeddingSpace: manifest.embeddingSpace, vector: [1, 0, 0] };
+      const initial = value(await engine.temporalSearch.queryPrepared({ limit: 20 }, reference));
+      expect(initial.hits[0]?.artifactId).toBe(control.artifact.artifactId);
+      const first = value(await engine.temporalSearch.queryPrepared({ limit: 3 }, reference));
+      const next = value(await engine.temporalSearch.queryPrepared({ limit: 17, cursor: first.nextCursor }, reference));
+      expect([...first.hits, ...next.hits]).toEqual(initial.hits);
+      expect(value(await engine.temporalSearch.query({ text: "obsolete phrase", modalities: ["metadata"] })).hits).toHaveLength(1);
+      batch(0, [observation(0, true)]);
+      expect(value(await engine.temporalSearch.queryPrepared({ limit: 20 }, reference)).hits[0]?.artifactId).toBe(target.artifact.artifactId);
+      expect(value(await engine.temporalSearch.query({ text: "obsolete", modalities: ["metadata"] })).hits).toHaveLength(0);
+      expect(value(await engine.temporalSearch.query({ text: "fresh", modalities: ["metadata"] })).hits[0]?.artifactId).toBe(target.artifact.artifactId);
+      const selected = value(await engine.temporalSearch.queryPrepared({ sourceArtifactIds: [control.artifact.artifactId] }, reference));
+      expect(selected.hits).toHaveLength(1);
+      expect(selected.hits[0]?.artifactId).toBe(control.artifact.artifactId);
+      value(await engine.artifacts.rename(control.artifact.artifactId, "renamed control"));
+      value(await engine.metadata.artifacts.write(control.artifact.artifactId, "labels", ["selected"]));
+      const labeled = value(await engine.temporalSearch.queryPrepared({ labels: ["selected"] }, reference));
+      expect(labeled.hits).toHaveLength(1);
+      expect(labeled.hits[0]?.artifactLabel).toBe("renamed control");
+      value(await engine.artifacts.delete(control.artifact.artifactId));
+      expect(value(await engine.temporalSearch.queryPrepared({ sourceArtifactIds: [control.artifact.artifactId] }, reference)).hits).toHaveLength(0);
+      expect(value(await engine.temporalSearch.queryPrepared({}, reference)).hits[0]?.artifactId).toBe(target.artifact.artifactId);
+    } finally { engine.close(); }
+  });
+
   it("exposes durable next cursors through generation plans", async () => {
     const engine = await setup();
     const source = await media(engine, "video", "cursor-source");
@@ -1013,15 +1065,22 @@ describe("progressive temporal multimodal search", () => {
           )));
       }
       value(engine.temporalSearch.activate(manifest.manifestId, "generation-1"));
-      const result = value(await engine.temporalSearch.queryPrepared({}, {
-        kind: "video", embeddingSpace: manifest.embeddingSpace, durationMs,
+      const reference = {
+        kind: "video" as const, embeddingSpace: manifest.embeddingSpace, durationMs,
         samples: queryOffsets.map((offsetMs) => ({ offsetMs, vector: vectorAt(offsetMs) })),
-      }));
+      };
+      const result = value(await engine.temporalSearch.queryPrepared({}, reference));
       expect(result.hits[0]).toMatchObject({
         artifactId: source.artifact.artifactId,
         location: { kind: "timed", range: { startTick: 0, durationTicks: durationMs } },
       });
       expect(result.hits[0]!.signals.find((signal) => signal.kind === "visual")!.score).toBeGreaterThan(0.9);
+      const bounded = value(await engine.temporalSearch.queryPrepared({ durationMs: { min: durationMs, max: durationMs } }, reference));
+      expect(bounded.hits[0]?.artifactId).toBe(source.artifact.artifactId);
+      const short = value(await engine.temporalSearch.queryPrepared({ durationMs: { max: 1_000 } }, reference));
+      for (const hit of short.hits) {
+        if (hit.location.kind === "timed") expect(hit.location.range.durationTicks).toBeLessThanOrEqual(1_000);
+      }
       for (const hit of result.hits) {
         if (hit.location.kind === "timed") {
           expect(hit.location.range.durationTicks).toBeLessThanOrEqual(durationMs);
@@ -1044,6 +1103,51 @@ describe("progressive temporal multimodal search", () => {
     } finally {
       engine.close();
     }
+  });
+
+  it("reranks long video windows without allowing still-image neighbors to crowd out timed sources", async () => {
+    const engine = await setup();
+    try {
+      const forward = await media(engine, "video", "long-forward");
+      const reverse = await media(engine, "video", "long-reverse");
+      const clutter = await still(engine, "still-neighbors");
+      const vectorAt = (offset: number) => {
+        const angle = offset / 30_000 * Math.PI;
+        return [Math.cos(angle), Math.sin(angle), offset / 30_000];
+      };
+      for (const item of [forward, reverse]) {
+        commit(engine, item.artifact, item.stream.objectHash, "visual", Array.from({ length: 60 }, (_, index) =>
+          timedObservation(item.artifact, item.stream, index * 500, 500,
+            vectorAt(item === forward ? index * 500 : (59 - index) * 500), [], `${item.artifact.artifactId}:${index}`)));
+      }
+      const samples = Array.from({ length: 16 }, (_, index) => {
+        const offsetMs = Math.round(index * 47 / 15) * 500;
+        return { offsetMs, vector: vectorAt(offsetMs) };
+      });
+      for (let sample = 0; sample < samples.length; sample++) {
+        value(engine.temporalSearch.commitBatch({
+          artifactId: clutter.artifact.artifactId, objectHash: clutter.objectHash,
+          manifestId: manifest.manifestId, generation: "generation-1", phase: "visual",
+          cursor: String(sample), maxUnits: 50, totalUnits: 800, complete: sample === 15, coveredRanges: [],
+          observations: Array.from({ length: 50 }, (_, index) => ({
+            segmentId: `000-still-${sample}-${index}`, artifactId: clutter.artifact.artifactId,
+            objectHash: clutter.objectHash, sourcePath: "original.jpg", kind: "frame", segmentationVersion: "fixture-1",
+            texts: [], fingerprints: [], embeddings: [{ modality: "visual", embeddingSpace: manifest.embeddingSpace,
+              vector: samples[sample]!.vector, sourceHash: `${clutter.objectHash}:${sample}:${index}` }],
+          })),
+        }));
+      }
+      value(engine.temporalSearch.activate(manifest.manifestId, "generation-1"));
+      const reference = { kind: "video" as const, embeddingSpace: manifest.embeddingSpace, durationMs: 24_000, samples };
+      const page = value(await engine.temporalSearch.queryPrepared({}, reference));
+      expect(page.hits[0]).toMatchObject({
+        artifactId: forward.artifact.artifactId,
+        location: { kind: "timed", range: { startTick: 0, durationTicks: 24_000 } },
+      });
+      expect(page.hits[0]!.signals.find((signal) => signal.kind === "visual")!.score).toBeGreaterThan(0.99);
+      expect(page.hits.every((hit) => hit.location.kind === "timed")).toBe(true);
+      expect(value(await engine.temporalSearch.queryPrepared({}, reference)).hits).toEqual(page.hits);
+    } finally { engine.close(); }
   });
 
   it("preserves an exact signal for the same ordered source bytes and range", async () => {

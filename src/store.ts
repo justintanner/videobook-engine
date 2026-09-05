@@ -92,6 +92,7 @@ export class DoltStore {
     onClose: boolean;
   };
   private writeCount = 0;
+  private semanticChangeCount = 0;
   lastCatalogGc: CatalogGcReport | undefined;
 
   constructor(input: {
@@ -134,6 +135,10 @@ export class DoltStore {
 
   get head(): string {
     return this.db.doltLog({ limit: 1 })[0]?.commit_hash ?? "";
+  }
+
+  get semanticVersion(): number {
+    return this.semanticChangeCount;
   }
 
   get status(): DoltStatusEntry[] {
@@ -181,6 +186,7 @@ export class DoltStore {
           );
         this.semanticCommitBoundary?.("before-sql-commit", operationId);
         this.commitSql();
+        this.semanticChangeCount += 1;
       } catch (error) {
         this.rollback();
         throw error;

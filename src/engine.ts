@@ -34,7 +34,7 @@ import { createStreamsApi } from "./streams.js";
 import { createTranscriptsApi } from "./transcripts.js";
 import { createSequencesApi } from "./sequences.js";
 import { createEditsApi } from "./edits.js";
-import { createTemporalSearchApi } from "./temporal-search.js";
+import { clearTemporalSearchCache, createTemporalSearchApi } from "./temporal-search.js";
 
 export class Engine {
   readonly book;
@@ -167,6 +167,7 @@ export class Engine {
   close(): void {
     if (this.closed) return;
     this.closed = true;
+    clearTemporalSearchCache(this.context);
     this.context.close();
   }
 
