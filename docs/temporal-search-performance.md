@@ -71,9 +71,61 @@ of source time. First searchable coverage appeared after 49 ms. All 4,000
 persisted resume cursors were verified. Open plus book/search summary took
 963 ms, and the process peak RSS was 2.83 GiB.
 
-The latency requirement is not met. The current query path loads all
-segments and embeddings; ordered video also evaluates every possible window.
-The next implementation must use indexed candidate retrieval with bounded
-window reranking while preserving filters, generation invalidation, and
-stable pagination. Faster timings alone cannot satisfy VE-NFR-012 if every
-query still scans the full vector collection.
+This baseline did not meet the latency requirement. Its query path loaded all
+segments and embeddings and evaluated every possible video window. Faster
+timings alone cannot satisfy VE-NFR-012 if every query still scans the full
+vector collection.
+
+
+## Indexed candidate retrieval
+
+The engine now caches segment metadata and vectors for the active generations
+and uses a USearch HNSW index with F16 storage to select visual/audio/text
+vector candidates. It recomputes shortlisted cosine scores from the original
+F32 vectors before reciprocal-rank fusion. Each modality contributes up to
+1,000 vector candidates, independently of the requested page size or cursor.
+Pagination traverses the combined ranked candidate set, including lexical and
+exact/near-fingerprint evidence. Restrictive filters are applied to candidate
+eligibility; small eligible subsets are scored directly, and broader filters
+expand the ANN shortlist until enough eligible candidates are found.
+
+Ordered video searches use timed neighbors from every reference sample,
+propose nearby start positions, then score bounded windows with timestamp
+alignment and temporal coherence. At most 512 neighbor seeds produce at most
+1,536 start positions. Each window uses at most 16 target samples; cached
+query interpolation and prefix sums of continuity keep long-window scoring
+bounded without treating skipped samples as gaps. Duration filters apply to
+the resulting window. Still-image neighbors cannot displace timed candidates.
+
+Committed indexing batches refresh only affected cache entries. Semantic
+changes refresh metadata and remove deleted sources while preserving native
+vectors, so a rename does not rebuild the graph. Generation changes and engine
+close discard the relevant cached state. Regression tests cover native ANN
+pagination across page sizes, vector/text replacement, source and label
+filters, rename/deletion, ordered action, differing sampling densities, bounded
+durations, and a long video reference surrounded by matching still images.
+
+The [full indexed run](../benchmarks/results/temporal-100k-indexed.json) measures
+the source committed as `db996f2` on the same M1 Pro/16 GB machine, with a newly
+created 1,000-artifact/100,000-moment fixture and 50 warm queries per mode:
+
+| Mode | Warm p50 | Warm p95 |
+| --- | ---: | ---: |
+| Prepared image | 54 ms | 63 ms |
+| Prepared eight-second video | 105 ms | 140 ms |
+| Hybrid text and visual | 284 ms | 331 ms |
+
+This run passed all harness gates. Process peak RSS, including fixture
+creation and index/query structures, was 3.26 GiB. It committed 4,000 batches
+covering at most 30 source seconds each, verified every resume cursor, and
+published the first searchable partial coverage after 45 ms. Open plus
+book/search summary after closing the newly built fixture took 1.35 seconds.
+
+Two limitations remain release work. First, creating the native graph on the
+first query took 139 seconds; warm-query success does not make that suitable
+for an interactive request. `ve-s84.4` tracks preparing and persisting the
+index through indexing work and validating fast query readiness after reopen.
+Publication depends on that issue. Second, independent fresh-process opens
+have spent over four seconds in automatic catalog GC; `ve-ovz.2` tracks that
+cost, which the same-process reopen measurement does not consistently expose.
+These measurements also do not replace the frozen corpus quality gate.
