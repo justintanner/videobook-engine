@@ -165,13 +165,29 @@ A stale checkpoint can be reconciled from changed vectors; a corrupt or
 incompatible checkpoint is rebuilt. Cancellation never publishes a partial
 graph. The source vectors remain in the catalog.
 
-An interactive query loads an exact valid snapshot, but never constructs a
-missing large graph. It returns `NOT_READY` with
+Deleted keys are filtered from queries immediately but retain occupied native
+slots until preparation rebuilds a fresh graph. Preparation compacts when more
+than one quarter of native keys are inactive. This avoids a USearch 2.26.0
+crash reproduced by saving a graph with removed slots, reopening it, and adding
+replacement vectors. Changed vectors replace their native slots immediately;
+a failed replacement discards the in-memory graph. Snapshot format v2 rejects
+older, potentially unsafe graphs before loading them. Old books therefore need
+one background preparation before large-index searches can resume.
+
+An interactive query loads a snapshot containing all current vectors, but never
+constructs a missing large graph. It returns `NOT_READY` with
 `error.details.requiresIndexPreparation === true` when preparation is needed.
 Consumers should queue preparation, show its progress, and retry after the job
 finishes. The index's preparation result separates loaded indexes, changed
 vectors, and persisted indexes. `--prepare-existing` in the benchmark measures
 explicit recovery before closing and reopening a retained older fixture.
+
+The [safe-cache regression run](../benchmarks/results/temporal-100k-safe-cache.json)
+rebuilt the retained 100,000-vector fixture from the old format in 152.6 seconds.
+After reopening, the first image query took 3.03 seconds; warm p95 was 72 ms for
+image, 151 ms for video, and 371 ms for hybrid. Peak process RSS was 2.27 GiB and
+all harness gates passed. This run measures cache rebuilding and queries; its
+indexing fields are inherited from the retained fixture, not a new indexing run.
 
 The [full persisted run](../benchmarks/results/temporal-100k-persisted.json)
 measured the preparation implementation committed as `a7c3703` on the same

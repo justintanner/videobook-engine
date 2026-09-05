@@ -30,6 +30,7 @@ export class TemporalVectorIndex<T> {
   readonly entries = new Map<string, Entry<T>>();
   private readonly ordinals = new Map<bigint, Entry<T>>();
   private index?: InstanceType<Usearch["Index"]>;
+  private nativeEntries = new Map<string, string>();
   private revision = 0;
   private changesSinceCheckpoint = 0;
   private prepareTask?: Promise<VectorPreparationResult>;
@@ -41,11 +42,20 @@ export class TemporalVectorIndex<T> {
     const ordinal = keyOrdinal(key);
     const occupied = this.ordinals.get(ordinal);
     if (occupied && occupied.key !== key) throw new Error("Temporal vector key hash collision");
-    this.delete(key);
     const entry = { key, vector, value, ordinal, digest: vectorDigest(vector) };
+    if (this.index && this.nativeEntries.get(key) !== entry.digest) {
+      try {
+        if (this.nativeEntries.has(key)) this.index.remove(ordinal);
+        this.index.add(ordinal, vector, 1);
+      } catch (error) {
+        this.index = undefined;
+        this.nativeEntries.clear();
+        throw error;
+      }
+      this.nativeEntries.set(key, entry.digest);
+    }
     this.entries.set(key, entry);
     this.ordinals.set(ordinal, entry);
-    this.index?.add(ordinal, vector, 1);
     this.revision++;
     this.changesSinceCheckpoint++;
   }
@@ -53,7 +63,8 @@ export class TemporalVectorIndex<T> {
   delete(key: string): void {
     const prior = this.entries.get(key);
     if (!prior) return;
-    this.index?.remove(prior.ordinal);
+    // Keep native slots occupied: loading a USearch snapshot with removed slots
+    // and then adding vectors can corrupt native memory. Queries filter inactive keys.
     this.entries.delete(key);
     this.ordinals.delete(prior.ordinal);
     this.revision++;
@@ -72,7 +83,7 @@ export class TemporalVectorIndex<T> {
     if (!this.index || this.changesSinceCheckpoint === 0
       || (periodic && this.changesSinceCheckpoint < CHECKPOINT_CHANGES)) return false;
     saveTemporalIndexSnapshot(this.cache.basePath, this.cache.identity, this.dimensions,
-      [...this.entries.values()].map((entry) => [entry.key, entry.digest]), (path) => this.index!.save(path));
+      [...this.nativeEntries], (path) => this.index!.save(path));
     this.changesSinceCheckpoint = 0;
     return true;
   }
@@ -80,7 +91,7 @@ export class TemporalVectorIndex<T> {
   dispose(): void {
     this.disposed = true;
     try { this.checkpoint(); }
-    finally { this.index = undefined; this.entries.clear(); this.ordinals.clear(); }
+    finally { this.index = undefined; this.nativeEntries.clear(); this.entries.clear(); this.ordinals.clear(); }
   }
 
   nearest(query: Float32Array, count: number, eligible: ReadonlyMap<string, unknown>): Array<{ value: T; score: number; key: string }> {
@@ -99,14 +110,14 @@ export class TemporalVectorIndex<T> {
       entries = [...this.entries.values()].filter((entry) => eligible.has(entry.key));
     } else {
       const index = this.readyIndex();
-      let requested = Math.min(this.entries.size, count * 2);
+      let requested = Math.min(this.nativeEntries.size, count * 2);
       for (;;) {
         entries = [...index.search(query, requested, 1).keys].flatMap((ordinal) => {
           const entry = this.ordinals.get(ordinal);
           return entry && eligible.has(entry.key) ? [entry] : [];
         });
-        if (entries.length >= count || requested === this.entries.size) break;
-        requested = Math.min(this.entries.size, requested * 2);
+        if (entries.length >= count || requested === this.nativeEntries.size) break;
+        requested = Math.min(this.nativeEntries.size, requested * 2);
       }
     }
     return entries.map((entry) => ({ key: entry.key, value: entry.value, score: cosine(query, entry.vector) }))
@@ -118,9 +129,9 @@ export class TemporalVectorIndex<T> {
     if (this.index) return this.index;
     if (!this.prepareTask) {
       const loaded = this.loadSnapshot();
-      if (loaded && loaded.entries.size === this.entries.size
-        && [...this.entries.values()].every((entry) => loaded.entries.get(entry.key) === entry.digest)) {
+      if (loaded && [...this.entries.values()].every((entry) => loaded.entries.get(entry.key) === entry.digest)) {
         this.index = loaded.index;
+        this.nativeEntries = loaded.entries;
         this.changesSinceCheckpoint = 0;
         return this.index;
       }
@@ -131,21 +142,18 @@ export class TemporalVectorIndex<T> {
 
   private async prepareIndex(signal: AbortSignal | undefined, periodic: boolean): Promise<VectorPreparationResult> {
     this.checkCancellation(signal);
-    if (this.entries.size <= DIRECT_VECTOR_LIMIT) return { vectors: this.entries.size, updatedVectors: 0, loaded: false, persisted: false };
-    if (this.index) return { vectors: this.entries.size, updatedVectors: 0, loaded: false, persisted: this.checkpoint(periodic) };
-    const loaded = this.loadSnapshot();
+    if (this.entries.size <= DIRECT_VECTOR_LIMIT && !this.index) return { vectors: this.entries.size, updatedVectors: 0, loaded: false, persisted: false };
+    if (this.index && !this.needsCompaction(this.nativeEntries)) {
+      return { vectors: this.entries.size, updatedVectors: 0, loaded: false, persisted: this.checkpoint(periodic) };
+    }
+    const candidate = this.index ? undefined : this.loadSnapshot();
+    const loaded = candidate && !this.needsCompaction(candidate.entries) ? candidate : undefined;
     const index = loaded?.index ?? newNativeIndex(this.dimensions);
     const prepared = loaded?.entries ?? new Map<string, string>();
     let updatedVectors = 0;
     for (;;) {
       const revision = this.revision;
       let work = 0;
-      for (const key of [...prepared.keys()]) {
-        if (this.entries.has(key)) continue;
-        index.remove(keyOrdinal(key));
-        prepared.delete(key);
-        updatedVectors++;
-      }
       for (const entry of [...this.entries.values()]) {
         if (prepared.get(entry.key) === entry.digest) continue;
         if (prepared.has(entry.key)) index.remove(entry.ordinal);
@@ -158,9 +166,16 @@ export class TemporalVectorIndex<T> {
       if (revision === this.revision) break;
     }
     this.index = index;
-    this.changesSinceCheckpoint = updatedVectors || (loaded ? 0 : this.entries.size);
+    this.nativeEntries = prepared;
+    this.changesSinceCheckpoint = updatedVectors || (loaded ? 0 : Math.max(1, this.entries.size));
     const persisted = this.checkpoint(!loaded ? false : periodic);
     return { vectors: this.entries.size, updatedVectors, loaded: Boolean(loaded), persisted };
+  }
+
+  private needsCompaction(prepared: ReadonlyMap<string, string>): boolean {
+    let inactive = 0;
+    for (const key of prepared.keys()) if (!this.entries.has(key)) inactive++;
+    return inactive > prepared.size / 4;
   }
 
   private loadSnapshot(): { index: InstanceType<Usearch["Index"]>; entries: Map<string, string> } | undefined {

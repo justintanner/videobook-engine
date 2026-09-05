@@ -2,7 +2,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { basename, dirname, join } from "node:path";
 
-const TEMPORAL_CACHE_FORMAT = "usearch-2.26.0-cos-f16-16-128-128-v1";
+const TEMPORAL_CACHE_FORMAT = "usearch-2.26.0-cos-f16-16-128-128-v2";
 
 interface TemporalIndexSnapshot {
   format: string;
