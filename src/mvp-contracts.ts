@@ -944,10 +944,15 @@ export interface V4MigrationRequest {
   dryRun: boolean;
   expectedSourceBookId?: string;
   expectedSourceHead?: string;
+  expectedMigrationKey?: string;
+  signal?: AbortSignal;
+  ffprobePath?: string;
+  onProgress?: (progress: { phase: "copy-state" | "copy-objects" | "copy-notebooks" | "copy-timeline" | "publish"; completed: number; total: number }) => void;
 }
 
 export type MigrationIssueCode =
   | "MISSING_OBJECT"
+  | "CORRUPT_OBJECT"
   | "UNSUPPORTED_MEDIA"
   | "INVALID_REFERENCE"
   | "PROBE_REQUIRED"

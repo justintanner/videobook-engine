@@ -84,6 +84,9 @@ schema-v4 timeline compiles into the sequences model at import; the schema-v4
 similarity API remains a compatibility surface until it compiles into
 temporal-search semantics.
 
+See [schema-v4 migration](docs/v4-migration.md) for dry-run checks, media
+conversion, cancellation, retry, and application switching requirements.
+
 ## Storage model
 
 Each engine root owns exactly one book:
