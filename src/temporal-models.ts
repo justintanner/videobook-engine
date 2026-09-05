@@ -172,7 +172,7 @@ export class LocalClipTemporalProvider implements TemporalSearchProvider {
         {
           dtype: "q8",
           cache_dir: this.options.modelCacheDir,
-          local_files_only: this.options.allowModelDownload === false,
+          local_files_only: this.options.allowModelDownload !== true,
           revision: LOCAL_CLIP_MODEL_REVISION,
         },
       ) as unknown as ImagePipeline;
@@ -193,7 +193,7 @@ export class LocalClipTemporalProvider implements TemporalSearchProvider {
     try {
       const options = {
         cache_dir: this.options.modelCacheDir,
-        local_files_only: this.options.allowModelDownload === false,
+        local_files_only: this.options.allowModelDownload !== true,
         revision: LOCAL_CLIP_MODEL_REVISION,
       };
       const { AutoTokenizer, CLIPTextModelWithProjection } =
@@ -390,7 +390,7 @@ function modelOptions(
 ) {
   return {
     cache_dir: cacheDir,
-    local_files_only: allowModelDownload === false,
+    local_files_only: allowModelDownload !== true,
     revision,
   };
 }
@@ -473,10 +473,10 @@ function modelFault(
   allowModelDownload: boolean | undefined,
 ): EngineFault {
   return new EngineFault({
-    code: allowModelDownload === false ? "OFFLINE" : "FEATURE_UNAVAILABLE",
+    code: allowModelDownload !== true ? "OFFLINE" : "FEATURE_UNAVAILABLE",
     message: `Unable to load the pinned local CLIP model: ${
       error instanceof Error ? error.message : String(error)
-    }`,
+    }${downloadHint(allowModelDownload)}`,
   });
 }
 
@@ -486,9 +486,13 @@ function localModelFault(
   allowModelDownload: boolean | undefined,
 ): EngineFault {
   return new EngineFault({
-    code: allowModelDownload === false ? "OFFLINE" : "FEATURE_UNAVAILABLE",
+    code: allowModelDownload !== true ? "OFFLINE" : "FEATURE_UNAVAILABLE",
     message: `Unable to load the pinned local ${label} model: ${
       error instanceof Error ? error.message : String(error)
-    }`,
+    }${downloadHint(allowModelDownload)}`,
   });
+}
+
+function downloadHint(allowed: boolean | undefined): string {
+  return allowed === true ? "" : " Model downloads are disabled. Explicitly prepare the model with allowModelDownload: true, then retry using the populated cache.";
 }

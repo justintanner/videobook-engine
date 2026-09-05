@@ -3,6 +3,7 @@ import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isBuiltin } from "node:module";
+import "./patch-transformers.mjs";
 
 const repository = fileURLToPath(new URL("../", import.meta.url));
 const result = await build({
@@ -38,6 +39,9 @@ for (const name of ["@huggingface/transformers", "@huggingface/jinja", "@hugging
   versions[name] = {
     licenseSourceVersion: manifest.version,
     license: manifest.license,
+    ...(name === "@huggingface/transformers" ? {
+      enginePatches: ["model-discovery-options-v1"],
+    } : {}),
     ...(name === "onnxruntime-common" ? {
       licenseSource: "https://github.com/microsoft/onnxruntime/blob/v1.29.0/LICENSE",
     } : {}),

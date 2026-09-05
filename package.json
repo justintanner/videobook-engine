@@ -52,6 +52,7 @@
     "prepack": "npm run build",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.benchmarks.json",
     "lint": "knip",
+    "pretest": "node scripts/patch-transformers.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
     "example:basic": "npm run build && tsx examples/basic-usage.ts",

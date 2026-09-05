@@ -1539,7 +1539,7 @@ class LocalClipProvider implements SimilarityEmbeddingProvider {
       this.embedder = await pipeline("image-feature-extraction", modelId, {
         dtype: "q8",
         cache_dir: cacheDir,
-        local_files_only: this.config.allowModelDownload === false,
+        local_files_only: this.config.allowModelDownload !== true,
         ...(modelId === DEFAULT_MODEL_ID
           ? { revision: DEFAULT_MODEL_REVISION }
           : {}),
@@ -1547,7 +1547,7 @@ class LocalClipProvider implements SimilarityEmbeddingProvider {
       return this.embedder;
     } catch (error) {
       throw new EngineFault({
-        code: this.config.allowModelDownload === false ? "OFFLINE" : "FEATURE_UNAVAILABLE",
+        code: this.config.allowModelDownload !== true ? "OFFLINE" : "FEATURE_UNAVAILABLE",
         message: `Unable to load local similarity model: ${errorMessage(error)}`,
       });
     }
@@ -1642,7 +1642,7 @@ class LocalClapAudioProvider implements SimilarityAudioEmbeddingProvider {
         await loadTransformers();
       const processor = await AutoProcessor.from_pretrained(modelId, {
         cache_dir: cacheDir,
-        local_files_only: allowDownload === false,
+        local_files_only: allowDownload !== true,
         ...pinned,
       }) as unknown as AudioProcessor;
       const model = await ClapAudioModelWithProjection.from_pretrained(
@@ -1650,7 +1650,7 @@ class LocalClapAudioProvider implements SimilarityAudioEmbeddingProvider {
         {
           dtype: "q8",
           cache_dir: cacheDir,
-          local_files_only: allowDownload === false,
+          local_files_only: allowDownload !== true,
           ...pinned,
         },
       ) as unknown as AudioModel;
@@ -1667,7 +1667,7 @@ class LocalClapAudioProvider implements SimilarityAudioEmbeddingProvider {
       return { processor, model };
     } catch (error) {
       throw new EngineFault({
-        code: allowDownload === false ? "OFFLINE" : "FEATURE_UNAVAILABLE",
+        code: allowDownload !== true ? "OFFLINE" : "FEATURE_UNAVAILABLE",
         message: `Unable to load local audio similarity model: ${errorMessage(error)}`,
       });
     }
@@ -1736,7 +1736,7 @@ class LocalTextProvider implements SimilarityTextEmbeddingProvider {
       this.embedder = await pipeline("feature-extraction", modelId, {
         dtype: "q4",
         cache_dir: cacheDir,
-        local_files_only: allowDownload === false,
+        local_files_only: allowDownload !== true,
         ...(modelId === DEFAULT_TEXT_MODEL_ID
           ? { revision: DEFAULT_TEXT_MODEL_REVISION }
           : {}),
@@ -1744,7 +1744,7 @@ class LocalTextProvider implements SimilarityTextEmbeddingProvider {
       return this.embedder;
     } catch (error) {
       throw new EngineFault({
-        code: allowDownload === false ? "OFFLINE" : "FEATURE_UNAVAILABLE",
+        code: allowDownload !== true ? "OFFLINE" : "FEATURE_UNAVAILABLE",
         message: `Unable to load local text similarity model: ${errorMessage(error)}`,
       });
     }

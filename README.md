@@ -233,6 +233,8 @@ parallel audit graph.
 Similarity is opt-in. Provide a media embedding provider or use the built-in
 local CLIP configuration. Text similarity is enabled separately.
 
+Local model loaders, including temporal CLIP/CLAP providers, use cached files by default. Downloads require `allowModelDownload: true` during an explicit preparation step. Missing cached models return `OFFLINE`; after preparing the models, reopen providers with downloads disabled or omitted for offline use. Model revisions remain pinned during file discovery and loading.
+
 ```ts
 const engine = createEngine({
   rootDir: ".videobook",
