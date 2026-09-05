@@ -103,7 +103,7 @@ export function dryRunV4Migration(
     const issues = migrationIssues(database, root, book.book_id);
     const currentState = legacyStateSummary(database);
     const migrationKey = migrationDigest({
-      conversionVersion: 2,
+      conversionVersion: 3,
       destinationSchemaVersion: MVP_SCHEMA_VERSION,
       sourceBookId: book.book_id,
       sourceHeadRevision,
@@ -296,6 +296,7 @@ export async function migrateV4(
     const report = {
       ...dryRun.value,
       conversion: {
+        version: 3,
         timeline: convertedTimeline,
         similarity: "runtime-v4-discarded; v5-reindex-required",
         jobs: "legacy job history remains in source audit; v5 runtime job IDs start fresh",

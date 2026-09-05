@@ -35,7 +35,16 @@ records, prompts, messages, waveforms, and compatible metadata are preserved.
 Notebook canvas coordinates become deterministic row-major slots, ordered by
 Y, X, and cell ID. A notebook exceeding the 64-by-8 grid is rejected. Legacy
 scene cells become prompt cells with their entity references intact; asset
-cells use their referenced artifact's current media type. Compatible notebook
+cells use their referenced artifact's current media type. Legacy `image` and
+`video` cells were generation nodes; they become `generate_image` and
+`generate_video`, with their existing output artifact IDs and edges intact.
+Their model strings are retained as explicit tool selections. When no model
+was configured, migration records the legacy GPT Image 2 text-to-image or
+Wan 2.7 text-to-video default, rather than changing to the application's current
+default. Retired or unavailable tools remain visible for user reconfiguration;
+migration never submits generation jobs. The report includes original model
+values, resolved tool names, and whether each choice was explicit or defaulted.
+Compatible notebook
 fields and execution state are restored through the engine API. Original
 coordinates, cell types, and all legacy notebook properties remain in the
 machine-readable report.

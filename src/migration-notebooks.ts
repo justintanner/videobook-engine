@@ -35,11 +35,17 @@ interface LegacyEdge {
   target_input: string;
 }
 
+const LEGACY_GENERATION_DEFAULTS: Record<string, string> = {
+  image: "generate_kie_gpt_image_2_text_to_image",
+  video: "generate_kie_wan_2_7_text_to_video",
+};
+
 export function legacyNotebookPlan(database: DatabaseSync): {
   documents: NotebookDocument[];
   issues: MigrationIssue[];
   decisions: Array<{ notebookId: string; properties: Record<string, unknown>; cells: Array<{
     cellId: string; legacyType: string; type: string; x: number; y: number; row: number; column: number;
+    legacyModel: string | null; model?: string; tool?: string; modelSource: "explicit" | "legacy-default" | "none";
   }> }>;
 } {
   const notebooks = database.prepare("SELECT * FROM notebooks ORDER BY notebook_id").all() as unknown as LegacyNotebook[];
@@ -62,7 +68,7 @@ export function legacyNotebookPlan(database: DatabaseSync): {
           slot: { row: Math.floor(ordinal / NOTEBOOK_GRID_COLUMN_COUNT), column: ordinal % NOTEBOOK_GRID_COLUMN_COUNT },
           ...(row.entity_id === null ? {} : { outputEntityId: row.entity_id }),
           ...(row.prompt === null ? {} : { prompt: row.prompt }),
-          ...(row.model === null ? {} : { model: row.model }),
+          ...currentModelFields(row),
           inputs: objectJson(row.inputs_json, `Inputs for ${row.cell_id}`),
           ...(row.output_artifact_id === null ? {} : { outputArtifactId: row.output_artifact_id }),
         };
@@ -85,6 +91,9 @@ export function legacyNotebookPlan(database: DatabaseSync): {
       decisions.push({ notebookId: notebook.notebook_id, properties, cells: rows.map((row, ordinal) => ({
         cellId: row.cell_id, legacyType: row.type, type: converted[ordinal]!.type,
         x: row.position_x, y: row.position_y, ...converted[ordinal]!.slot,
+        legacyModel: row.model, ...currentModelFields(row),
+        modelSource: LEGACY_GENERATION_DEFAULTS[row.type] && !row.model
+          ? "legacy-default" : row.model === null ? "none" : "explicit",
       })) });
     } catch (cause) {
       issues.push({ code: "INVALID_REFERENCE", severity: "error", resource: `notebook:${notebook.notebook_id}`,
@@ -95,6 +104,8 @@ export function legacyNotebookPlan(database: DatabaseSync): {
 }
 
 function currentCellType(cell: LegacyCell): NotebookCell["type"] {
+  if (cell.type === "image") return "generate_image";
+  if (cell.type === "video") return "generate_video";
   if ((NOTEBOOK_CELL_TYPES as readonly string[]).includes(cell.type)) return cell.type as NotebookCell["type"];
   if (cell.type === "scene") return "prompt";
   if (cell.type === "asset") {
@@ -104,6 +115,15 @@ function currentCellType(cell: LegacyCell): NotebookCell["type"] {
     if (cell.artifact_kind === "script" || cell.artifact_kind === "prompt" || cell.artifact_kind === "scene") return "prompt";
   }
   throw new Error(`Cannot represent legacy cell ${cell.cell_id} of type ${cell.type} without a supported source`);
+}
+
+function currentModelFields(cell: LegacyCell): Pick<NotebookCell, "model" | "tool"> {
+  const fallback = LEGACY_GENERATION_DEFAULTS[cell.type];
+  if (fallback) {
+    const tool = cell.model || fallback;
+    return { model: tool, tool };
+  }
+  return cell.model === null ? {} : { model: cell.model };
 }
 
 function objectJson(json: string, label: string): Record<string, unknown> {

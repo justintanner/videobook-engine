@@ -35,6 +35,7 @@ async function fixture(options: {
   timed?: boolean;
   large?: boolean;
   empty?: boolean;
+  generators?: boolean;
 } = {}) {
   const root = await mkdtemp(path.join(tmpdir(), "videobook-v4-source-"));
   roots.push(root);
@@ -164,13 +165,26 @@ async function fixture(options: {
       }
     }
   }
+  const generators = options.generators ? [
+    { type: "image", model: null, output: artifactId! },
+    { type: "image", model: "generate_kie_gpt_image_2_text_to_image", output: null },
+    { type: "video", model: null, output: videoId },
+    { type: "video", model: "generate_kie_wan_2_7_text_to_video", output: null },
+    { type: "video", model: "custom-legacy-video-tool", output: null },
+    { type: "image", model: "", output: null },
+  ].map((cell, index) => ({ ...cell, id: uuidv7(), edgeId: uuidv7(), label: `Generator ${index}` })) : [];
+  for (const [index, cell] of generators.entries()) {
+    database.prepare("INSERT INTO cells VALUES (?, ?, ?, ?, ?, 80, NULL, 'Generator prompt', ?, '{\"seed\":42}', ?)")
+      .run(notebookId, cell.id, cell.type, cell.label, index * 40, cell.model, cell.output);
+    database.prepare("INSERT INTO edges VALUES (?, ?, ?, ?, 'prompt')").run(notebookId, cell.edgeId, cellId, cell.id);
+  }
   if (options.empty) database.exec('DELETE FROM cells; DELETE FROM notebooks;');
   database.prepare("SELECT dolt_add('.') AS result").get();
   database.prepare("SELECT dolt_commit('-m', 'Schema v4 fixture') AS hash").get();
   database.close();
   await copyFile(buildingPath, databasePath);
   await rm(buildingPath);
-  return { root, databasePath, bookId, notebookId, cellId, artifactId, objectHash, secondCellId, edgeId, entityId, runId, promptId, messageId, videoId, audioId };
+  return { root, databasePath, bookId, notebookId, cellId, artifactId, objectHash, secondCellId, edgeId, entityId, runId, promptId, messageId, videoId, audioId, generators };
 }
 
 function value<T>(
@@ -315,6 +329,44 @@ describe("schema-v4 copy-forward migration", () => {
       expect(counts.operations).toBeUndefined();
       expect(counts.actions).toBeUndefined();
     } finally { engine.close(); }
+  });
+
+  it("preserves v4 generation intent, explicit and default tools, graph edges and completed outputs", async () => {
+    const source = await fixture({ image: true, timed: true, generators: true });
+    const sourceBytes = await readFile(source.databasePath);
+    const destinationRoot = `${source.root}-migrated`;
+    roots.push(destinationRoot);
+    const preview = value(dryRunV4Migration(source.root));
+    const migrated = value(await migrateV4({ sourceRoot: source.root, destinationRoot, dryRun: false,
+      expectedMigrationKey: preview.migrationKey }));
+    if (!("destinationBookId" in migrated)) throw new Error("Expected migration result");
+    const engine = createEngine({ rootDir: destinationRoot });
+    await engine.ready;
+    try {
+      const document = value(engine.notebooks.read(source.notebookId));
+      const report = JSON.parse(value(await engine.files.read(migrated.reportArtifactId, "migration-report.json")).toString());
+      expect(report.conversion.version).toBe(3);
+      expect(document.cells).toHaveLength(source.generators.length + 1);
+      expect(document.edges).toHaveLength(source.generators.length);
+      for (const legacy of source.generators) {
+        const tool = legacy.model || (legacy.type === "image"
+          ? "generate_kie_gpt_image_2_text_to_image" : "generate_kie_wan_2_7_text_to_video");
+        const cell = document.cells.find((cell) => cell.id === legacy.id)!;
+        expect(cell).toMatchObject({ type: `generate_${legacy.type}`, label: legacy.label,
+          prompt: "Generator prompt", model: tool, tool, inputs: { seed: 42 } });
+        expect(cell.outputArtifactId).toBe(legacy.output ?? undefined);
+        expect(document.edges).toContainEqual({ id: legacy.edgeId, source: source.cellId, target: legacy.id, targetInput: "prompt" });
+        expect(report.conversion.notebooks[0].cells).toContainEqual(expect.objectContaining({
+          cellId: legacy.id, legacyType: legacy.type, type: cell.type, legacyModel: legacy.model,
+          model: tool, tool, modelSource: legacy.model ? "explicit" : "legacy-default",
+        }));
+      }
+      expect(value(engine.artifacts.get(source.artifactId!)).kind).toBe("image");
+      expect(value(engine.artifacts.get(source.videoId)).kind).toBe("video");
+      expect(engine.jobs.queue.list()).toEqual([]);
+    } finally { engine.close(); }
+    expect(await readFile(source.databasePath)).toEqual(sourceBytes);
+    expect(value(dryRunV4Migration(source.root)).migrationKey).toBe(preview.migrationKey);
   });
 
   it("rejects unrepresentable notebook sizes and invalid references before creating a destination", async () => {
