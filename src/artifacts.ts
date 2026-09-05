@@ -267,6 +267,15 @@ async function deleteArtifact(
             "DELETE FROM runtime_text_similarity_documents WHERE artifact_id=?",
           )
           .run(artifact.artifact_id);
+        context.store.db
+          .prepare("DELETE FROM runtime_media_segments WHERE artifact_id=?")
+          .run(artifact.artifact_id);
+        context.store.db
+          .prepare("DELETE FROM runtime_index_coverage WHERE artifact_id=?")
+          .run(artifact.artifact_id);
+        context.store.db
+          .prepare("DELETE FROM runtime_index_batches WHERE artifact_id=?")
+          .run(artifact.artifact_id);
       },
     );
     await rm(context.artifactPath(artifact.artifact_id), {

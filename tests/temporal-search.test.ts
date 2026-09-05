@@ -220,6 +220,49 @@ function commit(
 }
 
 describe("progressive temporal multimodal search", () => {
+  it("removes all owned temporal rows on deletion without restoring runtime indexes from history", async () => {
+    const engine = await setup();
+    try {
+      const removed = await still(engine, "removed source");
+      const retained = await still(engine, "retained source");
+      const revision = engine.head;
+      for (const [item, generations] of [[removed, ["generation-1", "generation-2"]], [retained, ["generation-1"]]] as const) {
+        for (const generation of generations) {
+          value(engine.temporalSearch.commitBatch({
+            artifactId: item.artifact.artifactId, objectHash: item.objectHash,
+            manifestId: manifest.manifestId, generation, phase: "visual", cursor: "0", maxUnits: 1,
+            observations: [{
+              artifactId: item.artifact.artifactId, objectHash: item.objectHash, sourcePath: "original.jpg",
+              kind: "frame", segmentationVersion: "1", texts: [{ kind: "description", text: item.artifact.label! }],
+              embeddings: [{ modality: "visual", embeddingSpace: manifest.embeddingSpace, vector: [1, 0, 0], sourceHash: item.objectHash }],
+              fingerprints: [{ kind: "perceptual", value: item.objectHash, extractorVersion: "1" }],
+            }],
+            coveredRanges: [], totalUnits: 1, complete: true,
+          }));
+        }
+      }
+      value(engine.temporalSearch.activate(manifest.manifestId, "generation-1"));
+      const tables = ["runtime_media_segments", "runtime_segment_text", "runtime_segment_embeddings",
+        "runtime_segment_fingerprints", "runtime_index_coverage", "runtime_index_batches"];
+      const before = engine.catalogIntegrity().tableRowCounts;
+      for (const table of tables) expect(before[table]).toBe(3);
+      value(await engine.artifacts.delete(removed.artifact.artifactId));
+      const after = engine.catalogIntegrity();
+      for (const table of tables) expect(after.tableRowCounts[table], table).toBe(1);
+      expect(after.doltStatus.some((entry) => entry.staged && entry.table_name.startsWith("runtime_"))).toBe(false);
+      const page = value(await engine.temporalSearch.queryPrepared({}, {
+        kind: "image", embeddingSpace: manifest.embeddingSpace, vector: [1, 0, 0],
+      }));
+      expect(page.hits.map((hit) => hit.artifactId)).toEqual([retained.artifact.artifactId]);
+      expect(page.coverage).toMatchObject({ totalArtifactCount: 1, indexedArtifactCount: 1 });
+      expect(engine.history.artifact(removed.artifact.artifactId)[0]?.operation).toBe("delete_artifact");
+      value(await engine.history.restoreArtifact(removed.artifact.artifactId, revision));
+      expect(value(await engine.files.read(removed.artifact.artifactId, "original.jpg")).toString()).toBe("removed source");
+      const restored = engine.catalogIntegrity().tableRowCounts;
+      for (const table of tables) expect(restored[table], table).toBe(1);
+    } finally { engine.close(); }
+  });
+
   it("updates ANN candidates and lexical caches after batches, rename, filters, and deletion", async () => {
     let engine = await setup();
     const root = roots.at(-1)!;
