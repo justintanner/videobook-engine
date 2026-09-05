@@ -44,6 +44,8 @@ describe.runIf(enabled)("real-media reverse search", () => {
   let forwardVideo: IndexedVideo;
   let reversedVideo: IndexedVideo;
   let distractorVideo: IndexedVideo;
+  let sparseVideo: IndexedVideo;
+  let referenceVectors: Float32Array[];
 
   beforeAll(async () => {
     root = await mkdtemp(join(tmpdir(), "videobook-reverse-e2e-"));
@@ -105,6 +107,7 @@ describe.runIf(enabled)("real-media reverse search", () => {
     await provider.prepare();
     const imageVector = await provider.embedImage(fixtureImage);
     const forwardVectors = await embedFrames(provider, forwardFrames);
+    referenceVectors = forwardVectors;
     const reverseVectors = await embedFrames(provider, reverseFrames);
     const distractorVector = await provider.embedImage(distractorFrames[0]!);
 
@@ -148,6 +151,8 @@ describe.runIf(enabled)("real-media reverse search", () => {
     forwardVideo = await addVideo(engine, "forward-action", fixtureVideo);
     reversedVideo = await addVideo(engine, "reversed-action", reversedPath);
     distractorVideo = await addVideo(engine, "blue-distractor", distractorPath);
+    sparseVideo = await addVideo(engine, "sparsely-indexed-action", fixtureVideo);
+    commitVideo(engine, sparseVideo, forwardVectors.filter((_, index) => index % 2 === 0), 2_000);
     commitVideo(engine, queryVideo, forwardVectors);
     commitVideo(engine, forwardVideo, forwardVectors);
     commitVideo(engine, reversedVideo, reverseVectors);
@@ -232,6 +237,24 @@ describe.runIf(enabled)("real-media reverse search", () => {
       .find((signal) => signal.kind === "visual")?.score;
     expect(forwardVisualScore).toBeGreaterThan(reversedVisualScore!);
   });
+
+  it("retrieves a sparsely indexed real video from a denser prepared reference", async () => {
+    const result = value(await engine.temporalSearch.queryPrepared({
+      modalities: ["visual"],
+      sourceArtifactIds: [sparseVideo.artifact.artifactId, distractorVideo.artifact.artifactId],
+    }, {
+      kind: "video",
+      embeddingSpace: LOCAL_CLIP_MANIFEST.embeddingSpace,
+      durationMs: sampleCount * sampleDurationTicks,
+      samples: referenceVectors.map((vector, index) => ({
+        offsetMs: index * sampleDurationTicks, vector: [...vector],
+      })),
+    }));
+    expect(result.hits[0]).toMatchObject({
+      artifactId: sparseVideo.artifact.artifactId,
+      location: { kind: "timed", range: { startTick: 0, durationTicks: 6_000 } },
+    });
+  });
 });
 
 async function extractFrames(sourcePath: string, framesDir: string): Promise<string[]> {
@@ -308,12 +331,13 @@ function commitVideo(
   engine: Engine,
   video: IndexedVideo,
   vectors: Float32Array[],
+  intervalTicks = sampleDurationTicks,
 ): void {
   const observations = vectors.map((vector, index): TemporalIndexObservation => {
     const range: SourceRange = {
       ...video.range,
-      startTick: index * sampleDurationTicks,
-      durationTicks: sampleDurationTicks,
+      startTick: index * intervalTicks,
+      durationTicks: intervalTicks,
     };
     return {
       artifactId: video.artifact.artifactId,

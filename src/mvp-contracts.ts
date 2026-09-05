@@ -597,6 +597,7 @@ export type PreparedSearchReference =
   | {
       kind: "video";
       embeddingSpace: string;
+      durationMs?: number;
       samples: PreparedSearchVideoSample[];
     };
 

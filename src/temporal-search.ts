@@ -1217,6 +1217,10 @@ interface VectorEmbedding {
   range?: SourceRange;
 }
 
+interface TimedVectorEmbedding extends VectorEmbedding {
+  offsetMs: number;
+}
+
 interface OrderedEmbedding extends VectorEmbedding {
   segment: SegmentRow;
   range: SourceRange;
@@ -1243,8 +1247,14 @@ function addOrderedVideoSignals(
       ),
   );
   if (query.length === 0) return;
-  const sample = evenlySample(query, Math.min(query.length, 16));
-  addOrderedVideoVectorSignals(context, candidates, sample, generation);
+  const sample = evenlySample(query, Math.min(query.length, 16)).map((item) => ({
+    ...item,
+    offsetMs: sourceTickToMs(item.range.startTick - range.startTick, range),
+  }));
+  addOrderedVideoVectorSignals(
+    context, candidates, sample, generation,
+    sourceTickToMs(range.durationTicks, range),
+  );
 }
 
 function addPreparedReferenceSignals(
@@ -1276,6 +1286,11 @@ function addPreparedReferenceSignals(
       continue;
     }
     const samples = preparedVideoSamples(reference, options);
+    const startMs = options.range?.startMs ?? 0;
+    const durationMs = Math.min(
+      options.range?.durationMs ?? Infinity,
+      preparedVideoDuration(reference) - startMs,
+    );
     for (const sample of samples) {
       preparedVector(sample.vector, manifest.dimensions);
     }
@@ -1284,8 +1299,10 @@ function addPreparedReferenceSignals(
       candidates,
       samples.map((sample) => ({
         vector: Float32Array.from(sample.vector),
+        offsetMs: sample.offsetMs - startMs,
       })),
       generation,
+      durationMs,
     );
   }
 }
@@ -1293,8 +1310,9 @@ function addPreparedReferenceSignals(
 function addOrderedVideoVectorSignals(
   context: EngineContext,
   candidates: Map<string, Candidate>,
-  sample: VectorEmbedding[],
+  sample: TimedVectorEmbedding[],
   generation: GenerationRow,
+  durationMs: number,
 ): void {
   if (sample.length === 0) return;
   const all = orderedEmbeddings(context, generation, () => true);
@@ -1308,6 +1326,7 @@ function addOrderedVideoVectorSignals(
     values: OrderedEmbedding[];
     score: number;
     coherence: number;
+    durationTicks: number;
   }> = [];
   for (const values of byStream.values()) {
     values.sort(
@@ -1315,21 +1334,46 @@ function addOrderedVideoVectorSignals(
         left.range.startTick - right.range.startTick
         || left.segment.segment_id.localeCompare(right.segment.segment_id),
     );
-    if (values.length < sample.length) continue;
-    for (let start = 0; start <= values.length - sample.length; start += 1) {
-      const window = values.slice(start, start + sample.length);
-      const aligned = sample.reduce(
+    for (let start = 0; start < values.length; start += 1) {
+      const first = values[start]!;
+      const startMs = sourceTickToMs(first.range.startTick, first.range);
+      const window: OrderedEmbedding[] = [];
+      for (let index = start; index < values.length; index += 1) {
+        const item = values[index]!;
+        if (sourceTickToMs(item.range.startTick, item.range) >= startMs + durationMs) break;
+        window.push(item);
+      }
+      const last = window.at(-1)!;
+      const availableMs = Math.min(durationMs,
+        sourceTickToMs(sourceRangeEndTick(last.range), last.range) - startMs);
+      const timedWindow = window.map((item) => ({
+        ...item,
+        offsetMs: sourceTickToMs(item.range.startTick, item.range) - startMs,
+      }));
+      const offsets = [...new Set([...sample, ...timedWindow]
+        .map((item) => item.offsetMs)
+        .filter((offset) => offset >= 0 && offset < availableMs))]
+        .sort((left, right) => left - right);
+      if (offsets.length === 0) continue;
+      const query = offsets.map((offset) => ({ vector: videoVectorAt(sample, offset) }));
+      const target = offsets.map((offset) => ({ vector: videoVectorAt(timedWindow, offset) }));
+      const aligned = query.reduce(
         (sum, item, index) =>
-          sum + cosineSimilarity(item.vector, window[index]!.vector),
+          sum + cosineSimilarity(item.vector, target[index]!.vector),
         0,
-      ) / sample.length;
+      ) / query.length;
       const coherence =
-        transitionCoherence(sample, window) * 0.75
+        transitionCoherence(query, target) * 0.75
         + temporalContinuity(window) * 0.25;
       windows.push({
         values: window,
-        score: aligned * 0.75 + coherence * 0.25,
+        score: (aligned * 0.75 + coherence * 0.25) * availableMs / durationMs,
         coherence,
+        durationTicks: Math.max(1, Math.min(
+          sourceRangeEndTick(last.range) - first.range.startTick,
+          Math.round(availableMs * first.range.timeBase.denominator
+            / (first.range.timeBase.numerator * 1_000)),
+        )),
       });
     }
   }
@@ -1346,7 +1390,7 @@ function addOrderedVideoVectorSignals(
       const last = window.values.at(-1)!;
       const combined: SourceRange = {
         ...first.range,
-        durationTicks: sourceRangeEndTick(last.range) - first.range.startTick,
+        durationTicks: window.durationTicks,
       };
       const segmentId = `ordered:${generation.generation}:${first.segment.segment_id}:${last.segment.segment_id}`;
       const candidate: Candidate = {
@@ -1377,6 +1421,17 @@ function addOrderedVideoVectorSignals(
       };
       candidates.set(segmentId, candidate);
     });
+}
+
+function videoVectorAt(samples: TimedVectorEmbedding[], offsetMs: number): Float32Array {
+  const next = samples.findIndex((sample) => sample.offsetMs >= offsetMs);
+  if (next === -1) return samples.at(-1)!.vector;
+  if (next === 0) return samples[0]!.vector;
+  const before = samples[next - 1]!;
+  const after = samples[next]!;
+  const fraction = (offsetMs - before.offsetMs) / (after.offsetMs - before.offsetMs);
+  return before.vector.map((value, index) =>
+    value * (1 - fraction) + after.vector[index]! * fraction);
 }
 
 function orderedEmbeddings(
@@ -2146,6 +2201,15 @@ function validatePreparedReference(
       message: "Prepared video references require between 1 and 16 samples",
     });
   }
+  if (reference.durationMs !== undefined && (
+    !Number.isFinite(reference.durationMs) || reference.durationMs <= 0
+    || reference.samples.some((sample) => sample.offsetMs >= reference.durationMs!)
+  )) {
+    throw new EngineFault({
+      code: "INVALID_INPUT",
+      message: "Prepared video duration must be finite, positive, and contain every sample",
+    });
+  }
   let previousOffset = -1;
   for (const sample of reference.samples) {
     if (!Number.isFinite(sample.offsetMs) || sample.offsetMs < 0) {
@@ -2189,13 +2253,12 @@ function preparedVideoSamples(
   options: PreparedSearchOptions,
 ) {
   const range = options.range;
-  const endMs = range?.durationMs === undefined
-    ? Number.POSITIVE_INFINITY
-    : range.startMs + range.durationMs;
+  const endMs = Math.min(preparedVideoDuration(reference),
+    range?.durationMs === undefined ? Infinity : range.startMs + range.durationMs);
   const samples = range
     ? reference.samples.filter(
         (sample) =>
-          sample.offsetMs >= range.startMs && sample.offsetMs <= endMs,
+          sample.offsetMs >= range.startMs && sample.offsetMs < endMs,
       )
     : reference.samples;
   if (samples.length === 0) {
@@ -2205,6 +2268,16 @@ function preparedVideoSamples(
     });
   }
   return samples;
+}
+
+function preparedVideoDuration(
+  reference: Extract<PreparedSearchReference, { kind: "video" }>,
+): number {
+  if (reference.durationMs !== undefined) return reference.durationMs;
+  const last = reference.samples.at(-1)!;
+  const intervals = reference.samples.slice(1).map((sample, index) =>
+    sample.offsetMs - reference.samples[index]!.offsetMs).sort((a, b) => a - b);
+  return last.offsetMs + (intervals[Math.floor(intervals.length / 2)] ?? 1);
 }
 
 function preparedVector(

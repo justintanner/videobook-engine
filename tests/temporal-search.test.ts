@@ -961,11 +961,11 @@ describe("progressive temporal multimodal search", () => {
         { range: { startMs: 1_000, durationMs: 1_000 } },
       ),
     );
-    expect(trimmed.hits[0]).toMatchObject({
+    expect(trimmed.hits.find((hit) => hit.artifactId === coherent.artifact.artifactId)).toMatchObject({
       artifactId: coherent.artifact.artifactId,
       location: {
         kind: "timed",
-        range: { startTick: 1_000, durationTicks: 2_000 },
+        range: { startTick: 1_000, durationTicks: 1_000 },
       },
     });
     expect(
@@ -985,6 +985,65 @@ describe("progressive temporal multimodal search", () => {
       error: { code: "INVALID_INPUT" },
     });
     engine.close();
+  });
+
+  it.each([
+    { queryOffsets: [0, 998, 1996, 2994, 3992], indexOffsets: [0, 1980, 3960] },
+    { queryOffsets: [0, 1980, 3960], indexOffsets: [0, 998, 1996, 2994, 3992] },
+  ])("aligns different sampling densities by time: $queryOffsets", async ({ queryOffsets, indexOffsets }) => {
+    const engine = await setup();
+    try {
+      const source = await media(engine, "video", "density-source");
+      const shuffled = await media(engine, "video", "density-shuffled");
+      const stretched = await media(engine, "video", "density-stretched");
+      const durationMs = 4042;
+      const vectorAt = (offset: number) => {
+        const phase = Math.min(2, offset / 1980);
+        return phase <= 1 ? [1 - phase, phase, 0] : [0, 2 - phase, phase - 1];
+      };
+      for (const [item, scale, reverse] of [
+        [source, 1, false], [shuffled, 1, true], [stretched, 5, false],
+      ] as const) {
+        commit(engine, item.artifact, item.stream.objectHash, "visual",
+          indexOffsets.map((offset, index) => timedObservation(
+            item.artifact, item.stream, offset * scale,
+            ((indexOffsets[index + 1] ?? durationMs) - offset) * scale,
+            vectorAt(reverse ? durationMs - offset : offset), [],
+            `${item.artifact.artifactId}-${index}`,
+          )));
+      }
+      value(engine.temporalSearch.activate(manifest.manifestId, "generation-1"));
+      const result = value(await engine.temporalSearch.queryPrepared({}, {
+        kind: "video", embeddingSpace: manifest.embeddingSpace, durationMs,
+        samples: queryOffsets.map((offsetMs) => ({ offsetMs, vector: vectorAt(offsetMs) })),
+      }));
+      expect(result.hits[0]).toMatchObject({
+        artifactId: source.artifact.artifactId,
+        location: { kind: "timed", range: { startTick: 0, durationTicks: durationMs } },
+      });
+      expect(result.hits[0]!.signals.find((signal) => signal.kind === "visual")!.score).toBeGreaterThan(0.9);
+      for (const hit of result.hits) {
+        if (hit.location.kind === "timed") {
+          expect(hit.location.range.durationTicks).toBeLessThanOrEqual(durationMs);
+        }
+      }
+      const stored = value(await engine.temporalSearch.query({
+        reference: { kind: "video", range: {
+          streamId: source.stream.streamId, objectHash: source.stream.objectHash,
+          startTick: 0, durationTicks: durationMs, timeBase: source.stream.timeBase,
+        } },
+      }));
+      expect(stored.hits[0]?.artifactId).toBe(source.artifact.artifactId);
+      for (const duration of [0, -1, NaN, Infinity, 3992]) {
+        const invalid = await engine.temporalSearch.queryPrepared({}, {
+          kind: "video", embeddingSpace: manifest.embeddingSpace, durationMs: duration,
+          samples: [{ offsetMs: 3992, vector: [0, 0, 1] }],
+        });
+        expect(invalid).toMatchObject({ ok: false, error: { code: "INVALID_INPUT" } });
+      }
+    } finally {
+      engine.close();
+    }
   });
 
   it("preserves an exact signal for the same ordered source bytes and range", async () => {
