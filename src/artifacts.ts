@@ -4,6 +4,7 @@ import type {
   Artifact,
   ArtifactKind,
   CreateArtifactInput,
+  DeleteArtifactOptions,
   EngineError,
   RenameArtifactInput,
   Result,
@@ -46,8 +47,9 @@ export function createArtifactsApi(context: EngineContext) {
       renameArtifact(context, input, label),
     delete: (
       artifactId: string,
+      options: DeleteArtifactOptions = {},
     ): Promise<Result<{ artifactId: string }, EngineError>> =>
-      deleteArtifact(context, artifactId),
+      deleteArtifact(context, artifactId, options),
   };
 }
 
@@ -172,10 +174,11 @@ async function renameArtifact(
 async function deleteArtifact(
   context: EngineContext,
   artifactId: string,
+  options: DeleteArtifactOptions,
 ): Promise<Result<{ artifactId: string }, EngineError>> {
   return resultOf(async () => {
     const artifact = context.artifactRowById(artifactId);
-    const references = artifactReferences(context, artifact.artifact_id);
+    const references = artifactReferences(context, artifact.artifact_id, options.deleteOwnedMedia === true);
     if (references.length > 0) {
       throw new EngineFault({
         code: "IN_USE",
@@ -199,15 +202,21 @@ async function deleteArtifact(
           "artifact_files",
           "artifact_metadata",
           "audio_waveforms",
+          ...(options.deleteOwnedMedia ? ["artifact_streams", "transcripts", "transcript_segments", "transcript_words"] as const : []),
         ],
         artifactId: artifact.artifact_id,
         details: {
           ...(artifact.label === null ? {} : { label: artifact.label }),
           cancelledJobs: jobs.map((job) => job.id),
+          ...(options.deleteOwnedMedia ? { deleteOwnedMedia: true } : {}),
         },
         writeSet: [`artifact:${artifact.artifact_id}`],
       },
       (_operationId, now) => {
+        if (options.deleteOwnedMedia) {
+          context.store.db.prepare("DELETE FROM transcripts WHERE artifact_id=?").run(artifact.artifact_id);
+          context.store.db.prepare("DELETE FROM artifact_streams WHERE artifact_id=?").run(artifact.artifact_id);
+        }
         context.store.db
           .prepare("DELETE FROM artifacts WHERE artifact_id=?")
           .run(artifact.artifact_id);
@@ -319,6 +328,7 @@ export function normalizeKind(input: string): ArtifactKind {
 function artifactReferences(
   context: EngineContext,
   artifactId: string,
+  deleteOwnedMedia: boolean,
 ): Array<{ kind: string; id: string }> {
   // Covers every RESTRICT foreign key targeting artifacts so a refused
   // delete surfaces as IN_USE rather than a raw FK error mapped to
@@ -346,7 +356,7 @@ function artifactReferences(
        WHERE artifact_id=? ORDER BY stream_id`,
     )
     .all(artifactId) as unknown as Array<{ stream_id: string }>;
-  references.push(
+  if (!deleteOwnedMedia) references.push(
     ...streams.map((stream) => ({ kind: "stream", id: stream.stream_id })),
   );
   const transcripts = context.store.db
@@ -355,18 +365,38 @@ function artifactReferences(
        WHERE artifact_id=? ORDER BY transcript_id`,
     )
     .all(artifactId) as unknown as Array<{ transcript_id: string }>;
-  references.push(
+  if (!deleteOwnedMedia) references.push(
     ...transcripts.map((row) => ({
       kind: "transcript",
       id: row.transcript_id,
     })),
   );
+  if (deleteOwnedMedia) {
+    const cues = context.store.db.prepare(
+      `SELECT c.cue_id FROM caption_cues c JOIN transcripts t ON t.transcript_id=c.transcript_id
+       WHERE t.artifact_id=? ORDER BY c.cue_id`,
+    ).all(artifactId) as unknown as Array<{ cue_id: string }>;
+    references.push(...cues.map((row) => ({ kind: "captionCue", id: row.cue_id })));
+    const linkedTranscripts = context.store.db.prepare(
+      `SELECT t.transcript_id FROM transcripts t JOIN artifact_streams s ON s.stream_id=t.stream_id
+       WHERE s.artifact_id=? AND t.artifact_id<>? ORDER BY t.transcript_id`,
+    ).all(artifactId, artifactId) as unknown as Array<{ transcript_id: string }>;
+    references.push(...linkedTranscripts.map((row) => ({ kind: "transcript", id: row.transcript_id })));
+    const targets = [artifactId, ...streams.map((row) => row.stream_id), ...transcripts.map((row) => row.transcript_id)];
+    const cellReferences = context.store.db.prepare(
+      `SELECT notebook_id, cell_id, reference_id FROM cell_references
+       WHERE kind IN ('artifact','stream','source-range','transcript')
+         AND target_id IN (${targets.map(() => "?").join(",")})
+       ORDER BY notebook_id, cell_id, reference_id`,
+    ).all(...targets) as unknown as Array<{ notebook_id: string; cell_id: string; reference_id: string }>;
+    references.push(...cellReferences.map((row) => ({ kind: "cell.reference", id: `${row.notebook_id}/${row.cell_id}/${row.reference_id}` })));
+  }
   const clips = context.store.db
     .prepare(
       `SELECT clip_id FROM sequence_clips
-       WHERE artifact_id=? ORDER BY clip_id`,
+       WHERE artifact_id=? OR stream_id IN (SELECT stream_id FROM artifact_streams WHERE artifact_id=?) ORDER BY clip_id`,
     )
-    .all(artifactId) as unknown as Array<{ clip_id: string }>;
+    .all(artifactId, artifactId) as unknown as Array<{ clip_id: string }>;
   references.push(
     ...clips.map((clip) => ({ kind: "sequenceClip", id: clip.clip_id })),
   );

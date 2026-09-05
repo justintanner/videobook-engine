@@ -8,6 +8,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import { createEngine, type Engine } from "../src/engine.js";
 import type { EngineError } from "../src/engine-types.js";
+import { MVP_CONTRACT_VERSION, type EditIntent } from "../src/mvp-contracts.js";
 import {
   assertSameSchemaVersion,
   mergeWithPolicy,
@@ -514,6 +515,48 @@ describe("engine-level merge policy behavior", () => {
       { kind: "stream", id: stream.streamId },
       { kind: "transcript", id: transcript.transcriptId },
     ]);
+    const sourceRevision = engine.head;
+    const cueId = uuidv7();
+    const word = transcript.segments[0]!.words[0]!;
+    const setCue = async (linked: boolean) => {
+      const sequence = engine.sequences.getPrimary();
+      const intent: EditIntent = {
+        intentVersion: MVP_CONTRACT_VERSION, commandId: uuidv7(), sequenceId: sequence.sequenceId,
+        baseRevision: sequence.revision, actor: "test", sourceSurface: "ui", confirmationPolicy: "risk-based",
+        operations: [{ kind: "upsert-caption-cue", cue: {
+          cueId, trackId: sequence.tracks.find((track) => track.kind === "caption")!.trackId,
+          timelineStartFrame: 0, durationFrames: 60, text: "hello", styleId: "default",
+          ...(linked ? { transcriptSelection: {
+            transcriptId: transcript.transcriptId, transcriptRevision: transcript.revision,
+            startWordId: word.wordId, endWordId: word.wordId, range: transcript.segments[0]!.range,
+          } } : {}),
+        } }],
+      };
+      const preview = value(engine.edits.preview(intent));
+      value(await engine.edits.commit(intent, preview.previewHash));
+    };
+    await setCue(true);
+    expect(await engine.artifacts.delete(artifact.artifactId, { deleteOwnedMedia: true })).toMatchObject({
+      ok: false, error: { code: "IN_USE", details: { references: [{ kind: "captionCue", id: cueId }] } },
+    });
+    await setCue(false);
+    const notebook = value(await engine.notebooks.create("Source selections"));
+    const cell = engine.notebooks.createCell({ type: "video", slot: { row: 0, column: 0 }, references: [{
+      id: uuidv7(), kind: "stream", targetId: stream.streamId, snapshot: {}, ordinal: 0,
+    }] });
+    value(await engine.notebooks.write({ ...notebook, cells: [cell], edges: [] }));
+    expect(await engine.artifacts.delete(artifact.artifactId, { deleteOwnedMedia: true })).toMatchObject({
+      ok: false, error: { code: "IN_USE", details: { references: [{ kind: "cell.reference" }] } },
+    });
+    value(await engine.notebooks.delete(notebook.id));
+    value(await engine.artifacts.delete(artifact.artifactId, { deleteOwnedMedia: true }));
+    const counts = engine.catalogIntegrity().tableRowCounts;
+    for (const table of ["artifacts", "artifact_files", "artifact_streams", "transcripts", "transcript_segments", "transcript_words"]) {
+      expect(counts[table], table).toBe(0);
+    }
+    expect(value(engine.streams.getAtRevision(stream.streamId, sourceRevision)).objectHash).toBe(objectHash);
+    expect(value(await engine.transcripts.getAtRevision(transcript.transcriptId, sourceRevision)).segments[0]?.text).toBe("hello");
+    expect(engine.sequences.getPrimary().captions[0]?.text).toBe("hello");
     engine.close();
   });
 

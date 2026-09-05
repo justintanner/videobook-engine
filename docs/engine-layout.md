@@ -79,6 +79,12 @@ flowchart LR
 - JSON is stored as canonical text with recursively sorted object keys.
 - Deletes are hard deletes. Owned rows cascade; live artifact/entity
   references restrict deletion; prior Dolt revisions remain available.
+  `artifacts.delete(id, { deleteOwnedMedia: true })` explicitly removes the
+  artifact's streams and transcripts in the same semantic transaction.
+  Sequence clips, caption selections, notebook references, and pinned search
+  results still block deletion. Omitting the option retains the default
+  stream/transcript reference guard. Temporal runtime rows are removed with
+  the artifact; prior source and transcript revisions remain readable.
 - Objects are content-immutable but forgettable. `engine.storage.deleteObject`
   forgets one object (refusing `IN_USE` references at HEAD unless forced);
   `engine.storage.gc` sweeps every object nothing references at HEAD.

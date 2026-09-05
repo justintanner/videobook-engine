@@ -361,6 +361,11 @@ export interface CreateArtifactInput {
   label?: string;
 }
 
+export interface DeleteArtifactOptions {
+  /** Remove owned streams/transcripts when no editorial references remain. */
+  deleteOwnedMedia?: boolean;
+}
+
 export interface RenameArtifactInput {
   artifact: string;
   /** New free-text display label. */
