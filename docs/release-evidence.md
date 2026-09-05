@@ -1,7 +1,7 @@
 # MVP release evidence
 
-Audit date: September 6, 2026 (Asia/Bangkok). Engine source: `cb6acbf`;
-consumer source: `9ef526a3`. Subsequent verification updates are noted below.
+Audit date: September 6, 2026 (Asia/Bangkok). Engine source: `da41904`;
+consumer source: `09647d69`. Subsequent verification updates are noted below.
 This is an assessment of the requirements in
 `docs/mvp-prd.md`, not a release approval. E4, E5 and the MVP remain incomplete.
 Beads contains the work assignments and current status; this report records
@@ -39,8 +39,8 @@ include snapshot loading and are not warm-query latency or cold OS-cache tests.
 | --- | --- | --- |
 | Opt-in/configurable, pinned, checksum-verified and disableable model downloads | Engine defaults local-only; consumer requires exact `VIDEOBOOK_MODEL_DOWNLOAD=enabled` or preparation CLI `--download`; real HTTP tests verify default zero requests and pinned revisions | Opt-in/pinning/offline discovery completed in `ve-ovz.7` and `vb-3tss`. Transformers hub loader uses size metadata but has no inspected model digest verification; `ve-ovz.11` must verify supported upstream digests. Native index SHA-256 is unrelated. |
 | Scoped provider inputs, local built-in provider, injected network declaration and application consent | `TemporalSearchProvider` has `manifestId`, `prepare`, `embedText`; registration checks only manifest ID. CLIP/CLAP receive text or selected media paths/ranges. | Network capability/consent contract missing. `ve-ovz.12`; complete input-scoping verification in `ve-ovz.14`. |
-| Argument arrays, bounded outputs, timeouts, cancellation and scoped workspaces; no untrusted shell | Shared media-process limits and subsequent isolated model pool provide deadlines, process-group cancellation and owned scratch cleanup, verified by real processes and cached-media E2E. | Engine isolation implemented; consumer signal forwarding/integration remains in `ve-ovz.13` and `vb-wskx`. See `docs/media-limits.md` and `docs/model-isolation.md`. |
-| Malformed codec, oversized image, decompression bomb and model OOM fail job without book corruption | Tests reject malformed/oversized/high-expansion inputs; an actual heap-exhausted worker leaves a live engine writable and reopenable and permits fresh-worker retry. | Process isolation and typed failures verified in engine; full consumer queue integration remains in `ve-ovz.13`. The worker heap cap is not an OS-wide memory limit. |
+| Argument arrays, bounded outputs, timeouts, cancellation and scoped workspaces; no untrusted shell | Shared media-process limits and isolated model pool provide deadlines, process-group cancellation and owned scratch cleanup. Consumer actual queue tests cancel stalled model requests and preserve source bytes/status. | Engine isolation and consumer signal forwarding are implemented and tested. See `docs/media-limits.md` and `docs/model-isolation.md`. |
+| Malformed codec, oversized image, decompression bomb and model OOM fail job without book corruption | Tests reject malformed/oversized/high-expansion inputs; an actual heap-exhausted worker leaves a live engine writable and reopenable and permits fresh-worker retry. Consumer cached-model queue tests verify malformed-image failure and corrected retry. | Process isolation, typed job failures and consumer integration are verified. The worker heap cap is not an OS-wide memory limit. |
 | Excerpts/explanations treated as user content | `MomentSearch.tsx` interpolates excerpt text and explanation title through React | Local inspection supports escaping on this surface; cross-surface hostile-content tests remain in `ve-ovz.14`. |
 | Logs contain IDs/hashes/sizes/phases/codes rather than secrets/full content | Consumer logger accepts arbitrary arguments; `tools/log-wrapper.ts` includes first 300 characters of tool error text | Truncation is not redaction. Review and regression coverage required in `ve-ovz.14`. |
 | Content hashes are identity, not authorization | Book-scoped engines exist; CAS can retrieve by hash through configured remote storage | Cross-book/API authorization cannot be inferred from hash identity. Complete access-path audit/tests in `ve-ovz.14`. |
@@ -57,16 +57,18 @@ publication. Consumer queue tests cover durable status/cancel, archive/switch
 recovery and idempotent reindex scheduling. `ve-ovz.5`, `ve-ovz.6` and `vb-6eu9`
 are complete. This migration evidence does not prove general edit durability.
 
-Engine `cb6acbf` passed 251 tests (8 opt-in tests skipped), typecheck, knip,
-build and clean package smoke. The explicit real-model transfer/offline test
-also passed. Engine CI passed on Node 22 and 24. Consumer `9ef526a3` passed
-3,144 tests across 366 files, lint, test types, dead-code checks, both builds,
-and isolated installs from the worktree and exact committed source. The
-committed install exercised native Sharp, MCP create/list, the client proxy
-and graceful shutdown without a sibling engine checkout.
+Engine `da41904` passed 281 tests (8 opt-in tests skipped), typecheck, knip,
+build and clean package smoke with real cached CLIP/CLAP inference. Explicit
+real-model transfer/offline and compatibility-media tests also passed. Engine
+CI passed on Node 22 and 24. Consumer `09647d69` passed 3,149 tests across 366
+files, lint, test types, dead-code checks and both builds. Its two cached-model
+queue tests, skipped by default, passed in the explicit 27-test focused run.
+Isolated installs from both the worktree and exact committed source exercised
+native Sharp, MCP create/list, the client proxy and graceful shutdown without
+a sibling engine checkout.
 
-Consumer vendors `videobook-engine-5.3.1-cb6acbf.tgz`, SHA-256
-`f61ae6a7d28647083b0d526b2afb08dd9882bfa9613dedcf8c4dc8ed99b8591f`.
+Consumer vendors `videobook-engine-5.3.1-da41904.tgz`, SHA-256
+`d5a3e53a0fdc8f768a141fc907c52c4c5e7a9c8057129e3deee46956771b108f`.
 Consumer commits are local per its repository policy. Local package smoke and
 vendored-consumer verification do not prove installation of a published
 registry package: `ve-yc7` and `ve-orp` retain that release gate. Registry

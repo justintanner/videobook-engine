@@ -49,5 +49,9 @@ Built-in model loading, inference and Sharp decoding now run in the isolated
 process pool described in `docs/model-isolation.md`. Its outer deadline and
 process-group cancellation cover native work that cannot observe an AbortSignal
 inside the call. Sharp's own processing deadline is rounded up to seconds.
-Consumer job-signal forwarding and integration verification remain required
-before `ve-ovz.13` can close.
+Consumer `09647d69` forwards job cancellation through its provider overrides
+and indexing/reference calls. Actual queue tests cancel stalled model requests,
+preserve source bytes and ready status, fail malformed-image indexing with a
+typed error, and successfully index a corrected retry. Audio-only indexing uses
+CLAP without passing its source to the image decoder. A cancelled completed
+batch is rejected before coverage publication, preserving the last cursor.

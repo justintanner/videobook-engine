@@ -60,3 +60,13 @@ checks missing-cache offline failure, and can run cached CLIP/CLAP inference.
 The worker entry is compiled into the package and declared as an executable
 entry in the dead-code configuration. Source tests use the installed `tsx`
 loader; installed packages use JavaScript and need no `tsx` dependency.
+
+Consumer `09647d69` vendors engine `da41904` and forwards cancellation through
+all provider overrides and index/reference jobs. Local HTTP fixtures hold model
+requests open until actual queue cancellation kills the worker and closes its
+connections. Preparation failures and cancellation leave source artifacts ready
+and byte-identical. Reference-preparation jobs are detached from source artifact
+status, as indexing jobs already were. Missing-model offline readiness remains
+deferred; execution failures fail the auxiliary job with their engine code.
+Cached-model queue tests cover malformed-image failure and corrected retry, plus
+audio-only indexing without invoking the image decoder.
