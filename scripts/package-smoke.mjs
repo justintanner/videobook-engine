@@ -58,20 +58,45 @@ try {
   assert.equal(reopened.artifacts.get(script.value.artifactId).value.label, "opening draft");
 } finally { reopened.close(); }
 const engineRequire = createRequire(import.meta.resolve("videobook-engine"));
-const transformersPath = engineRequire.resolve("@huggingface/transformers");
-const transformersRequire = createRequire(transformersPath);
+const transformersUrl = new URL("./transformers-runtime.js", import.meta.resolve("videobook-engine"));
+const transformersRequire = createRequire(transformersUrl);
 const sharpPath = engineRequire.resolve("sharp");
 assert.equal(realpathSync(sharpPath), realpathSync(transformersRequire.resolve("sharp")),
   "Engine and Transformers must resolve one Sharp binary");
 const { default: sharp } = await import(pathToFileURL(sharpPath));
-const transformers = await import(pathToFileURL(transformersPath));
-const RawImage = transformers.RawImage ?? transformers.default.RawImage;
+const { RawImage } = await import(transformersUrl);
 const pixels = await sharp({ create: {
   width: 16, height: 12, channels: 3, background: { r: 220, g: 20, b: 20 },
 } }).png().toBuffer();
 const decoded = await RawImage.fromBlob(new Blob([pixels]));
 assert.equal(decoded.width, 16);
 assert.equal(decoded.height, 12);
+if (process.env.VIDEOBOOK_RUN_MODEL_E2E === "1") {
+  const { writeFile } = await import("node:fs/promises");
+  const { homedir } = await import("node:os");
+  const { join } = await import("node:path");
+  const { execFileSync } = await import("node:child_process");
+  const { LocalClipTemporalProvider, LocalClapTemporalProvider } = await import("videobook-engine");
+  const options = {
+    modelCacheDir: process.env.VIDEOBOOK_E2E_MODEL_CACHE ?? join(homedir(), ".cache", "videobook", "models"),
+    allowModelDownload: false,
+  };
+  await writeFile("reference.png", pixels);
+  const clip = new LocalClipTemporalProvider(options);
+  const imageVector = await clip.embedImage("reference.png");
+  const textVector = await clip.embedText("a solid red image");
+  execFileSync("ffmpeg", ["-hide_banner", "-loglevel", "error", "-f", "lavfi", "-i",
+    "sine=frequency=440:duration=1:sample_rate=48000", "-y", "tone.wav"]);
+  const clap = new LocalClapTemporalProvider({ ...options, ffmpegPath: "ffmpeg" });
+  const audioVector = await clap.embedAudio("tone.wav", 0, 1);
+  const audioText = await clap.embedText("a steady electronic tone");
+  for (const vector of [imageVector, textVector, audioVector, audioText]) {
+    assert.equal(vector.length, 512);
+    assert.ok([...vector].every(Number.isFinite));
+    assert.ok(Math.abs(Math.hypot(...vector) - 1) < 0.0001);
+  }
+  console.log("Packaged CLIP and CLAP image/audio/text inference passed with downloads disabled");
+}
 console.log("Packaged README quick start and catalog reopen passed");
 `);
   const result = await run(process.execPath, [join(root, "smoke.mjs")], {
@@ -88,6 +113,11 @@ console.log("Packaged README quick start and catalog reopen passed");
   assert.equal(resolutions.stdout.trim().split(/\r?\n/).filter(Boolean).length, 1,
     "Clean installation must contain one Sharp resolution");
   process.stdout.write("Single Sharp resolution and media decode passed\n");
+  const audit = await run(npm, ["audit", "--omit=dev", "--json"], {
+    cwd: root, env: installEnv, maxBuffer: 16 * 1024 * 1024,
+  });
+  assert.equal(JSON.parse(audit.stdout).metadata.vulnerabilities.total, 0,
+    "Installed runtime dependencies must pass npm audit");
 } finally {
   await rm(root, { recursive: true, force: true, maxRetries: 3 });
 }

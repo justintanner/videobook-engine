@@ -48,11 +48,16 @@ explicitly with `await engine.book.rename("new-name")`.
 project, executes this quick start from the installed README, and verifies
 that reopening the catalog preserves the book and artifact.
 
-The engine and Transformers use the same Sharp 0.34.5 image decoder. Keep
-Sharp within Transformers' supported range when updating either dependency;
-the published package must deduplicate without a consumer override.
-The package smoke checks both resolution paths, `npm ls sharp`, and image
-decoding for duplicate native-library warnings.
+The package bundles its pinned Transformers.js runtime and uses one external
+Sharp 0.35.4 image decoder with native ONNX dependencies. This avoids shipping
+Transformers' older Sharp dependency or requiring consumer overrides. Build
+provenance and third-party licenses are included under `dist/third-party/`.
+The package smoke checks both resolution paths, `npm ls sharp`, image
+decoding, duplicate native-library warnings, and the runtime dependency audit.
+Run `VIDEOBOOK_RUN_MODEL_E2E=1 npm run test:package` with the pinned models
+cached locally to verify packaged CLIP and CLAP inference with downloads
+disabled. ONNX dependencies are external imports in the generated runtime,
+so the source-only dependency lint excludes them from unused-dependency checks.
 
 ## MVP contracts
 

@@ -78,7 +78,7 @@ const TEXT_ARTIFACT_KINDS = new Set<ArtifactKind>([
   "final",
 ]);
 
-type TransformersModule = typeof import("@huggingface/transformers");
+type TransformersModule = typeof import("./transformers-runtime.js");
 type UsearchModule = typeof import("usearch");
 type SharpFn = typeof Sharp;
 
@@ -87,7 +87,7 @@ let sharpModule: Promise<SharpFn> | undefined;
 let usearchModule: UsearchModule | undefined;
 
 function loadTransformers(): Promise<TransformersModule> {
-  transformersModule ??= import("@huggingface/transformers");
+  transformersModule ??= import("./transformers-runtime.js");
   return transformersModule;
 }
 

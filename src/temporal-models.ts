@@ -8,14 +8,14 @@ import type {
 } from "./mvp-contracts.js";
 import { EngineFault } from "./store.js";
 
-type TransformersModule = typeof import("@huggingface/transformers");
+type TransformersModule = typeof import("./transformers-runtime.js");
 type SharpFn = typeof Sharp;
 
 let transformersModule: Promise<TransformersModule> | undefined;
 let sharpModule: Promise<SharpFn> | undefined;
 
 function loadTransformers(): Promise<TransformersModule> {
-  transformersModule ??= import("@huggingface/transformers");
+  transformersModule ??= import("./transformers-runtime.js");
   return transformersModule;
 }
 

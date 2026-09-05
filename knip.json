@@ -6,5 +6,5 @@
   ],
   "project": ["src/**/*.ts"],
   "ignore": [],
-  "ignoreDependencies": ["node-gyp"]
+  "ignoreDependencies": ["node-gyp", "onnxruntime-node"]
 }

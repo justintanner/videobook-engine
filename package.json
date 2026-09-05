@@ -47,7 +47,7 @@
     "benchmark:api": "tsx benchmarks/run-api-benchmark.ts",
     "benchmark:api:smoke": "tsx benchmarks/run-api-benchmark.ts --quick",
     "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
-    "build": "npm run clean && tsc",
+    "build": "npm run clean && tsc && node scripts/build-transformers.mjs",
     "prepare": "npm run build",
     "prepack": "npm run build",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.benchmarks.json",
@@ -62,11 +62,11 @@
   },
   "dependencies": {
     "@dolthub/doltlite": "^0.11.37",
-    "@huggingface/transformers": "4.2.0",
     "node-gyp": "12.1.0",
-    "sharp": "0.34.5",
+    "sharp": "0.35.4",
     "usearch": "2.26.0",
-    "uuid": "^14.0.0"
+    "uuid": "^14.0.0",
+    "onnxruntime-node": "1.29.0"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
@@ -74,20 +74,22 @@
     "knip": "^6.11.0",
     "tsx": "^4.19.0",
     "typescript": "^5.5.0",
-    "vitest": "^4.1.8"
+    "vitest": "^4.1.8",
+    "@huggingface/transformers": "4.2.0",
+    "esbuild": "0.28.1"
   },
   "overrides": {
-    "adm-zip": "0.6.0",
     "esbuild": "0.28.1",
-    "postcss": "^8.5.23"
+    "postcss": "^8.5.23",
+    "sharp": "$sharp",
+    "onnxruntime-node": "$onnxruntime-node"
   },
   "allowScripts": {
     "@dolthub/doltlite@0.11.37": true,
     "esbuild@0.28.1": true,
     "fsevents@2.3.3": true,
-    "onnxruntime-node@1.24.3": true,
     "protobufjs@7.6.5": true,
     "usearch@2.26.0": true,
-    "sharp@0.34.5": true
+    "onnxruntime-node@1.29.0": true
   }
 }
