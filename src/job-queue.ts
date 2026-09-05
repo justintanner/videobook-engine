@@ -13,7 +13,7 @@ import type {
   RunnerConfig,
 } from "./engine-types.js";
 import type { DoltStore } from "./store.js";
-import { canonicalJson, parseJson } from "./store.js";
+import { canonicalJson, EngineFault, parseJson } from "./store.js";
 
 interface JobRow {
   id: number;
@@ -593,7 +593,8 @@ export class QueueRunner {
     } catch (error) {
       const jobError: JobError = {
         message: error instanceof Error ? error.message : String(error),
-        ...(error instanceof Error && error.name ? { code: error.name } : {}),
+        ...(error instanceof EngineFault ? { code: error.error.code }
+          : error instanceof Error && error.name ? { code: error.name } : {}),
       };
       await this.queue.fail(
         job.id,

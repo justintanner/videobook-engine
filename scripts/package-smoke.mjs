@@ -71,6 +71,9 @@ const pixels = await sharp({ create: {
 const decoded = await RawImage.fromBlob(new Blob([pixels]));
 assert.equal(decoded.width, 16);
 assert.equal(decoded.height, 12);
+const { LocalClipTemporalProvider: OfflineClipProvider } = await import("videobook-engine");
+await assert.rejects(new OfflineClipProvider({ modelCacheDir: ".missing-model-cache" }).prepare(),
+  (error) => error.error?.code === "OFFLINE", "Packaged worker must start and preserve offline model policy");
 if (process.env.VIDEOBOOK_RUN_MODEL_E2E === "1") {
   const { writeFile } = await import("node:fs/promises");
   const { homedir } = await import("node:os");

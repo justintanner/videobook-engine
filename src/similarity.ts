@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import { readFile } from "node:fs/promises";
 import { mkdtemp, mkdir, readdir, rm } from "node:fs/promises";
-import { tmpdir } from "node:os";
 import * as path from "node:path";
 
 import type { Index } from "usearch";
@@ -41,6 +40,8 @@ import {
   type FileRow,
 } from "./context.js";
 import { EngineFault } from "./store.js";
+import { isolatedModelCall } from "./isolated-models.js";
+import type { ModelWorkerConfiguration } from "./model-worker-protocol.js";
 
 const DEFAULT_MODEL_ID = "Xenova/clip-vit-base-patch32";
 const DEFAULT_MODEL_REVISION =
@@ -223,13 +224,13 @@ class LocalSimilarityApi implements SimilarityApi {
     private readonly context: EngineContext,
     config: SimilarityConfig,
   ) {
-    this.provider = config.provider ?? new LocalClipProvider(context, config);
+    this.provider = config.provider ?? isolatedCompatibilityProvider("compat-clip", context, config) as SimilarityEmbeddingProvider;
     this.audioProvider = config.audio
       ? config.audio.provider ??
-        new LocalClapAudioProvider(context, config, config.audio)
+        isolatedCompatibilityProvider("compat-clap", context, config) as SimilarityAudioEmbeddingProvider
       : null;
     this.textProvider = config.text
-      ? config.text.provider ?? new LocalTextProvider(context, config, config.text)
+      ? config.text.provider ?? isolatedCompatibilityProvider("compat-text", context, config) as SimilarityTextEmbeddingProvider
       : null;
   }
 
@@ -1458,13 +1459,44 @@ class LocalSimilarityApi implements SimilarityApi {
   }
 }
 
+function isolatedCompatibilityProvider(
+  kind: "compat-clip" | "compat-clap" | "compat-text", context: EngineContext, config: SimilarityConfig,
+): SimilarityEmbeddingProvider & SimilarityAudioEmbeddingProvider & SimilarityTextEmbeddingProvider {
+  const local = kind === "compat-clap" ? config.audio! : kind === "compat-text" ? config.text! : config;
+  const modelId = local.modelId;
+  const modelCacheDir = local.modelCacheDir ?? config.modelCacheDir ?? path.join(context.config.dataDir!, "similarity-models");
+  const configuration = { kind, modelCacheDir, modelId, allowModelDownload: local.allowModelDownload ?? config.allowModelDownload,
+    ffmpegPath: kind === "compat-clap" ? config.audio!.ffmpegPath ?? config.ffmpegPath : config.ffmpegPath,
+    ffprobePath: config.ffprobePath };
+  const audioSpace = modelId && modelId !== DEFAULT_AUDIO_MODEL_ID ? `audio-${modelId.replace(/[^a-zA-Z0-9]+/g, "-")}-v1` : DEFAULT_AUDIO_EMBEDDING_SPACE;
+  const textSpace = modelId && modelId !== DEFAULT_TEXT_MODEL_ID ? `text-${modelId.replace(/[^a-zA-Z0-9]+/g, "-")}-v1` : DEFAULT_TEXT_EMBEDDING_SPACE;
+  return {
+    embeddingSpace: kind === "compat-clip" ? DEFAULT_EMBEDDING_SPACE : kind === "compat-clap" ? audioSpace : textSpace,
+    dimensions: kind === "compat-text" ? DEFAULT_TEXT_DIMENSIONS : DEFAULT_DIMENSIONS,
+    async prepare(options = {}) { await isolatedModelCall(configuration, { method: "prepare" }, options); },
+    embedImage(sourcePath, options = {}) { return isolatedModelCall(configuration, { method: "embedImage", sourcePath }, options) as Promise<Float32Array>; },
+    embedAudio(sourcePath, options = {}) { return isolatedModelCall(configuration, { method: "embedAudio", sourcePath }, options) as Promise<Float32Array>; },
+    embedVideo(sourcePath, options = {}) { return isolatedModelCall(configuration, { method: "embedVideo", sourcePath }, options) as Promise<{ vector: Float32Array; frameCount: number }>; },
+    embedText(text, options = {}) { return isolatedModelCall(configuration, { method: "embedText", text }, options) as Promise<SimilarityTextChunk[]>; },
+  };
+}
+
+export function createInlineSimilarityProvider(configuration: ModelWorkerConfiguration) {
+  const common = { modelCacheDir: configuration.modelCacheDir, allowModelDownload: configuration.allowModelDownload,
+    ffmpegPath: configuration.ffmpegPath, ffprobePath: configuration.ffprobePath };
+  const model = { ...common, modelId: configuration.modelId };
+  if (configuration.kind === "compat-clip") return new LocalClipProvider(process.cwd(), model);
+  if (configuration.kind === "compat-clap") return new LocalClapAudioProvider(process.cwd(), common, model);
+  return new LocalTextProvider(process.cwd(), common, model);
+}
+
 class LocalClipProvider implements SimilarityEmbeddingProvider {
   readonly embeddingSpace = DEFAULT_EMBEDDING_SPACE;
   readonly dimensions = DEFAULT_DIMENSIONS;
   private embedder: FeaturePipeline | null = null;
 
   constructor(
-    private readonly context: EngineContext,
+    private readonly dataDir: string,
     private readonly config: SimilarityConfig,
   ) {}
 
@@ -1491,7 +1523,7 @@ class LocalClipProvider implements SimilarityEmbeddingProvider {
       options,
     );
     const frameCount = Math.min(120, Math.max(1, Math.ceil(duration / 2)));
-    const framesDir = await mkdtemp(path.join(tmpdir(), "videobook-sim-"));
+    const framesDir = await mkdtemp(path.join(process.cwd(), "videobook-sim-"));
     try {
       const fps = `${frameCount}/${Math.max(duration, 0.001)}`;
       await runCommand(this.config.ffmpegPath ?? "ffmpeg", [
@@ -1530,7 +1562,7 @@ class LocalClipProvider implements SimilarityEmbeddingProvider {
 
   private async loadEmbedder(): Promise<FeaturePipeline> {
     if (this.embedder) return this.embedder;
-    const dataDir = this.context.config.dataDir;
+    const dataDir = this.dataDir;
     if (!dataDir) throw new Error("Similarity requires a configured dataDir");
     const cacheDir = this.config.modelCacheDir ?? path.join(
       dataDir,
@@ -1586,7 +1618,7 @@ class LocalClapAudioProvider implements SimilarityAudioEmbeddingProvider {
   private maxSamples = DEFAULT_AUDIO_MAX_SAMPLES;
 
   constructor(
-    private readonly context: EngineContext,
+    private readonly dataDir: string,
     private readonly sharedConfig: SimilarityConfig,
     private readonly config: SimilarityAudioConfig,
   ) {
@@ -1636,7 +1668,7 @@ class LocalClapAudioProvider implements SimilarityAudioEmbeddingProvider {
     if (this.processor && this.model) {
       return { processor: this.processor, model: this.model };
     }
-    const dataDir = this.context.config.dataDir;
+    const dataDir = this.dataDir;
     if (!dataDir) throw new Error("Audio similarity requires a configured dataDir");
     const cacheDir = this.config.modelCacheDir ??
       this.sharedConfig.modelCacheDir ??
@@ -1691,7 +1723,7 @@ class LocalTextProvider implements SimilarityTextEmbeddingProvider {
   private embedder: TextFeaturePipeline | null = null;
 
   constructor(
-    private readonly context: EngineContext,
+    private readonly dataDir: string,
     private readonly sharedConfig: SimilarityConfig,
     private readonly config: SimilarityTextConfig,
   ) {
@@ -1737,7 +1769,7 @@ class LocalTextProvider implements SimilarityTextEmbeddingProvider {
 
   private async loadEmbedder(): Promise<TextFeaturePipeline> {
     if (this.embedder) return this.embedder;
-    const dataDir = this.context.config.dataDir;
+    const dataDir = this.dataDir;
     if (!dataDir) throw new Error("Text similarity requires a configured dataDir");
     const cacheDir = this.config.modelCacheDir ??
       this.sharedConfig.modelCacheDir ??

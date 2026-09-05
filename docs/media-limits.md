@@ -45,10 +45,9 @@ and prior coverage intact and allows retry. The opt-in cached CLIP/CLAP and
 compatibility E2E tests verify real JPEG/MP4/WAV decoding, CLAP timeout and
 cancellation, malformed audio and successful retry.
 
-This completes the bounded subprocess/image portion of `ve-ovz.13`. Model
-loading and inference still run in the calling process. Cancellation is
-checked around those calls, but cannot yet interrupt native inference or
-contain a fatal native/model allocation failure. Sharp cancellation is also
-checked around the decode; its processing deadline is rounded up to seconds.
-Process isolation, complete job-failure/retry verification and consumer signal
-forwarding remain required before this release-hardening issue can close.
+Built-in model loading, inference and Sharp decoding now run in the isolated
+process pool described in `docs/model-isolation.md`. Its outer deadline and
+process-group cancellation cover native work that cannot observe an AbortSignal
+inside the call. Sharp's own processing deadline is rounded up to seconds.
+Consumer job-signal forwarding and integration verification remain required
+before `ve-ovz.13` can close.
