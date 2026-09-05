@@ -50,6 +50,7 @@ if (args.includes("--help")) {
   --batch-units N   One-second moments per durable batch (default 30, maximum 60)
   --fixture PATH   Reuse a completed fixture created by this script
   --retain-fixture Keep the generated fixture for a later measurement
+  --prepare-existing Prepare a reused legacy fixture before close/reopen measurement
   --output PATH    Write the complete JSON report
   --assert         Exit nonzero when a measured NFR threshold fails
 Synthetic vectors measure performance only; they do not prove search quality.`);
@@ -58,7 +59,7 @@ Synthetic vectors measure performance only; they do not prove search quality.`);
 const valueFlags = ["--moments", "--artifacts", "--reads", "--batch-units", "--fixture", "--output"];
 for (let index = 0; index < args.length; index++) {
   if (valueFlags.includes(args[index]!)) { index++; continue; }
-  assert.ok(["--retain-fixture", "--assert"].includes(args[index]!), `Unknown flag: ${args[index]}`);
+  assert.ok(["--retain-fixture", "--prepare-existing", "--assert"].includes(args[index]!), `Unknown flag: ${args[index]}`);
 }
 const requestedMoments = integer("--moments", 100_000);
 const requestedArtifacts = integer("--artifacts", 1_000);
@@ -174,8 +175,9 @@ try {
         assert.equal(coverage.indexedUnits, end);
         assert.equal(coverage.nextCursor, end < moments ? String(end) : undefined);
         fixture.indexing.resumeCursorsVerified++;
+        if (fixture.indexing.batches === 1) unwrap(engine.temporalSearch.activate(manifest.manifestId, generation));
+        unwrap(await measure("index.prepare", () => engine!.temporalSearch.prepare({ checkpoint: "periodic" })));
         if (fixture.indexing.batches === 1) {
-          unwrap(engine.temporalSearch.activate(manifest.manifestId, generation));
           const firstPage = unwrap(await engine.temporalSearch.queryPrepared({ limit: 10 }, {
             kind: "image", embeddingSpace: manifest.embeddingSpace, vector: vector(firstMoment),
           }));
@@ -190,6 +192,12 @@ try {
     }
     fixture.indexing.durationMs = performance.now() - seedStarted;
     await writeFile(join(root, "scale-fixture.json"), `${JSON.stringify(fixture)}\n`);
+    engine.close();
+    engine = undefined;
+  }
+  if (reused && args.includes("--prepare-existing")) {
+    engine = createEngine({ rootDir: root });
+    unwrap(await measure("index.prepareExisting", () => engine!.temporalSearch.prepare()));
     engine.close();
     engine = undefined;
   }

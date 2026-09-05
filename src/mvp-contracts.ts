@@ -823,6 +823,21 @@ export interface TemporalSearchStats {
   fingerprints: number;
 }
 
+export interface PrepareTemporalIndexOptions {
+  manifestId?: string;
+  generation?: string;
+  signal?: AbortSignal;
+  checkpoint?: "always" | "periodic";
+}
+
+export interface TemporalIndexPreparation {
+  indexes: number;
+  vectors: number;
+  updatedVectors: number;
+  loadedIndexes: number;
+  persistedIndexes: number;
+}
+
 export type SearchBenchmarkClass =
   | "natural-language-visual"
   | "quoted-speech-ocr"

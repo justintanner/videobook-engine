@@ -20,6 +20,8 @@ and its persisted next cursor. It activates the first partial batch and
 checks that a reference query retrieves the source before indexing finishes.
 After indexing, the engine closes and reopens the catalog and checks the
 stored moment and indexed-artifact counts.
+Each committed batch also calls `temporalSearch.prepare` with periodic
+checkpointing, so native graph construction is included in indexing time.
 
 The report records the first query for each mode, then repeats that query
 outside the timing samples to check deterministic results. It measures
@@ -100,7 +102,7 @@ the resulting window. Still-image neighbors cannot displace timed candidates.
 Committed indexing batches refresh only affected cache entries. Semantic
 changes refresh metadata and remove deleted sources while preserving native
 vectors, so a rename does not rebuild the graph. Generation changes and engine
-close discard the relevant cached state. Regression tests cover native ANN
+close discard the relevant in-memory state. Regression tests cover native ANN
 pagination across page sizes, vector/text replacement, source and label
 filters, rename/deletion, ordered action, differing sampling densities, bounded
 durations, and a long video reference surrounded by matching still images.
@@ -121,7 +123,7 @@ covering at most 30 source seconds each, verified every resume cursor, and
 published the first searchable partial coverage after 45 ms. Open plus
 book/search summary after closing the newly built fixture took 1.35 seconds.
 
-Two limitations remain release work. First, creating the native graph on the
+Two limitations remained in that run. First, creating the native graph on the
 first query took 139 seconds; warm-query success does not make that suitable
 for an interactive request. `ve-s84.4` tracks preparing and persisting the
 index through indexing work and validating fast query readiness after reopen.
@@ -129,3 +131,44 @@ Publication depends on that issue. Second, independent fresh-process opens
 have spent over four seconds in automatic catalog GC; `ve-ovz.2` tracks that
 cost, which the same-process reopen measurement does not consistently expose.
 These measurements also do not replace the frozen corpus quality gate.
+
+## Persisted preparation
+
+Activate a generation after committing its first partial batch, then prepare
+its search index inside a cancellable indexing job:
+
+```ts
+const activated = engine.temporalSearch.activate(manifestId, generation);
+if (!activated.ok) throw new Error(activated.error.message);
+const prepared = await engine.temporalSearch.prepare({
+  manifestId,
+  generation,
+  signal,
+  checkpoint: "periodic",
+});
+if (!prepared.ok) throw new Error(prepared.error.message);
+```
+
+Preparation yields between bounded native insertions. Already prepared
+indexes update incrementally as committed batches are consumed. Periodic
+checkpoints write after 5,000 changes; the default preparation mode and engine
+close flush outstanding changes. Omitting the manifest and generation
+prepares every active index, which supports background recovery of old books.
+Collections of at most 1,000 vectors use direct scoring without a native graph.
+
+Disposable snapshots live under `data/runtime-search`. Their identity includes
+the full manifest, generation, modality, dimensions, native version, and index
+configuration. A SHA-256 checksum protects the native bytes before loading;
+stable vector keys and content digests validate the mapping against committed
+vectors. Metadata is published by rename after a complete graph is saved.
+A stale checkpoint can be reconciled from changed vectors; a corrupt or
+incompatible checkpoint is rebuilt. Cancellation never publishes a partial
+graph. The source vectors remain in the catalog.
+
+An interactive query loads an exact valid snapshot, but never constructs a
+missing large graph. It returns `NOT_READY` with
+`error.details.requiresIndexPreparation === true` when preparation is needed.
+Consumers should queue preparation, show its progress, and retry after the job
+finishes. The index's preparation result separates loaded indexes, changed
+vectors, and persisted indexes. `--prepare-existing` in the benchmark measures
+explicit recovery before closing and reopening a retained older fixture.

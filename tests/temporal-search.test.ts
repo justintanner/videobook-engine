@@ -221,7 +221,8 @@ function commit(
 
 describe("progressive temporal multimodal search", () => {
   it("updates ANN candidates and lexical caches after batches, rename, filters, and deletion", async () => {
-    const engine = await setup();
+    let engine = await setup();
+    const root = roots.at(-1)!;
     try {
       const target = await media(engine, "video", "indexed-target");
       const control = await still(engine, "indexed-control");
@@ -248,8 +249,14 @@ describe("progressive temporal multimodal search", () => {
       }]);
       value(engine.temporalSearch.activate(manifest.manifestId, "generation-1"));
       const reference = { kind: "image" as const, embeddingSpace: manifest.embeddingSpace, vector: [1, 0, 0] };
+      expect(await engine.temporalSearch.queryPrepared({}, reference)).toMatchObject({ ok: false, error: { code: "NOT_READY" } });
+      value(await engine.temporalSearch.prepare());
       const initial = value(await engine.temporalSearch.queryPrepared({ limit: 20 }, reference));
       expect(initial.hits[0]?.artifactId).toBe(control.artifact.artifactId);
+      engine.close();
+      engine = createEngine({ dataDir: path.join(root, "data"), workspaceDir: path.join(root, "workspace") });
+      engine.temporalSearch.providers.register(new QueryProvider());
+      expect(value(await engine.temporalSearch.queryPrepared({ limit: 20 }, reference)).hits).toEqual(initial.hits);
       const first = value(await engine.temporalSearch.queryPrepared({ limit: 3 }, reference));
       const next = value(await engine.temporalSearch.queryPrepared({ limit: 17, cursor: first.nextCursor }, reference));
       expect([...first.hits, ...next.hits]).toEqual(initial.hits);

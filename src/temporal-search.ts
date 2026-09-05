@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { join } from "node:path";
 
 import type { StatementSync } from "@dolthub/doltlite";
 
@@ -12,6 +13,8 @@ import type {
   PreparedSearchFingerprint,
   PreparedSearchOptions,
   PreparedSearchReference,
+  PrepareTemporalIndexOptions,
+  TemporalIndexPreparation,
   SearchCoverage,
   SearchHit,
   SearchModality,
@@ -138,7 +141,11 @@ const SEGMENT_SELECT = `SELECT s.segment_id, s.artifact_id, a.label AS artifact_
   FROM runtime_media_segments s JOIN artifacts a ON a.artifact_id=s.artifact_id`;
 
 export function clearTemporalSearchCache(context: EngineContext): void {
+  const state = retrievalStates.get(context);
   retrievalStates.delete(context);
+  for (const index of state?.vectors.values() ?? []) {
+    try { index.dispose(); } catch { /* Cache writes cannot prevent closing the catalog. */ }
+  }
 }
 
 interface StreamValidationRow {
@@ -222,6 +229,8 @@ export function createTemporalSearchApi(context: EngineContext) {
       syncResultOf(() => activateGeneration(context, manifestId, generation)),
     coverage: (artifact?: string): Result<SearchCoverage, EngineError> =>
       syncResultOf(() => searchCoverage(context, artifact)),
+    prepare: (options: PrepareTemporalIndexOptions = {}): Promise<Result<TemporalIndexPreparation, EngineError>> =>
+      resultOf(() => prepareTemporalIndexes(context, options)),
     query: (
       query: SearchQuery,
     ): Promise<Result<SearchPage, EngineError>> =>
@@ -989,7 +998,31 @@ function activeGenerations(context: EngineContext): GenerationRow[] {
     .all() as unknown as GenerationRow[];
 }
 
-function retrievalState(context: EngineContext, active = activeGenerations(context)): RetrievalState {
+async function prepareTemporalIndexes(context: EngineContext, options: PrepareTemporalIndexOptions): Promise<TemporalIndexPreparation> {
+  const active = activeGenerations(context);
+  const selected = active.filter((generation) =>
+    (!options.manifestId || generation.manifest_id === options.manifestId)
+    && (!options.generation || generation.generation === options.generation));
+  if ((options.manifestId || options.generation) && selected.length === 0) {
+    throw new EngineFault({ code: "NOT_READY", message: "Activate a generation before preparing its search index" });
+  }
+  const state = retrievalState(context, active, false);
+  const result: TemporalIndexPreparation = { indexes: 0, vectors: 0, updatedVectors: 0, loadedIndexes: 0, persistedIndexes: 0 };
+  for (const generation of selected) {
+    for (const modality of requiredManifest(context, generation.manifest_id).modalities) {
+      if (modality === "metadata") continue;
+      const prepared = await vectorIndex(context, generation, modality, state).prepare(options.signal, options.checkpoint === "periodic");
+      result.indexes++;
+      result.vectors += prepared.vectors;
+      result.updatedVectors += prepared.updatedVectors;
+      result.loadedIndexes += Number(prepared.loaded);
+      result.persistedIndexes += Number(prepared.persisted);
+    }
+  }
+  return result;
+}
+
+function retrievalState(context: EngineContext, active = activeGenerations(context), refreshMetadata = true): RetrievalState {
   const generationKey = canonicalJson(active.map((item) => [item.generation, item.embedding_space, item.manifest_id]));
   let state = retrievalStates.get(context);
   if (!state || state.generationKey !== generationKey) {
@@ -997,14 +1030,28 @@ function retrievalState(context: EngineContext, active = activeGenerations(conte
     const rows = generations.length === 0 ? [] : context.store.db.prepare(
       `${SEGMENT_SELECT} WHERE s.generation IN (${generations.map(() => "?").join(",")}) ORDER BY s.segment_id`,
     ).all(...generations) as unknown as SegmentRow[];
+    const segments = new Map(rows.map((row) => [row.segment_id, row]));
+    const vectors = state?.vectors ?? new Map<string, TemporalVectorIndex<CachedVector>>();
+    for (const [key, index] of vectors) {
+      const [generation, space] = JSON.parse(key) as string[];
+      if (!active.some((item) => item.generation === generation && item.embedding_space === space)) {
+        try { index.dispose(); } catch { /* Retired cache persistence is optional. */ }
+        vectors.delete(key);
+        continue;
+      }
+      for (const [segmentId, entry] of index.entries) {
+        const segment = segments.get(segmentId);
+        if (segment) entry.value.segment = segment;
+        else index.delete(segmentId);
+      }
+    }
     state = {
       semanticVersion: context.store.semanticVersion, generationKey, generations: new Set(generations),
-      segments: new Map(rows.map((row) => [row.segment_id, row])),
-      vectors: new Map(), ordered: new Map(), pending: new Set(),
+      segments, vectors, ordered: new Map(), pending: state?.pending ?? new Set(),
     };
     retrievalStates.set(context, state);
   }
-  if (state.semanticVersion !== context.store.semanticVersion) {
+  if (refreshMetadata && state.semanticVersion !== context.store.semanticVersion) {
     const generations = [...state.generations];
     const rows = generations.length === 0 ? [] : context.store.db.prepare(
       `${SEGMENT_SELECT} WHERE s.generation IN (${generations.map(() => "?").join(",")}) ORDER BY s.segment_id`,
@@ -1016,7 +1063,10 @@ function retrievalState(context: EngineContext, active = activeGenerations(conte
         if (segment) entry.value.segment = segment;
         else index.delete(segmentId);
       }
-      if (index.entries.size === 0) state.vectors.delete(key);
+      if (index.entries.size === 0) {
+        try { index.dispose(); } catch { /* Empty cache persistence is optional. */ }
+        state.vectors.delete(key);
+      }
     }
     state.texts = undefined;
     state.ordered.clear();
@@ -1096,12 +1146,16 @@ function addCachedVector(state: RetrievalState, index: TemporalVectorIndex<Cache
 function vectorIndex(
   context: EngineContext, generation: GenerationRow,
   modality: Exclude<SearchModality, "auto" | "metadata">,
+  state = retrievalState(context),
 ): TemporalVectorIndex<CachedVector> {
-  const state = retrievalState(context);
   const key = canonicalJson([generation.generation, generation.embedding_space, modality]);
   const cached = state.vectors.get(key);
   if (cached) return cached;
-  const index = new TemporalVectorIndex<CachedVector>(requiredManifest(context, generation.manifest_id).dimensions);
+  const manifest = requiredManifest(context, generation.manifest_id);
+  const identity = canonicalJson([key, manifest]);
+  const index = new TemporalVectorIndex<CachedVector>(manifest.dimensions, {
+    identity, basePath: join(context.store.dataDir, "runtime-search", hashJson(identity)),
+  });
   let after = "";
   for (;;) {
     const rows = context.store.db.prepare(
