@@ -4,7 +4,7 @@ The [source patch](ignored-runtime-merge.patch) fixes a native DoltLite merge
 failure when an otherwise clean working catalog contains ignored local tables.
 It also keeps their rows and indexes local through merge, abort, reopen, and
 allocation failures. Production still uses published DoltLite 0.50.6 and the
-engine's projection merge. The patch is submitted for upstream review in
+engine's projection merge. The patch was merged upstream in
 [DoltLite PR 2664](https://github.com/dolthub/doltlite/pull/2664).
 
 ## Provenance
@@ -13,6 +13,7 @@ engine's projection merge. The patch is submitted for upstream review in
 - Base: [`37a390eb7b021962d9d287a465a2da3c9f59c3cf`](https://github.com/dolthub/doltlite/commit/37a390eb7b021962d9d287a465a2da3c9f59c3cf).
 - Patch SHA-256: `73876308d3ae045bfba59d807eb027a58b556cec882c8554665b2e97d66d4008`.
 - Submitted commit: [`b3981dc9ed6b2e39c247b4d598b2691e19dd0b25`](https://github.com/justintanner/doltlite/commit/b3981dc9ed6b2e39c247b4d598b2691e19dd0b25).
+- Upstream merge: [`9a3725f2758b7a66daa79e9ebaf18e6bd389e78c`](https://github.com/dolthub/doltlite/commit/9a3725f2758b7a66daa79e9ebaf18e6bd389e78c), September 6, 2026.
 - Validated September 6, 2026 on Apple M1 Pro, 16 GiB RAM, macOS arm64,
   Node 24.10.0, with Dolt 2.3.1 as the semantic reference.
 - DoltLite extensions are Apache-2.0, copyright 2024–2026 DoltHub, Inc.
@@ -54,6 +55,8 @@ schema-entry array failed; the patch frees those strings on that error path.
 | Native lint, layering, bucket, and automation checks | Pass |
 | Clean stock-SQLite build and parity suite | Pass; included in the 126 suites |
 | Patch application to the exact base | Pass |
+| [Upstream PR CI](https://github.com/dolthub/doltlite/actions/runs/34043486050) | 69/69 jobs |
+| [Independent fork CI](https://github.com/justintanner/doltlite/actions/runs/34043532585) | 69/69 jobs |
 
 On the unpatched base, the new comparison suite fails all ten cases, and the
 focused fast-forward regression fails. Published 0.50.6 also reproduces the
@@ -127,21 +130,25 @@ headers from the patched `build/`, and that build's `libdoltlite.a`, `-lz`, and
 `-lpthread`. It was rebuilt with the engine's `node-gyp` and `node-addon-api`.
 The installed production dependency was not replaced.
 
-Upstream review identified ignored FTS5 virtual/shadow tables and shared
-`sqlite_sequence` state for tracked and ignored auto-incrementing tables as
+Upstream review identified ignored FTS5 virtual/shadow tables and implicit
+`sqlite_sequence` handling for ignored auto-incrementing tables as
 [follow-up scope](https://github.com/dolthub/doltlite/pull/2664#issuecomment-5560423466).
 Those cases are outside this patch's verified behavior. Videobook has no virtual
 tables and explicitly ignores its runtime-only sequence state.
+Shared sequence state for tracked and ignored tables is unverified.
 
 ## Adoption
 
-The [prepared upstream PR description](UPSTREAM_PR.md) accompanies the patch.
-[PR 2664](https://github.com/dolthub/doltlite/pull/2664) publishes the validated
-eight-file change against upstream `master`.
-[Hosted CI](https://github.com/justintanner/doltlite/actions/runs/34043532585)
-is running against the submitted commit, including the oracle registration.
-Upstream review, a published native build, and validation of that exact build
-remain before production adoption. Local native validation passes on macOS
-arm64; the hosted platform and sanitizer results remain pending.
+The [upstream PR description](UPSTREAM_PR.md) accompanies the patch.
+[PR 2664](https://github.com/dolthub/doltlite/pull/2664) merged the validated
+eight-file change into upstream `master`. Both hosted CI runs passed all 69 jobs,
+including the new oracle under normal and address/undefined-behavior sanitizer
+builds. Upstream CI checked the submitted patch against its original base.
+
+The final upstream merge also includes independent native changes made after
+that base; the local probe results above apply to the submitted patch. A
+published native build and validation of that exact build remain before
+production adoption. DoltLite 0.50.6 is still the latest published version at
+this September 6 verification.
 The application remains 0.1.0 and engine patch 5.3.2 is published.
 No 2.0.0 release or major-version bump is part of this work.
