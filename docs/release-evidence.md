@@ -1,7 +1,7 @@
 # MVP release evidence
 
 Audit date: September 6, 2026 (Asia/Bangkok). Functional baseline: engine
-`3f9b37d`, consumer `80ce4f58`. Performance artifacts retain their original
+`07f0515`, consumer `20db91d1`. Performance artifacts retain their original
 revision and hardware qualifications.
 This is an assessment of the requirements in
 `docs/mvp-prd.md`, not a release approval. E4, E5 and the MVP remain incomplete.
@@ -47,11 +47,16 @@ include snapshot loading and are not warm-query latency or cold OS-cache tests.
 | Content hashes are identity, not authorization | Book-scoped engines exist; CAS can retrieve by hash through configured remote storage | Cross-book/API authorization cannot be inferred from hash identity. Complete access-path audit/tests in `ve-ovz.14`. |
 | Remote publication/backup explicit, never triggered by local search | Inspected semantic indexing uses scoped engine reads, not publish/backup calls | Direct inspection is narrower than a complete operation-level invariant. Counter-based verification and missing-local-object behavior in `ve-ovz.14`. |
 
-The remote-content audit also confirmed that `ObjectStore.ensureLocal` accepts
-downloaded bytes without comparing their SHA-256 to the requested object hash.
-A disposable `ContentStore` reproduction returned incorrect bytes successfully;
-remote hydration integrity remains open in `ve-ovz.18`. This is separate from
-the verified model-download resolver and from cross-book authorization.
+Remote hydration integrity is verified in engine `07f0515` and consumer
+`20db91d1` (`ve-ovz.18` / `vb-fuib`). Eight engine HTTP/public-API cases cover
+same-size wrong content, partial failures, concurrent valid/corrupt transfers,
+state preservation, retry, cached reuse, and a forget during download. SHA-256
+verification precedes local publication; a final synchronous tombstone check
+and rename prevent an in-flight download from republishing forgotten bytes.
+The actual application B2 adapter rejects a corrupt HTTP response and supports
+valid retry and cached reads after the fixture server shuts down. Existing local
+objects are not rehashed on every read. This evidence does not establish
+cross-book authorization or the complete offline workflow.
 
 ## Migration, consumer and packaging
 
@@ -64,7 +69,15 @@ publication. Consumer queue tests cover durable status/cancel, archive/switch
 recovery and idempotent reindex scheduling. `ve-ovz.5`, `ve-ovz.6` and `vb-6eu9`
 are complete. This migration evidence does not prove general edit durability.
 
-Engine `3f9b37d` passed 324 tests (12 opt-in tests skipped), typecheck, knip,
+Engine `07f0515` passed 332 default tests (12 opt-in cases skipped), typecheck,
+knip, build and standalone package smoke, including installed-package checksum
+rejection and valid retry. [Node 22/24 CI](https://github.com/justintanner/videobook-engine/actions/runs/34006199273)
+passed the full suite and package checks. Consumer `20db91d1` passed 3,161 tests
+across 369 files, 17 focused content/library checks, lint, test types, dead-code
+checks, both builds and an isolated worktree clean install with native image
+processing, MCP book operations, client delivery and graceful shutdown.
+
+The earlier model-revision baseline `3f9b37d` passed 324 tests (12 opt-in tests skipped), typecheck, knip,
 build and the 22-group API benchmark smoke. Node 22/24 CI passed tests,
 builds and clean-package verification at `5db34ef`, which differs only by a
 bounded cleanup retry in a merge test. The first Node 24 run failed removing
@@ -74,7 +87,7 @@ locally with explicit cached CLIP/CLAP inference enabled. Eleven provider-access
 tests exercise actual HTTP dispatch, denied/changed/revoked consent, identical
 registration during an overlapping query, and compatibility modalities.
 
-Consumer `80ce4f58` passed 3,151 tests across 366 files, lint, test types,
+Earlier consumer `80ce4f58` passed 3,151 tests across 366 files, lint, test types,
 dead-code checks and both builds. Its three real-model queue cases, skipped by
 default, passed in the explicit 37-test focused run. Those cases include an
 existing-image Similar reference and indexed source retrieval with downloads
@@ -89,8 +102,8 @@ Both worktree and exact committed-source (`80ce4f58`) clean installs passed
 native Sharp, MCP create/list, client delivery and graceful shutdown without a
 sibling engine checkout.
 
-Consumer vendors `videobook-engine-5.3.1-3f9b37d.tgz`, SHA-256
-`e7b1db060e1b9c0e8ed8b697b28340e2ed27e534862384e1ddbcc3d0992d47fa`.
+Consumer vendors `videobook-engine-5.3.1-07f0515.tgz`, SHA-256
+`88c3ce8a081befa7712f3e7a31026834b3213a4066e327654fba5748a8a66f91`.
 Consumer commits are local per its repository policy. Local package smoke and
 vendored-consumer verification do not prove installation of a published
 registry package: `ve-yc7` and `ve-orp` retain that release gate. Registry
@@ -104,7 +117,7 @@ The installed package rejects corrupt pinned configuration and runs cached
 CLIP/CLAP inference. The consumer now includes this verified resolver and
 explicit application-owned provider download consent.
 
-All 12 explicit real-model checks pass at this baseline. The custom-revision
+All 12 explicit real-model checks passed at model-revision baseline `3f9b37d`. The custom-revision
 suite serves actual cached CLIP/CLAP/MiniLM files under custom repository IDs,
 verifies fixed revision URLs and integrity receipts, indexes and queries real
 media, reopens offline, rejects reuse under a different revision, and loads
