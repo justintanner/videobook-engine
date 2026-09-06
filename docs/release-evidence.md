@@ -1,7 +1,7 @@
 # MVP release evidence
 
 Audit date: September 6, 2026 (Asia/Bangkok). Functional baseline: engine
-`29185eb`, consumer `bbfc7716`. Performance artifacts retain their original
+`3f9b37d`, consumer `80ce4f58`. Performance artifacts retain their original
 revision and hardware qualifications.
 This is an assessment of the requirements in
 `docs/mvp-prd.md`, not a release approval. E4, E5 and the MVP remain incomplete.
@@ -38,7 +38,7 @@ include snapshot loading and are not warm-query latency or cold OS-cache tests.
 
 | Section 13 requirement | Evidence inspected | Assessment and follow-up |
 | --- | --- | --- |
-| Opt-in/configurable, pinned, checksum-verified and disableable model downloads | Engine defaults local-only; built-in pinned model inventories carry upstream Git/LFS digests. The verified file resolver checks downloads and cached files before returning bytes or ONNX paths, including external weights. Real transfers, corrupt caches and installed-package rejection are tested. | Checksum hardening is integrated in consumer `bbfc7716`; see `docs/model-integrity.md`. Custom compatibility model revisions still need immutable pinning in `ve-ovz.15`; built-in pinning and opt-in policy are already implemented. |
+| Opt-in/configurable, pinned, checksum-verified and disableable model downloads | Engine defaults local-only; built-in pinned model inventories carry upstream Git/LFS digests. The verified file resolver checks downloads and cached files before returning bytes or ONNX paths, including external weights. Real transfers, corrupt caches and installed-package rejection are tested. | Checksum hardening and custom commit pinning are integrated in consumer `80ce4f58`. Remote file requests must match the worker repository/revision, and embedding identities isolate revisions. See `docs/model-integrity.md` and `docs/model-revisions.md`. |
 | Scoped provider inputs, local built-in provider, injected network declaration and application consent | Explicit download/inference declarations and separate application grants guard temporal and compatibility dispatch. Actual HTTP tests cover rejected and authorized providers, revocation, changed declarations, and per-Engine scope. CLIP/CLAP declare local inference. | Engine and consumer consent integration are verified. Identical registrations preserve overlapping searches; replacement/removal revokes later calls. Complete input-scoping verification remains `ve-ovz.14`. |
 | Argument arrays, bounded outputs, timeouts, cancellation and scoped workspaces; no untrusted shell | Shared media-process limits and isolated model pool provide deadlines, process-group cancellation and owned scratch cleanup. Consumer actual queue tests cancel stalled model requests and preserve source bytes/status. | Engine isolation and consumer signal forwarding are implemented and tested. See `docs/media-limits.md` and `docs/model-isolation.md`. |
 | Malformed codec, oversized image, decompression bomb and model OOM fail job without book corruption | Tests reject malformed/oversized/high-expansion inputs; an actual heap-exhausted worker leaves a live engine writable and reopenable and permits fresh-worker retry. Consumer cached-model queue tests verify malformed-image failure and corrected retry. | Process isolation, typed job failures and consumer integration are verified. The worker heap cap is not an OS-wide memory limit. |
@@ -58,14 +58,17 @@ publication. Consumer queue tests cover durable status/cancel, archive/switch
 recovery and idempotent reindex scheduling. `ve-ovz.5`, `ve-ovz.6` and `vb-6eu9`
 are complete. This migration evidence does not prove general edit durability.
 
-Engine `29185eb` passed 308 tests (9 opt-in tests skipped), typecheck, knip,
-build and the 22-group API benchmark smoke. Its Node 22/24 CI passed tests,
-builds and clean-package verification. The consent package was also installed
+Engine `3f9b37d` passed 324 tests (12 opt-in tests skipped), typecheck, knip,
+build and the 22-group API benchmark smoke. Node 22/24 CI passed tests,
+builds and clean-package verification at `5db34ef`, which differs only by a
+bounded cleanup retry in a merge test. The first Node 24 run failed removing
+that temporary database directory after its assertions passed; no runtime
+source or semantic assertion changed in the cleanup correction. The consent package was also installed
 locally with explicit cached CLIP/CLAP inference enabled. Eleven provider-access
 tests exercise actual HTTP dispatch, denied/changed/revoked consent, identical
 registration during an overlapping query, and compatibility modalities.
 
-Consumer `bbfc7716` passed 3,151 tests across 366 files, lint, test types,
+Consumer `80ce4f58` passed 3,151 tests across 366 files, lint, test types,
 dead-code checks and both builds. Its three real-model queue cases, skipped by
 default, passed in the explicit 37-test focused run. Those cases include an
 existing-image Similar reference and indexed source retrieval with downloads
@@ -76,12 +79,12 @@ a corrupt config check in the other branch. Engine `162bdcd` awaits both
 branches and prioritizes integrity failure; repeated public-provider and
 consumer queue tests verify the correction.
 
-Both worktree and exact committed-source (`bbfc7716`) clean installs passed
+Both worktree and exact committed-source (`80ce4f58`) clean installs passed
 native Sharp, MCP create/list, client delivery and graceful shutdown without a
 sibling engine checkout.
 
-Consumer vendors `videobook-engine-5.3.1-29185eb.tgz`, SHA-256
-`e0631686970ef3f3bf401cee303deb7a9ddb717d66ec5a36cd5a788005249168`.
+Consumer vendors `videobook-engine-5.3.1-3f9b37d.tgz`, SHA-256
+`e7b1db060e1b9c0e8ed8b697b28340e2ed27e534862384e1ddbcc3d0992d47fa`.
 Consumer commits are local per its repository policy. Local package smoke and
 vendored-consumer verification do not prove installation of a published
 registry package: `ve-yc7` and `ve-orp` retain that release gate. Registry
@@ -94,6 +97,22 @@ real-model tests pass, including MiniLM external ONNX weights and offline reopen
 The installed package rejects corrupt pinned configuration and runs cached
 CLIP/CLAP inference. The consumer now includes this verified resolver and
 explicit application-owned provider download consent.
+
+All 12 explicit real-model checks pass at this baseline. The custom-revision
+suite serves actual cached CLIP/CLAP/MiniLM files under custom repository IDs,
+verifies fixed revision URLs and integrity receipts, indexes and queries real
+media, reopens offline, rejects reuse under a different revision, and loads
+explicit local model directories. Sixteen default contract tests cover missing
+or moving revisions, configuration snapshots, repository-name collisions,
+worker file scope, separate modality defaults and legacy visual cache safety.
+
+Legacy compatibility custom image models previously shared the built-in CLIP
+vector identity without recording their provenance. The compatibility visual
+space now uses `compat-visual-v2`, requiring a one-time reindex instead of
+reusing ambiguous old vectors. Temporal index identities, including those used
+by the media library, are unchanged. Source files remain intact. This migration
+and the commit requirement for custom remote models are documented in
+`docs/model-revisions.md`; `ve-ovz.15` and consumer `vb-3f45` are complete.
 
 The full quality corpus, reference-device evidence, newly identified NFR and
 security gaps, and published-package verification prevent closing E4/E5/MVP.
