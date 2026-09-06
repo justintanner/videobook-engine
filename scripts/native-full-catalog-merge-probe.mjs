@@ -24,7 +24,7 @@ const value = (result) => {
 function operate(root, fixture) {
   const { DatabaseSync } = require(binding);
   let db = new DatabaseSync(join(root, "data", "videobook.db"));
-  const runtimeRows = () => Object.fromEntries(RUNTIME_TABLES.map((table) => [
+  const runtimeRows = () => Object.fromEntries([...RUNTIME_TABLES, "sqlite_sequence"].map((table) => [
     table,
     db.prepare(`SELECT * FROM ${table}`).all()
       .map((row) => JSON.stringify(row)).sort(),
@@ -33,6 +33,16 @@ function operate(root, fixture) {
     SELECT type,name,tbl_name,sql FROM sqlite_master
     WHERE name NOT LIKE 'sqlite_%' ORDER BY type,name
   `).all();
+  const allocateAndDeleteJob = () => {
+    const { id } = db.prepare(`
+      INSERT INTO runtime_jobs(operation_id,type,state,payload_json,enqueued_at)
+      VALUES(?,'native-sequence-test','queued','{}',100) RETURNING id
+    `).get(randomUUID());
+    db.prepare("DELETE FROM runtime_jobs WHERE id=?").run(id);
+    return id;
+  };
+  const deletedHighId = allocateAndDeleteJob();
+  assert.ok(deletedHighId > fixture.job.id);
   const beforeRuntime = runtimeRows();
   const beforeSchema = schemaRows();
   const initialHead = db.doltHashOf("HEAD");
@@ -100,6 +110,8 @@ function operate(root, fixture) {
     assert.deepEqual(runtimeRows(), beforeRuntime);
     assert.deepEqual(db.prepare("PRAGMA integrity_check").all(), [{ integrity_check: "ok" }]);
     assert.deepEqual(db.prepare("PRAGMA foreign_key_check").all(), []);
+    const nextJobId = allocateAndDeleteJob();
+    assert.ok(nextJobId > deletedHighId, "native merges must not reuse a deleted job ID");
     const nativeModules = Object.keys(require.cache).filter((path) => path.endsWith("/doltlite.node"));
     assert.equal(nativeModules.length, 1);
     return {
@@ -110,11 +122,12 @@ function operate(root, fixture) {
       initialHead,
       acceptedHead,
       conflictHead,
+      runtimeSequence: { deletedHighId, nextJobId },
       nativeModules,
       checks: [
         "fast-forward", "three-way", "all runtime rows", "all schema and indexes",
         "integrity", "foreign keys", "reopen", "runtime absent from HEAD",
-        "conflict rollback",
+        "conflict rollback", "sqlite_sequence preservation", "deleted job ID not reused",
       ],
     };
   } finally {
@@ -153,10 +166,13 @@ if (process.argv[3] === "--operate") {
     assert.equal(value(await engine.files.read(artifact.artifactId, "original.md")).toString(), "base content");
     assert.deepEqual(engine.artifacts.list().map((row) => row.label).sort(), ["accepted", "from a", "from b"]);
     assert.equal(engine.jobs.queue.get(job.id)?.state, job.state);
+    const reopenedJob = engine.jobs.queue.enqueue({ type: "native-sequence-reopen", payload: {} }).job;
+    assert.ok(reopenedJob.id > report.runtimeSequence.nextJobId);
+    report.runtimeSequence.reopenedJobId = reopenedJob.id;
     assert.deepEqual(Object.keys(engine.catalogIntegrity().tableRowCounts).sort(), [
       ...SEMANTIC_TABLES, ...RUNTIME_TABLES, "dolt_ignore",
     ].sort());
-    report.checks.push("published binding reopen", "CAS file contents", "queued job");
+    report.checks.push("published binding reopen", "published binding job ID allocation", "CAS file contents", "queued job");
     report.passed = true;
     if (keep) report.retainedRoot = root;
     await writeFile(join(root, "report.json"), JSON.stringify(report, null, 2));

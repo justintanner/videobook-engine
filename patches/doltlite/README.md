@@ -104,6 +104,12 @@ schema and indexes, integrity, foreign keys, reopen, exclusion of runtime tables
 from HEAD, conflict rollback, file contents in the object store, and a queued
 job. The 0.50.6 → patched native → 0.50.6 reopen also passes.
 
+The probe includes `sqlite_sequence` in each local-state comparison. It deletes
+a newly allocated job before merging and verifies that later allocations,
+including after reopening with the published binding, advance past deleted IDs.
+Videobook explicitly ignores `sqlite_sequence` and uses auto-incrementing keys
+only in runtime tables.
+
 ```sh
 npm run build
 node scripts/native-full-catalog-merge-probe.mjs /absolute/path/to/patched-node-binding --keep
@@ -120,6 +126,12 @@ The isolated binding used the unchanged `src/*.cpp` and `index.js` from
 headers from the patched `build/`, and that build's `libdoltlite.a`, `-lz`, and
 `-lpthread`. It was rebuilt with the engine's `node-gyp` and `node-addon-api`.
 The installed production dependency was not replaced.
+
+Upstream review identified ignored FTS5 virtual/shadow tables and shared
+`sqlite_sequence` state for tracked and ignored auto-incrementing tables as
+[follow-up scope](https://github.com/dolthub/doltlite/pull/2664#issuecomment-5560423466).
+Those cases are outside this patch's verified behavior. Videobook has no virtual
+tables and explicitly ignores its runtime-only sequence state.
 
 ## Adoption
 
