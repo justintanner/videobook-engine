@@ -217,3 +217,22 @@ The store now skips size-triggered GC only when its disposable compaction
 record matches the catalog file. Writes invalidate the record, and missing or
 damaged metadata falls back to GC. This resolves the repeated healthy-catalog
 compaction measured above; frozen-corpus quality remains a separate gate.
+
+## Current-source acceptance runs
+
+Two runs on September 6, 2026 measure the working tree on top of engine
+`8b235f2` (the NFR measurement changes touch only benchmarks, tests and docs)
+on the same M1 Pro/16 GB device with Node 24.10.0. The
+[fresh build](../benchmarks/results/temporal-100k-current-source.json) created
+a new 1,000-artifact/100,000-moment fixture: indexing plus incremental
+preparation took 332.8 seconds across 4,000 batches of at most 30 source
+seconds, every resume cursor passed, first searchable coverage appeared after
+45 ms, and open plus summary in the same process took 206 ms. Fifty warm
+queries per mode measured p50/p95 of 62/67 ms (image), 117/159 ms (video) and
+333/391 ms (hybrid); peak RSS was 2.43 GiB. The
+[fresh-process reopen](../benchmarks/results/temporal-100k-current-source-reopen.json)
+of that retained fixture took 960 ms for open plus summary, with warm p50/p95
+of 58/62 ms (image), 115/148 ms (video) and 322/359 ms (hybrid) and a 2.32 GiB
+peak. Both runs passed every harness gate. The first image query after reopen
+took 3.1 seconds including verified snapshot loading; the M2 Pro reference
+device measurement remains outstanding.
