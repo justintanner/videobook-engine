@@ -9,7 +9,15 @@ This is an assessment of the requirements in
 Beads contains the work assignments and current status; this report records
 the evidence and its limits at these revisions.
 
-## Current patch candidate
+## Published patch
+
+[`videobook-engine@5.3.2`](https://www.npmjs.com/package/videobook-engine/v/5.3.2)
+was published as npm `latest` on September 6, 2026 from
+`7c97fdd62bba7753378b830308ec788ef86fce9e`, tagged `v5.3.2`.
+[Node 22/24 CI](https://github.com/justintanner/videobook-engine/actions/runs/34040099977)
+passed for that exact source. The downloaded registry archive matches the
+published build, and a clean registry install passes the README, reopen,
+media, cached CLIP/CLAP inference, single-Sharp and production audit checks.
 
 Engine `c4f1d89` adopts DoltLite 0.50.6. Both default and all-table staging
 probes now pass on the real 12-table fixture, and URL bootstrap preserves the
@@ -58,10 +66,10 @@ write/dequeue/heartbeat iterations on shared CI runners. Its 200 ms reopen and
 passes locally; the timeout change addresses the 84-second fixture that
 exceeded the previous 60-second watchdog on Node 22.
 
-The candidate is a patch within the existing 5.x series. No 2.0.0 release or
-major bump is planned. Registry publication and frozen-corpus quality remain
-outstanding. The M2 Pro reference-device run is deferred because the user
-confirmed that the hardware is unavailable.
+The release is a patch within the existing 5.x series. No 2.0.0 release or
+major bump is planned. Frozen-corpus quality remains outstanding. The M2 Pro
+reference-device run is deferred because the user confirmed that the hardware
+is unavailable.
 
 ## Performance and quality
 
@@ -252,18 +260,23 @@ Consumer `b4e369b5` vendors `videobook-engine-5.3.2-c4f1d89.tgz`, SHA-256
 `79f42f492fa569d13993f433da44a3b1ee11a4536fb54246d825d61978284c54`.
 Its provenance file records the exact engine revision; application and engine
 resolve one DoltLite 0.50.6 and one Sharp 0.35.4. The application remains 0.1.0.
-Local package smoke and
-vendored-consumer verification do not prove installation of a published
-registry package: `ve-yc7` and `ve-orp` retain that release gate. Registry
-authentication was rechecked on September 6, 2026 using the environment's
-`NPM_TOKEN` explicitly through an isolated temporary npm configuration.
-Both npm authentication and a direct registry authentication request returned
-401. Publishing the packed 5.3.2 candidate from `4b85f01` then failed with
-`E404` on the registry PUT, reporting that the package was unavailable or the
-token lacked access. No package version or release tag was created. The
-temporary authentication configuration was removed. The obsolete 0.1.0 and
-2.0.0 publication tickets are superseded by
-`ve-yc7`; they are not additional release targets.
+The subsequent registry release is built from `7c97fdd`, which retains the
+same functional baseline and includes updated evidence. The published archive
+has 290 files and is 2,522,956 bytes. Its SHA-1 is
+`711e5dc6d92fb247d8dd6425f1de04b18415c70b` and npm integrity is
+`sha512-iJ1dtXWL3+u6iru5rpcVEQpeFRBiROCW1JH8tZj/Qrwt0VDMlAqe6i+WCBxyPKExsu/VJus5rY7IOuSJ/Pwvtg==`.
+Both registry metadata and the downloaded tarball match these digests.
+
+`VIDEOBOOK_RUN_MODEL_E2E=1 node scripts/package-smoke.mjs videobook-engine@5.3.2`
+passes in a clean macOS project with publishing credentials excluded. It runs
+the installed README quick start, catalog reopen, provider consent and input
+scoping, remote checksum rejection/retry, offline model policy, native media
+decoding, and cached CLIP/CLAP image/audio/text inference with downloads
+disabled. The installation contains one Sharp resolution, emits no competing
+native image-library warnings, and has zero production audit findings.
+This closes the published-package gates in `ve-yc7` and `ve-orp`. The obsolete
+0.1.0 and 2.0.0 publication tickets are superseded by `ve-yc7`; they are not
+additional release targets.
 
 Subsequent checksum hardening adds verified file resolution for all built-in
 model paths, complete upstream digest inventories for three pinned snapshots,
@@ -295,6 +308,7 @@ cadence for VE-NFR-003 in this document, `docs/edit-performance.md` and
 `docs/temporal-search-performance.md`. Every measured gate passes on the
 available M1 Pro; the M2 Pro reference device named by the PRD has not been
 measured and M1 Pro results are recorded as M1 Pro results only. The full
-quality corpus (`ve-s84`) and published-package verification (`ve-yc7`, `ve-orp`)
-remain outstanding. Exact reference-device acceptance (`ve-ovz.22`) is deferred
-because the hardware is unavailable; full E4/E5/MVP acceptance is not claimed.
+quality corpus (`ve-s84`) remains outstanding. Published-package verification
+(`ve-yc7`, `ve-orp`) passes for 5.3.2. Exact reference-device acceptance
+(`ve-ovz.22`) is deferred because the hardware is unavailable; full E4/E5/MVP
+acceptance is not claimed.
