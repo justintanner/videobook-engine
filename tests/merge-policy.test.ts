@@ -24,9 +24,7 @@ import { EngineFault } from "../src/store.js";
 // use stripped-down table definitions.
 //
 // Native merge is validated against the complete definitions of each
-// scenario's semantic tables. Full-catalog checkout additionally verifies
-// ignored runtime rows and indexes. Native merge with ignored tables remains
-// reproducible in scripts/dolt-ignored-merge-probe.cjs (ve-wsu).
+// scenario's semantic tables and a full catalog with ignored runtime data.
 
 const roots: string[] = [];
 
@@ -415,7 +413,7 @@ describe("merge policy for derived singleton flags", () => {
 });
 
 describe("engine-level merge policy behavior", () => {
-  it("repeatedly checks out a complete catalog without losing runtime rows or indexes", async () => {
+  it("merges a complete catalog without losing runtime rows or indexes", async () => {
     const { engine, dataDir, root } = await setupEngine();
     await engine.ready;
     const artifact = value(await engine.artifacts.create({ kind: "script", label: "base" }));
@@ -441,6 +439,17 @@ describe("engine-level merge policy behavior", () => {
       expect(db.prepare("SELECT label FROM artifacts ORDER BY label").all()).toEqual([
         { label: "base" },
       ]);
+      mergeWithPolicy(db, "full-a");
+      expect(db.doltHashOf("HEAD")).toBe(db.doltHashOf("full-a"));
+      expect(runtimeRows()).toEqual(beforeRuntime);
+      mergeWithPolicy(db, "full-b");
+      expect(db.doltHashOf("HEAD")).not.toBe(db.doltHashOf("full-a"));
+      expect(db.doltHashOf("HEAD")).not.toBe(db.doltHashOf("full-b"));
+      expect(runtimeRows()).toEqual(beforeRuntime);
+      expect(db.prepare("SELECT label FROM artifacts ORDER BY label").all()).toEqual([
+        { label: "base" }, { label: "from a" }, { label: "from b" },
+      ]);
+      expect(db.doltStatus()).toEqual([]);
       expect(db.prepare("SELECT object_hash FROM artifact_files WHERE artifact_id=? AND path=?").get(artifact.artifactId, "original.md")).toBeDefined();
       expect(db.prepare("PRAGMA integrity_check").all()).toEqual([{ integrity_check: "ok" }]);
       verifyConstraintHealth(db);
@@ -451,7 +460,7 @@ describe("engine-level merge policy behavior", () => {
     const reopened = createEngine({ dataDir, workspaceDir: path.join(root, "workspace") });
     try {
       await reopened.ready;
-      expect(reopened.artifacts.list().map((row) => row.label)).toEqual(["base"]);
+      expect(reopened.artifacts.list().map((row) => row.label).sort()).toEqual(["base", "from a", "from b"]);
       expect(value(await reopened.files.read(artifact.artifactId, "original.md")).toString()).toBe("base content");
       expect(Object.keys(reopened.catalogIntegrity().tableRowCounts).sort()).toEqual(expectedTables);
       expect(reopened.jobs.queue.get(job.id)?.state).toBe(job.state);

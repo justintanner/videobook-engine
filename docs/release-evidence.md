@@ -9,7 +9,23 @@ This is an assessment of the requirements in
 Beads contains the work assignments and current status; this report records
 the evidence and its limits at these revisions.
 
-## Published patch
+## Temporary fork adoption, September 7
+
+Engine 5.3.3 pins the tested native fork `b3981dc9ed6b2e39c247b4d598b2691e19dd0b25`
+with the published 0.50.6 Node wrapper. The fork package is
+`0.50.6-videobook.1`, installed from a versioned GitHub release asset with
+lockfile integrity. The complete native-source CI passed 69 jobs; package CI
+builds and installs all five existing addon targets and tests the bundled
+source fallback. The engine package smoke checks the exact installed fork
+against the full catalog, including ignored runtime tables and job ID state.
+See [dependency provenance and verification](doltlite-staging.md).
+
+The older 5.3.2 results below describe that release's unpatched dependency.
+Temporary fork adoption supersedes its native-merge blocker. The frozen judged
+quality corpus remains a separate missing input; prior performance evidence
+keeps its original source and hardware qualifications.
+
+## Published 5.3.2 patch
 
 [`videobook-engine@5.3.2`](https://www.npmjs.com/package/videobook-engine/v/5.3.2)
 was published as npm `latest` on September 6, 2026 from
@@ -26,11 +42,11 @@ consumer's 0.11.51 reopen with identical committed head, history, table counts,
 semantic projections, contents, and runtime settings; restore and new writes
 remain durable after another reopen.
 
-Native merge still rejects clean catalogs containing ignored runtime tables.
+In that 5.3.2 build, native merge rejects clean catalogs containing ignored runtime tables.
 `scripts/dolt-ignored-merge-probe.cjs` reproduces this even without secondary
 indexes; its semantic-only control succeeds. Production retains the projection
-merge and its existing policies. `ve-wsu` remains blocked on the native merge
-limitation; the staging and URL-bootstrap fixes do not close it.
+merge and its existing policies. The staging and URL-bootstrap fixes alone
+did not resolve the native-merge limitation; the 5.3.3 fork adoption addresses it.
 
 The engine passes 352 default tests, typecheck, dead-code checks, build, and
 clean packed README/reopen/media checks, including cached CLIP/CLAP image,

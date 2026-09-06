@@ -8,6 +8,8 @@ import { promisify } from "node:util";
 
 const run = promisify(execFile);
 const repository = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+const nativeDependency = JSON.parse(await readFile(join(repository, "package.json"), "utf8"))
+  .dependencies["@dolthub/doltlite"];
 const root = await mkdtemp(join(tmpdir(), "videobook-package-smoke-"));
 const npm = process.platform === "win32" ? "npm.cmd" : "npm";
 const installEnv = { ...process.env, npm_config_userconfig: join(root, "npmrc") };
@@ -26,7 +28,7 @@ try {
   await writeFile(join(root, "package.json"), JSON.stringify({
     name: "videobook-package-smoke", private: true, type: "module",
     allowScripts: {
-      "@dolthub/doltlite": true,
+      [nativeDependency.startsWith("https://") ? nativeDependency : "@dolthub/doltlite"]: true,
       "onnxruntime-node": true,
       "protobufjs": true,
       "sharp": true,
@@ -186,6 +188,21 @@ console.log("Packaged README quick start and catalog reopen passed");
     /Class .+ is implemented in both|GNotificationCenterDelegate|duplicate.*libvips/i,
     "Media smoke must not load competing native image libraries");
   process.stderr.write(result.stderr);
+  const nativeProbe = await run(process.execPath, [
+    join(repository, "scripts/native-full-catalog-merge-probe.mjs"),
+    join(root, "node_modules/@dolthub/doltlite"),
+  ], {
+    cwd: root,
+    env: {
+      ...process.env,
+      VIDEOBOOK_NATIVE_PROBE_ENGINE: join(root, "node_modules/videobook-engine/dist/index.js"),
+    },
+    maxBuffer: 16 * 1024 * 1024,
+  });
+  const nativeReport = JSON.parse(nativeProbe.stdout);
+  assert.equal(nativeReport.passed, true);
+  assert.equal(nativeReport.nativeVersion, "b3981dc9ed");
+  process.stdout.write("Installed native fork: full catalog merges, runtime rows, indexes, and job IDs passed\n");
   const resolutions = await run(npm, ["ls", "sharp", "--all", "--parseable"], {
     cwd: root, env: installEnv,
   });

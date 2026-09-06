@@ -280,10 +280,9 @@ function commitReconcile(
  * deterministic singleton-flag reconcile, and a post-merge constraint
  * health check.
  *
- * Native merge still refuses catalogs with ignored runtime tables in
- * DoltLite 0.50.6 (ve-wsu). The dedicated merge-back flow in src/fork.ts
- * keeps its projection merge; this native policy is validated on complete
- * semantic table definitions without ignored runtime tables.
+ * The dedicated merge-back flow in src/fork.ts applies its projection
+ * merge policies separately. The installed native dependency is also
+ * checked against the complete catalog, including ignored runtime tables.
  */
 export function mergeWithPolicy(
   db: DatabaseSync,

@@ -3,8 +3,8 @@
 The [source patch](ignored-runtime-merge.patch) fixes a native DoltLite merge
 failure when an otherwise clean working catalog contains ignored local tables.
 It also keeps their rows and indexes local through merge, abort, reopen, and
-allocation failures. Production still uses published DoltLite 0.50.6 and the
-engine's projection merge. The patch was merged upstream in
+allocation failures. The engine uses the temporary `0.50.6-videobook.1` fork
+package and keeps its application merge-back policies. The patch was merged upstream in
 [DoltLite PR 2664](https://github.com/dolthub/doltlite/pull/2664).
 
 ## Provenance
@@ -119,7 +119,7 @@ node scripts/native-full-catalog-merge-probe.mjs /absolute/path/to/patched-node-
 ```
 
 Omit `--keep` to remove the synthetic catalog after the run. The default binding
-is `@dolthub/doltlite`; published 0.50.6 fails the clean-status assertion because
+is the installed `@dolthub/doltlite` fork; unpatched published 0.50.6 fails the clean-status assertion because
 ignored indexed tables appear modified. The smaller
 [`dolt-ignored-merge-probe.cjs`](../../scripts/dolt-ignored-merge-probe.cjs)
 isolates the merge refusal itself.
@@ -128,14 +128,20 @@ The isolated binding used the unchanged `src/*.cpp` and `index.js` from
 `@dolthub/doltlite@0.50.6`, its `binding.gyp` without amalgamation C sources,
 headers from the patched `build/`, and that build's `libdoltlite.a`, `-lz`, and
 `-lpthread`. It was rebuilt with the engine's `node-gyp` and `node-addon-api`.
-The installed production dependency was not replaced.
+That initial validation did not replace the production dependency. The current
+package smoke repeats the catalog checks against a clean install of the shipped
+fork artifact, including creation and reopen with that same installed package.
 
 Upstream review identified ignored FTS5 virtual/shadow tables and implicit
 `sqlite_sequence` handling for ignored auto-incrementing tables as
 [follow-up scope](https://github.com/dolthub/doltlite/pull/2664#issuecomment-5560423466).
 Those cases are outside this patch's verified behavior. Videobook has no virtual
 tables and explicitly ignores its runtime-only sequence state.
-Shared sequence state for tracked and ignored tables is unverified.
+Shared sequence state for tracked and ignored tables is unverified. Native hard
+reset also drops explicitly ignored sequence state (`ve-nia`); engine production
+code does not call that operation. The unchanged Node wrapper reports
+`fast_forward=0` even for an actual fast-forward (`ve-xkv`); merge verification
+checks HEAD hashes and stored data directly.
 
 ## Adoption
 
@@ -146,9 +152,17 @@ including the new oracle under normal and address/undefined-behavior sanitizer
 builds. Upstream CI checked the submitted patch against its original base.
 
 The final upstream merge also includes independent native changes made after
-that base; the local probe results above apply to the submitted patch. A
-published native build and validation of that exact build remain before
-production adoption. DoltLite 0.50.6 is still the latest published version at
-this September 6 verification.
-The application remains 0.1.0 and engine patch 5.3.2 is published.
-No 2.0.0 release or major-version bump is part of this work.
+that base. An isolated build of the merged `9a3725f` revision passed the focused
+regression, new oracle, and full engine probe. The temporary package instead
+pins the submitted `b3981dc` source that passed both complete hosted CI runs.
+
+The user authorized temporary fork adoption while upstream npm remains on
+0.50.6. [Fork packaging](https://github.com/justintanner/doltlite/tree/videobook-node-package/packaging/videobook-node)
+combines that native source with the 0.50.6 Node wrapper, provides all five
+existing addon targets, and bundles matching fallback source. The engine pins
+the versioned release asset and its lockfile integrity. Package installation
+must pass the complete catalog probe against the installed native module.
+See [dependency verification](../../docs/doltlite-staging.md) for replacement
+instructions when an upstream package becomes available.
+
+The application remains 0.1.0; this adoption uses an engine patch release.

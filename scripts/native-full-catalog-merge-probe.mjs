@@ -5,10 +5,13 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { randomUUID } from "node:crypto";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { promisify } from "node:util";
 
-import { RUNTIME_TABLES, SEMANTIC_TABLES } from "../dist/schema.js";
+const engineUrl = process.env.VIDEOBOOK_NATIVE_PROBE_ENGINE
+  ? pathToFileURL(resolve(process.env.VIDEOBOOK_NATIVE_PROBE_ENGINE))
+  : new URL("../dist/index.js", import.meta.url);
+const { RUNTIME_TABLES, SEMANTIC_TABLES } = await import(new URL("./schema.js", engineUrl));
 
 const require = createRequire(import.meta.url);
 const requestedBinding = process.argv[2]?.startsWith("--") ? undefined : process.argv[2];
@@ -140,7 +143,7 @@ if (process.argv[3] === "--operate") {
   const fixture = JSON.parse(await readFile(join(root, "fixture.json"), "utf8"));
   console.log(JSON.stringify(operate(root, fixture)));
 } else {
-  const { createEngine } = await import("../dist/index.js");
+  const { createEngine } = await import(engineUrl);
   const root = await mkdtemp(join(tmpdir(), "ve-native-full-catalog-"));
   const dataDir = join(root, "data");
   const workspaceDir = join(root, "workspace");

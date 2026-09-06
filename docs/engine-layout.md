@@ -272,9 +272,9 @@ are the constraint-verification primitives.
   (`resolveObjectsRow` in `src/fork.ts`).
 
 DoltLite 0.50.6 fixes incremental staging and full-catalog URL cloning.
-Native merge still refuses a catalog containing ignored runtime tables,
-even with an empty semantic diff and, without a secondary runtime index,
-an empty `dolt_status`. `ve-wsu` retains this gate; see the reproductions in
+The pinned `0.50.6-videobook.1` fork also fixes native merges with ignored
+runtime tables. Clean-package verification exercises the complete catalog,
+indexes, runtime rows, and job ID state; see
 [docs/doltlite-staging.md](doltlite-staging.md). The dedicated merge-back flow
 keeps its projection merge and application conflict policies.
 
