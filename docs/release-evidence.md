@@ -1,7 +1,7 @@
 # MVP release evidence
 
 Audit date: September 6, 2026 (Asia/Bangkok). Functional baseline: engine
-`e328f5e` (runtime `bf952c5`), consumer `96892e26`. Performance artifacts retain their original
+`dffaf21`, consumer `43d31b32`. Performance artifacts retain their original
 revision and hardware qualifications.
 This is an assessment of the requirements in
 `docs/mvp-prd.md`, not a release approval. E4, E5 and the MVP remain incomplete.
@@ -42,9 +42,9 @@ include snapshot loading and are not warm-query latency or cold OS-cache tests.
 | Scoped provider inputs, local built-in provider, injected network declaration and application consent | Explicit download/inference declarations and separate application grants guard temporal and compatibility dispatch. Actual HTTP tests cover rejected and authorized providers, revocation, changed declarations, and per-Engine scope. CLIP/CLAP declare local inference. | Engine and consumer consent integration are verified. Identical registrations preserve overlapping searches; replacement/removal revokes later calls. Complete input-scoping verification remains `ve-ovz.14`. |
 | Argument arrays, bounded outputs, timeouts, cancellation and scoped workspaces; no untrusted shell | Shared media-process limits and isolated model pool provide deadlines, process-group cancellation and owned scratch cleanup. Consumer actual queue tests cancel stalled model requests and preserve source bytes/status. | Engine isolation and consumer signal forwarding are implemented and tested. See `docs/media-limits.md` and `docs/model-isolation.md`. |
 | Malformed codec, oversized image, decompression bomb and model OOM fail job without book corruption | Tests reject malformed/oversized/high-expansion inputs; an actual heap-exhausted worker leaves a live engine writable and reopenable and permits fresh-worker retry. Consumer cached-model queue tests verify malformed-image failure and corrected retry. | Process isolation, typed job failures and consumer integration are verified. The worker heap cap is not an OS-wide memory limit. |
-| Excerpts/explanations treated as user content | `MomentSearch.tsx` interpolates excerpt text and explanation title through React | Local inspection supports escaping on this surface; cross-surface hostile-content tests remain in `ve-ovz.14`. |
+| Excerpts/explanations treated as user content | `MomentSearch.tsx` interpolates excerpt text and explanation title through React. Separate actual browser media tests verify SVG/HTML scripts, forms, and external resources are blocked while static images and video playback work. | Media response hardening is complete in consumer `43d31b32` (`vb-sby1`). Cross-surface hostile search text tests remain `vb-3esp` / `ve-ovz.14`; media sandboxing does not prove escaping of excerpts. |
 | Logs contain IDs/hashes/sizes/phases/codes rather than secrets/full content | Consumer `7cd32e85` routes owned runtime console and persistent diagnostics through fixed events and validated UUIDs, queue IDs, counts, enums and error codes. Tool/job names require trusted registration. Tests cover private returned/thrown errors, real queue/provider failures, book reopening, explicit chat history and a real subprocess with multi-megabyte private output. | `vb-wtu9` is complete: 3,160 default tests, 19 model/queue tests including all 3 real cached-model cases, media rollback E2E, lint/types/knip/builds and isolated clean install pass. Full caller/job error details and explicit chat content remain available; old diagnostic files are not rewritten. Broader offline/privacy invariants remain `ve-ovz.14`. |
-| Content hashes are identity, not authorization | Book-scoped engines exist; CAS can retrieve by hash through configured remote storage | Cross-book/API authorization cannot be inferred from hash identity. Complete access-path audit/tests in `ve-ovz.14`. |
+| Content hashes are identity, not authorization | Engine provider tests reject foreign artifact UUIDs and raw hash/path references. Actual HTTP file, manifest, and range tests reject mismatched owning books and raw hashes. All HTTP routes reject foreign Origin/Host before parsing or accessing content. | Consumer `9d0179ad` (`vb-0ujh`) enforces loopback Host/Origin policy and binds to `127.0.0.1`. It remains a local single-user service: native clients and accepted local origins can access all books. Hashes and UUIDs are not credentials; this is not a remote or multi-user authentication design. |
 | Remote publication/backup explicit, never triggered by local search | Actual application B2 HTTP counters stay empty through cached indexing, reference preparation, search, edits and history. Explicit backup then performs HEAD/PUT/verification. A configured local catalog backup target stays absent through indexing/search/history and is written only by explicit backup. | The tested object-store and catalog publication boundaries are verified. This is not an authorization audit of every transport or remote service. Cross-book/API access and remaining privacy checks stay in `ve-ovz.14`. |
 
 Remote hydration integrity is verified in engine `07f0515` and consumer
@@ -112,12 +112,33 @@ types, client/server builds, dead-code checks and isolated clean install pass.
 `vb-g3ai` is complete; the application commit remains local under its repository
 push policy.
 
-The remaining HTTP audit found an independently reproduced application gap:
-modern MCP discovery and `list_books` accepted an untrusted Origin and Host and
-returned a private fixture book. Express uses unrestricted CORS and no explicit
-listen host. `vb-0ujh` tracks request-origin/host policy and HTTP access-path
-checks. These findings keep `ve-ovz.14` open; Engine artifact scoping and
-provider consent do not establish authorization at the application's transport.
+The HTTP audit reproduced private fixture disclosure through modern MCP with
+an untrusted Origin and Host. Consumer `9d0179ad` fixes this at both the direct
+MCP handler and Express entry, before CORS, body parsing, static files, or API
+routes. The server binds to `127.0.0.1`, accepts loopback browser origins and
+native clients, and permits the bundled extension's exact stable origin.
+Twenty-three direct-handler cases and actual HTTP/Chromium tests cover foreign,
+opaque and malformed origins; rebinding hosts; all routes including uploads and
+archives; permitted preflight; extension-worker MCP discovery/tool calls; and
+owning-book/hash/range denials. The public extension key pins a development ID,
+not a credential. Consumer README documents the trusted local-client boundary.
+
+A subsequent real browser fixture exposed another path: uploaded SVG scripts
+ran in the media server's origin and read private book names through MCP.
+Consumer `43d31b32` applies CSP sandbox and `nosniff` to media and archive
+responses. The identical private-query fixture no longer executes. Browser
+regressions verify blocked SVG/HTML scripts, forms, and external resource
+requests, preserved inline SVG styling and image rendering, and actual H.264
+playback. The final combined run also verifies the Library's real cached-model
+repair and Similar search flow. All 3,199 default tests across 372 files,
+seven explicit HTTP/Chromium/model E2E cases, lint, test types, dead-code checks,
+client/server builds, and isolated clean installation pass. The consumer
+commits remain local under its repository policy.
+
+`vb-0ujh` and `vb-sby1` are complete. Cross-surface hostile search text tests
+remain in `vb-3esp`; application-specific provider range/input evidence and the
+remaining privacy audit still keep `ve-ovz.14` open. These local service checks
+do not establish authentication for remote or multi-user deployments.
 
 ## Migration, consumer and packaging
 
