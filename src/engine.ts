@@ -108,6 +108,11 @@ export class Engine {
     this.ready = this.reconcileTerminalJobs();
   }
 
+  /** Prevent implicit remote object downloads in this book's async operation. */
+  withLocalMedia<T>(operation: () => T): T {
+    return this.context.withLocalMedia(operation);
+  }
+
   get head(): string {
     return this.context.store.head;
   }

@@ -42,6 +42,7 @@ export class ObjectStore {
     private readonly remote?: ContentStore,
     prefix = "superlzy-media/videobook/sha256",
     private readonly isForgotten?: (hash: string) => boolean,
+    private readonly allowDownload: () => boolean = () => true,
   ) {
     this.root = root;
     this.prefix = prefix.replace(/^\/+|\/+$/g, "");
@@ -205,6 +206,13 @@ export class ObjectStore {
       return;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+    if (!this.allowDownload()) {
+      throw new EngineFault({
+        code: "MEDIA_MISSING",
+        message: `Media is not available locally: ${hash}. Retrieve it explicitly before retrying.`,
+        details: { objectHash: hash, reason: "local_media_missing" },
+      });
     }
     if (!this.remote) throw new Error(`Object unavailable: ${hash}`);
     await mkdir(path.dirname(destination), { recursive: true });

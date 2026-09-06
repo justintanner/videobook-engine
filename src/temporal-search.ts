@@ -246,17 +246,17 @@ export function createTemporalSearchApi(context: EngineContext) {
     coverage: (artifact?: string): Result<SearchCoverage, EngineError> =>
       syncResultOf(() => searchCoverage(context, artifact)),
     prepare: (options: PrepareTemporalIndexOptions = {}): Promise<Result<TemporalIndexPreparation, EngineError>> =>
-      resultOf(() => prepareTemporalIndexes(context, options)),
+      context.withLocalMedia(() => resultOf(() => prepareTemporalIndexes(context, options))),
     query: (
       query: SearchQuery,
     ): Promise<Result<SearchPage, EngineError>> =>
-      queryTemporalIndex(context, providers, query),
+      context.withLocalMedia(() => queryTemporalIndex(context, providers, query)),
     queryPrepared: (
       query: SearchQuery,
       reference: PreparedSearchReference,
       options: PreparedSearchOptions = {},
     ): Promise<Result<SearchPage, EngineError>> =>
-      queryTemporalIndex(context, providers, query, { reference, options }),
+      context.withLocalMedia(() => queryTemporalIndex(context, providers, query, { reference, options })),
     invalidate: (
       artifact: string,
       objectHash?: string,

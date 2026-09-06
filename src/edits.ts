@@ -66,11 +66,11 @@ export function createEditsApi(context: EngineContext) {
       intent: EditIntent,
       previewHash: string,
     ): Promise<Result<EditCommit, EngineError>> =>
-      commitEdit(context, intent, previewHash),
+      context.withLocalMedia(() => commitEdit(context, intent, previewHash)),
     restore: (
       request: EditRestoreRequest,
     ): Promise<Result<EditRestoreCommit, EngineError>> =>
-      restoreEdit(context, request),
+      context.withLocalMedia(() => restoreEdit(context, request)),
     get: (actionId: string): Result<EditBatchAudit, EngineError> =>
       syncResultOf(() => requiredEditBatch(context, actionId)),
   };

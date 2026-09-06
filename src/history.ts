@@ -66,9 +66,9 @@ export function createHistoryApi(context: EngineContext) {
       artifactId: string,
       revision: string,
     ): Promise<Result<Revision, EngineError>> =>
-      restoreArtifact(context, artifactId, revision),
+      context.withLocalMedia(() => restoreArtifact(context, artifactId, revision)),
     restore: (revision: string): Promise<Result<Revision, EngineError>> =>
-      restoreBook(context, revision),
+      context.withLocalMedia(() => restoreBook(context, revision)),
     logAction: (
       action: string,
       payload: string | Record<string, unknown>,
@@ -321,7 +321,7 @@ async function restoreArtifact(
       recursive: true,
       force: true,
     });
-    await materializeIgnoringForgotten(context, artifactId);
+    await materializeAvailableFiles(context, artifactId);
     return ok(revisionForHash(context, mutation.revision), mutation.revision);
   });
 }
@@ -416,19 +416,18 @@ async function restoreBook(
       });
     }
     for (const artifact of targetArtifacts) {
-      await materializeIgnoringForgotten(context, artifact.artifact_id);
+      await materializeAvailableFiles(context, artifact.artifact_id);
     }
     return ok(revisionForHash(context, mutation.revision), mutation.revision);
   });
 }
 
 /**
- * Workspace materialization after a restore tolerates forgotten objects:
- * the restore commit is already durable, so a file whose bytes were
- * deliberately deleted must not fail the whole restore — reads of that file
- * surface OBJECT_UNAVAILABLE instead.
+ * The restore commit is already durable. Missing local/forgotten bytes defer
+ * workspace hydration rather than causing a network read or a false failure
+ * after the requested metadata change has committed.
  */
-async function materializeIgnoringForgotten(
+async function materializeAvailableFiles(
   context: EngineContext,
   artifactId: string,
 ): Promise<void> {
@@ -436,6 +435,7 @@ async function materializeIgnoringForgotten(
     await materializeArtifact(context, artifactId);
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
+    if (error instanceof EngineFault && error.error.code === "MEDIA_MISSING") return;
     if (!/object unavailable/i.test(message)) throw error;
   }
 }

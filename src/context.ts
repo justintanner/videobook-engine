@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { existsSync, mkdirSync } from "node:fs";
 import * as path from "node:path";
 
@@ -40,6 +41,7 @@ export class EngineContext {
   readonly store: DoltStore;
   readonly objects: ObjectStore;
   readonly config: EngineConfig;
+  private readonly localMediaScope = new AsyncLocalStorage<boolean>();
 
   constructor(config: EngineConfig) {
     const storage =
@@ -96,7 +98,12 @@ export class EngineContext {
       config.remoteObjects,
       config.objectPrefix,
       (hash) => this.isForgottenObject(hash),
+      () => this.localMediaScope.getStore() !== true,
     );
+  }
+
+  withLocalMedia<T>(operation: () => T): T {
+    return this.localMediaScope.run(true, operation);
   }
 
   /**

@@ -241,6 +241,27 @@ Local model loaders, including temporal CLIP/CLAP providers, use cached files by
 
 Model files are checksum-verified before inference, including cached files and external ONNX weights. Corrupted files fail with `MODEL_UNAVAILABLE`. Built-in caches can be verified offline; custom remote-model caches without integrity metadata require explicit preparation. See [model integrity](docs/model-integrity.md) for verification, cache repair, and supported upstream metadata.
 
+Search, similarity indexing, edits, and history restoration do not implicitly
+download missing media from a configured object store. Application workflows
+that read media through several Engine APIs can apply the same per-book policy:
+
+```ts
+const result = await engine.withLocalMedia(async () => {
+  return engine.files.manifest(artifactId);
+});
+```
+
+The scope follows asynchronous calls and is isolated from concurrent explicit
+reads and other Engine instances. Missing bytes return `MEDIA_MISSING` with the
+object hash; retrieve them explicitly through `engine.files.read` outside the
+scope before retrying. History restoration commits the requested metadata and
+defers workspace hydration when bytes are missing or forgotten.
+
+`withLocalMedia` controls implicit object downloads. It does not sandbox arbitrary
+callback networking or disable explicit backup, and model/provider network
+access continues to follow the separate preparation and consent policies above.
+
+
 ```ts
 const engine = createEngine({
   rootDir: ".videobook",

@@ -226,6 +226,10 @@ class LocalSimilarityApi implements SimilarityApi {
       : null;
   }
 
+  private localResult<T>(operation: () => Promise<Result<T, EngineError> | T>): Promise<Result<T, EngineError>> {
+    return this.context.withLocalMedia(() => resultOf(operation));
+  }
+
   async prepare(
     options: SimilarityPrepareOptions = {},
   ): Promise<
@@ -237,7 +241,7 @@ class LocalSimilarityApi implements SimilarityApi {
       EngineError
     >
   > {
-    return resultOf(async () => {
+    return this.localResult(async () => {
       checkMediaCancellation(options);
       const kinds = options.kind
         ? [options.kind]
@@ -274,7 +278,7 @@ class LocalSimilarityApi implements SimilarityApi {
     artifactReference: string,
     options: SimilarityIndexOptions = {},
   ): Promise<Result<SimilarityIndexResult, EngineError>> {
-    return resultOf(async () => {
+    return this.localResult(async () => {
       checkMediaCancellation(options);
       const artifact = this.context.artifactRow(artifactReference);
       const kind = similarityKind(artifact);
@@ -288,7 +292,7 @@ class LocalSimilarityApi implements SimilarityApi {
   async rebuild(
     options: { kind?: SimilarityKind; force?: boolean } & MediaOperationOptions = {},
   ): Promise<Result<SimilarityIndexResult[], EngineError>> {
-    return resultOf(async () => {
+    return this.localResult(async () => {
       checkMediaCancellation(options);
       const allowedKinds = options.kind
         ? [options.kind]
@@ -439,7 +443,7 @@ class LocalSimilarityApi implements SimilarityApi {
     artifactReference: string,
     options: SimilarityQueryOptions = {},
   ): Promise<Result<SimilarityMatch[], EngineError>> {
-    return resultOf(async () => {
+    return this.localResult(async () => {
       checkMediaCancellation(options);
       const artifact = this.context.artifactRow(artifactReference);
       const kind = similarityKind(artifact);
@@ -454,7 +458,7 @@ class LocalSimilarityApi implements SimilarityApi {
     query: string,
     options: SimilarityTextQueryOptions = {},
   ): Promise<Result<SimilarityMatch[], EngineError>> {
-    return resultOf(async () => {
+    return this.localResult(async () => {
       const provider = this.requireTextProvider();
       checkMediaCancellation(options);
       const normalizedQuery = normalizePlainText(query);

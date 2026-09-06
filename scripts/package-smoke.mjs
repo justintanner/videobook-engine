@@ -80,9 +80,10 @@ try {
 } finally { pinnedCustom.close(); }
 const { writeFile: writeRemoteFixture, unlink: unlinkRemoteFixture } = await import("node:fs/promises");
 let remoteBytes = Buffer.from("corrupt");
+let remoteDownloads = 0;
 const remoteStore = {
   async head() { return { exists: true }; }, async uploadFile() {}, async delete() {},
-  async downloadFile(_key, destination) { await writeRemoteFixture(destination, remoteBytes); },
+  async downloadFile(_key, destination) { remoteDownloads += 1; await writeRemoteFixture(destination, remoteBytes); },
 };
 const remoteBook = createEngine({ rootDir: ".remote-integrity", initialBookName: "remote", remoteObjects: remoteStore });
 try {
@@ -94,6 +95,13 @@ try {
   const objectHash = manifest.value.files[0].objectHash;
   await remoteBook.workspaces.evict(artifact.value.artifactId);
   await unlinkRemoteFixture(".remote-integrity/data/objects/sha256/" + objectHash.slice(0, 2) + "/" + objectHash);
+  const localMissing = await remoteBook.withLocalMedia(async () => {
+    await Promise.resolve();
+    return remoteBook.files.read(artifact.value.artifactId, "original.mp4");
+  });
+  assert.equal(localMissing.ok, false);
+  assert.equal(localMissing.error.code, "MEDIA_MISSING");
+  assert.equal(remoteDownloads, 0);
   const rejected = await remoteBook.files.read(artifact.value.artifactId, "original.mp4");
   assert.equal(rejected.ok, false);
   assert.equal(rejected.error.code, "OBJECT_UNAVAILABLE");
