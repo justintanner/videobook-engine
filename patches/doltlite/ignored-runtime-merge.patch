@@ -1,0 +1,888 @@
+diff --git a/src/doltlite_internal.h b/src/doltlite_internal.h
+index e1328b8..7f3413b 100644
+--- a/src/doltlite_internal.h
++++ b/src/doltlite_internal.h
+@@ -1023,6 +1023,7 @@ int mergeAbortInPlace(sqlite3 *db);
+ int mergeFastForward(
+   sqlite3 *db, sqlite3_context *context, ChunkStore *cs,
+   const ProllyHash *pOurHead, const ProllyHash *pTheirHead,
++  const ProllyHash *pIgnored,
+   int squash
+ );
+ int doltliteMergeRef(
+diff --git a/src/doltlite_merge_cmd.c b/src/doltlite_merge_cmd.c
+index a1e6538..fa36009 100644
+--- a/src/doltlite_merge_cmd.c
++++ b/src/doltlite_merge_cmd.c
+@@ -18,13 +18,224 @@
+ #include <ctype.h>
+ #include <time.h>
+ 
++static int mergeStoreCatalog(
++  sqlite3 *db,
++  struct TableEntry *aCatalog,
++  int nCatalog,
++  SchemaEntry *aSchema,
++  int nSchema,
++  ProllyHash *pHash
++){
++  u8 *pData = 0;
++  int nData = 0;
++  int rc = doltliteSerializeCatalogEntriesForeignDomain(
++      db, aCatalog, nCatalog, aSchema, nSchema, &pData, &nData);
++  if( rc==SQLITE_OK ){
++    rc = chunkStorePut(doltliteGetChunkStore(db), pData, nData, pHash);
++  }
++  sqlite3_free(pData);
++  return rc;
++}
++
++static int mergeSplitWorkingCatalog(
++  sqlite3 *db,
++  const ProllyHash *pBase,
++  int bIgnoreListed,
++  ProllyHash *pTracked,
++  ProllyHash *pIgnored,
++  char **pzErr
++){
++  ChunkStore *cs = doltliteGetChunkStore(db);
++  struct TableEntry *aBase = 0, *aWorking = 0;
++  struct TableEntry *aTracked = 0, *aIgnored = 0;
++  SchemaEntry *aSchema = 0;
++  ProllyHash workingHash;
++  int nBase = 0, nWorking = 0, nSchema = 0;
++  int nTracked = 0, nIgnored = 0;
++  int i, j;
++  int rc;
++
++  memset(pIgnored, 0, sizeof(*pIgnored));
++  rc = doltliteFlushCatalogToHash(db, &workingHash);
++  if( rc!=SQLITE_OK ) return rc;
++  *pTracked = workingHash;
++  rc = doltliteLoadCatalog(db, pBase, &aBase, &nBase, 0);
++  if( rc==SQLITE_OK ){
++    rc = doltliteLoadCatalog(db, &workingHash, &aWorking, &nWorking, 0);
++  }
++  if( rc==SQLITE_OK ){
++    rc = loadSchemaFromCatalog(db, cs, doltliteGetCache(db), &workingHash,
++                               &aSchema, &nSchema);
++  }
++  if( rc!=SQLITE_OK ) goto split_done;
++  if( nWorking==0 ) goto split_done;
++  aTracked = sqlite3_malloc64((sqlite3_uint64)nWorking * sizeof(*aTracked));
++  aIgnored = sqlite3_malloc64((sqlite3_uint64)nWorking * sizeof(*aIgnored));
++  if( !aTracked || !aIgnored ){
++    rc = SQLITE_NOMEM;
++    goto split_done;
++  }
++  for(i=0; i<nWorking; i++){
++    const char *zOwner = aWorking[i].zName;
++    int ignored = 0;
++    if( aWorking[i].iTable==1 ){
++      aTracked[nTracked++] = aWorking[i];
++      aIgnored[nIgnored++] = aWorking[i];
++      continue;
++    }
++    if( !zOwner ){
++      for(j=0; j<nSchema; j++){
++        if( aSchema[j].iRootpage==aWorking[i].iTable
++         && aSchema[j].zType && strcmp(aSchema[j].zType, "index")==0 ){
++          zOwner = aSchema[j].zTblName;
++          break;
++        }
++      }
++    }
++    if( zOwner ){
++      int listed = doltliteFindTableByName(aBase, nBase, zOwner)!=0;
++      if( bIgnoreListed ){
++        ignored = listed;
++      }else if( !listed ){
++        rc = doltliteCheckIgnore(db, zOwner, &ignored, pzErr);
++        if( rc!=SQLITE_OK ) goto split_done;
++      }
++    }
++    if( ignored ) aIgnored[nIgnored++] = aWorking[i];
++    else aTracked[nTracked++] = aWorking[i];
++  }
++  if( nIgnored>1 ){
++    rc = mergeStoreCatalog(db, aTracked, nTracked, 0, 0, pTracked);
++    if( rc==SQLITE_OK ){
++      rc = mergeStoreCatalog(db, aIgnored, nIgnored, 0, 0, pIgnored);
++    }
++  }
++
++split_done:
++  sqlite3_free(aTracked);
++  sqlite3_free(aIgnored);
++  doltliteFreeCatalog(aBase, nBase);
++  doltliteFreeCatalog(aWorking, nWorking);
++  freeSchemaEntries(aSchema, nSchema);
++  return rc;
++}
++
++static int mergeWorkingCatalog(
++  sqlite3 *db,
++  const ProllyHash *pIgnored,
++  const ProllyHash *pTarget,
++  ProllyHash *pWorking,
++  char **pzErr
++){
++  ChunkStore *cs = doltliteGetChunkStore(db);
++  struct TableEntry *aIgnored = 0, *aTarget = 0;
++  SchemaEntry *aSchema = 0, *aTargetSchema = 0;
++  int nIgnored = 0, nTarget = 0, nSchema = 0, nTargetSchema = 0;
++  int i, j, nKeep = 0;
++  Pgno iNext = 2;
++  int rc;
++
++  *pWorking = *pTarget;
++  if( prollyHashIsEmpty(pIgnored) ) return SQLITE_OK;
++  rc = doltliteLoadCatalog(db, pIgnored, &aIgnored, &nIgnored, 0);
++  if( rc==SQLITE_OK ){
++    rc = doltliteLoadCatalog(db, pTarget, &aTarget, &nTarget, 0);
++  }
++  if( rc==SQLITE_OK ){
++    rc = loadSchemaFromCatalog(db, cs, doltliteGetCache(db), pIgnored,
++                               &aSchema, &nSchema);
++  }
++  if( rc==SQLITE_OK ){
++    rc = loadSchemaFromCatalog(db, cs, doltliteGetCache(db), pTarget,
++                               &aTargetSchema, &nTargetSchema);
++  }
++  if( rc!=SQLITE_OK ) goto working_done;
++  for(i=0; i<nSchema; i++){
++    if( aSchema[i].iRootpage<=1 || !aSchema[i].zType
++     || (strcmp(aSchema[i].zType, "table")!=0
++      && strcmp(aSchema[i].zType, "index")!=0) ){
++      clearSchemaEntry(&aSchema[i]);
++      continue;
++    }
++    for(j=0; j<nTargetSchema; j++){
++      if( aSchema[i].zName && aTargetSchema[j].zName
++       && sqlite3_stricmp(aSchema[i].zName, aTargetSchema[j].zName)==0 ){
++        *pzErr = sqlite3_mprintf("merge would overwrite ignored object: %s",
++                                 aSchema[i].zName);
++        rc = *pzErr ? SQLITE_ERROR : SQLITE_NOMEM;
++        goto working_done;
++      }
++    }
++    if( i!=nKeep ){
++      aSchema[nKeep] = aSchema[i];
++      memset(&aSchema[i], 0, sizeof(aSchema[i]));
++    }
++    nKeep++;
++  }
++  nSchema = nKeep;
++  for(i=0; i<nTarget; i++){
++    if( aTarget[i].iTable>=iNext ) iNext = aTarget[i].iTable+1;
++  }
++  for(i=0; i<nIgnored; i++){
++    if( aIgnored[i].iTable>=iNext ) iNext = aIgnored[i].iTable+1;
++  }
++  for(i=0; i<nIgnored; i++){
++    struct TableEntry *aNew;
++    Pgno iOld;
++    char *zName;
++    if( aIgnored[i].iTable<=1 ) continue;
++    zName = aIgnored[i].zName ? sqlite3_mprintf("%s", aIgnored[i].zName) : 0;
++    if( aIgnored[i].zName && !zName ){
++      rc = SQLITE_NOMEM;
++      goto working_done;
++    }
++    aNew = sqlite3_realloc64(aTarget,
++        ((sqlite3_uint64)nTarget+1) * sizeof(*aTarget));
++    if( !aNew ){
++      sqlite3_free(zName);
++      rc = SQLITE_NOMEM;
++      goto working_done;
++    }
++    aTarget = aNew;
++    aTarget[nTarget] = aIgnored[i];
++    aTarget[nTarget].zName = zName;
++    aTarget[nTarget++].iTable = iNext;
++    iOld = aIgnored[i].iTable;
++    /* Table and clustered primary-key rows share a number. */
++    for(j=0; j<nSchema; j++){
++      if( aSchema[j].iRootpage==iOld ) aSchema[j].iRootpage = iNext;
++    }
++    iNext++;
++  }
++  rc = mergeStoreCatalog(db, aTarget, nTarget, aSchema, nSchema, pWorking);
++
++working_done:
++  doltliteFreeCatalog(aIgnored, nIgnored);
++  doltliteFreeCatalog(aTarget, nTarget);
++  freeSchemaEntries(aSchema, nSchema);
++  freeSchemaEntries(aTargetSchema, nTargetSchema);
++  return rc;
++}
++
+ int mergeAbortInPlace(sqlite3 *db){
+-  ProllyHash headCatHash;
++  ProllyHash headCatHash, stagedHash, trackedHash, ignoredHash, workingHash;
++  DoltliteTxnState saved;
++  char *zErr = 0;
+   int rc = doltliteGetHeadCatalogHash(db, &headCatHash);
+   if( rc!=SQLITE_OK ) return rc;
+-  rc = doltliteHardReset(db, &headCatHash);
++  rc = doltliteSaveTxnState(db, &saved);
+   if( rc!=SQLITE_OK ) return rc;
+-  rc = doltliteSetSessionStaged(db, &headCatHash);
++  doltliteGetSessionStaged(db, &stagedHash);
++  if( prollyHashIsEmpty(&stagedHash) ) stagedHash = headCatHash;
++  rc = mergeSplitWorkingCatalog(db, &stagedHash, 0, &trackedHash,
++                                 &ignoredHash, &zErr);
++  if( rc==SQLITE_OK ) rc = doltliteHardReset(db, &headCatHash);
++  if( rc==SQLITE_OK && !prollyHashIsEmpty(&ignoredHash) ){
++    rc = mergeWorkingCatalog(db, &ignoredHash, &headCatHash,
++                              &workingHash, &zErr);
++    if( rc==SQLITE_OK ) rc = doltliteSwitchCatalog(db, &workingHash);
++  }
++  if( rc==SQLITE_OK ) rc = doltliteSetSessionStaged(db, &headCatHash);
+   if( rc==SQLITE_OK ) rc = doltliteClearSessionMergeState(db);
+   if( rc==SQLITE_OK ) rc = doltliteSetSessionPendingReplayCommit(db, 0);
+   if( rc==SQLITE_OK ){
+@@ -34,8 +245,11 @@ int mergeAbortInPlace(sqlite3 *db){
+     }
+   }
+   if( rc==SQLITE_OK ) rc = doltlitePersistWorkingSet(db);
+-  if( rc!=SQLITE_OK ) return rc;
+-  return doltliteVcSealActiveSavepoints(db);
++  if( rc==SQLITE_OK ) rc = doltliteVcSealActiveSavepoints(db);
++  sqlite3_free(zErr);
++  if( rc!=SQLITE_OK ) return doltliteRestoreTxnStateOnFailure(db, &saved, rc);
++  doltliteTxnStateClear(&saved);
++  return SQLITE_OK;
+ }
+ 
+ int mergeFastForward(
+@@ -44,10 +258,13 @@ int mergeFastForward(
+   ChunkStore *cs,
+   const ProllyHash *pOurHead,
+   const ProllyHash *pTheirHead,
++  const ProllyHash *pIgnored,
+   int squash
+ ){
+   DoltliteCommit theirCommit;
+   DoltliteTxnState savedState;
++  ProllyHash workingCatHash;
++  char *zErr = 0;
+   int rc;
+   char hx[PROLLY_HASH_SIZE*2+1];
+ 
+@@ -66,7 +283,13 @@ int mergeFastForward(
+     sqlite3_result_error_code(context, rc);
+     return rc;
+   }
++  workingCatHash = theirCommit.catalogHash;
+   rc = doltliteSwitchCatalog(db, &theirCommit.catalogHash);
++  if( rc==SQLITE_OK && !prollyHashIsEmpty(pIgnored) ){
++    rc = mergeWorkingCatalog(db, pIgnored, &theirCommit.catalogHash,
++                              &workingCatHash, &zErr);
++    if( rc==SQLITE_OK ) rc = doltliteSwitchCatalog(db, &workingCatHash);
++  }
+   if( squash ){
+     if( rc==SQLITE_OK ){
+       rc = doltliteSetSessionStaged(db, &theirCommit.catalogHash);
+@@ -76,18 +299,18 @@ int mergeFastForward(
+     }
+     if( rc==SQLITE_OK ){
+       int persistRc = doltlitePersistWorkingSetWithHash(
+-          db, &theirCommit.catalogHash);
++          db, &workingCatHash);
+       chunkStoreUnlock(cs);
+       rc = persistRc;
+     }
+   }else{
+     if( rc==SQLITE_OK ){
+       rc = doltliteUpdateBranchWorkingState(db, doltliteGetSessionBranch(db),
+-                                            &theirCommit.catalogHash, NULL);
++                                            &workingCatHash, NULL);
+     }
+     if( rc==SQLITE_OK ){
+       rc = doltliteCompareAndAdvanceBranch(
+-          db, pOurHead, pTheirHead, &theirCommit.catalogHash, 0);
++          db, pOurHead, pTheirHead, &theirCommit.catalogHash, &workingCatHash);
+     }
+   }
+   if( rc!=SQLITE_OK ){
+@@ -95,6 +318,8 @@ int mergeFastForward(
+     if( rc==SQLITE_BUSY ) doltliteCmdResultPeerBranchBusy(context, "merge");
+     sqlite3_result_error_code(context,
+         doltliteRestoreTxnStateOnFailure(db, &savedState, rc));
++    if( zErr ) sqlite3_result_error(context, zErr, -1);
++    sqlite3_free(zErr);
+     return rc;
+   }
+   rc = doltliteVcSealEnclosingTxn(db);
+@@ -232,6 +457,8 @@ static int mergeRefInstallMergedCatalog(
+   const ProllyHash *pAncCat,
+   const ProllyHash *pTheirCat,
+   ProllyHash *pMergedCat,
++  const ProllyHash *pIgnored,
++  ProllyHash *pWorkingCat,
+   int nMergeConflicts,
+   SchemaMergeAction **paSchemaActions,
+   int *pnSchemaActions,
+@@ -263,7 +490,7 @@ static int mergeRefInstallMergedCatalog(
+   if( *pnSchemaActions > 0 && nMergeConflicts==0 ){
+     rc = doltliteApplyMergeSchemaActions(db, pAncCat, pTheirCat,
+                                          *paSchemaActions, *pnSchemaActions,
+-                                         pMergedCat);
++                                         pWorkingCat);
+   }
+   freeSchemaMergeActions(*paSchemaActions, *pnSchemaActions);
+   *paSchemaActions = 0;
+@@ -319,13 +546,23 @@ static int mergeRefInstallMergedCatalog(
+     }
+   }
+ 
+-  rc = doltliteFlushCatalogToHash(db, pMergedCat);
+-  if( rc==SQLITE_OK ) rc = doltliteSwitchCatalog(db, pMergedCat);
++  rc = doltliteFlushCatalogToHash(db, pWorkingCat);
++  if( rc==SQLITE_OK ){
++    *pMergedCat = *pWorkingCat;
++    if( !prollyHashIsEmpty(pIgnored) ){
++      ProllyHash ignoredHash;
++      char *zErr = 0;
++      rc = mergeSplitWorkingCatalog(db, pIgnored, 1, pMergedCat,
++                                     &ignoredHash, &zErr);
++      sqlite3_free(zErr);
++    }
++  }
++  if( rc==SQLITE_OK ) rc = doltliteSwitchCatalog(db, pWorkingCat);
+   if( rc==SQLITE_OK ) rc = doltlitePrimeSchemaCache(db);
+   if( rc==SQLITE_OK ) rc = doltliteSetSessionStaged(db, pMergedCat);
+   if( rc==SQLITE_OK ){
+     rc = doltliteUpdateBranchWorkingState(db,
+-        doltliteGetSessionBranch(db), pMergedCat, NULL);
++        doltliteGetSessionBranch(db), pWorkingCat, NULL);
+   }
+   return rc;
+ }
+@@ -365,6 +602,7 @@ static int mergeRefCreateMergeCommit(
+   const ProllyHash *pOurHead,
+   const ProllyHash *pTheirHead,
+   const ProllyHash *pMergedCat,
++  const ProllyHash *pWorkingCat,
+   const char *zBranch,
+   const char *zMessage,
+   int nExtraParents
+@@ -400,7 +638,7 @@ static int mergeRefCreateMergeCommit(
+ 
+   doltliteTestCrashFinalize("merge");
+   rc = doltliteCompareAndAdvanceBranch(
+-      db, pOurHead, &commitHash, pMergedCat, 0);
++      db, pOurHead, &commitHash, pMergedCat, pWorkingCat);
+   if( rc==SQLITE_BUSY ){
+     doltliteCmdResultPeerBranchBusy(context, "merge");
+     doltliteRestoreTxnStateOnFailure(db, pSaved, rc);
+@@ -428,7 +666,7 @@ static int mergeRefLeaveUncommitted(
+   DoltliteTxnState *pSaved,
+   const ProllyHash *pOurHead,
+   const ProllyHash *pTheirHead,
+-  const ProllyHash *pMergedCat,
++  const ProllyHash *pWorkingCat,
+   const char *zBranch,
+   int bSetMergeState
+ ){
+@@ -460,7 +698,7 @@ static int mergeRefLeaveUncommitted(
+         doltliteRestoreTxnStateOnFailure(db, pSaved, rc));
+     return SQLITE_ERROR;
+   }
+-  rc = doltlitePersistWorkingSetWithHash(db, pMergedCat);
++  rc = doltlitePersistWorkingSetWithHash(db, pWorkingCat);
+   chunkStoreUnlock(cs);
+   if( rc!=SQLITE_OK ){
+     sqlite3_result_error_code(context,
+@@ -512,6 +750,7 @@ int doltliteMergeRef(
+   ChunkStore *cs = doltliteGetChunkStore(db);
+   ProllyHash ourHead, theirHead, ancestorHash;
+   ProllyHash ourCatHash, theirCatHash, ancCatHash, mergedCatHash;
++  ProllyHash ignoredCatHash, workingCatHash;
+   DoltliteTxnState savedState;
+   int nMergeConflicts = 0;
+   DoltliteCommit ourCommit, theirCommit;
+@@ -535,6 +774,7 @@ int doltliteMergeRef(
+   memset(&theirCommit, 0, sizeof(theirCommit));
+   memset(&savedState, 0, sizeof(savedState));
+   memset(&mergedCatHash, 0, sizeof(mergedCatHash));
++  memset(&ignoredCatHash, 0, sizeof(ignoredCatHash));
+ 
+   if( !cs ){
+     sqlite3_result_error(context, doltliteVcUnavailableMessage(db), -1);
+@@ -571,6 +811,24 @@ int doltliteMergeRef(
+   if( rc!=SQLITE_OK ){
+     return mergeRefAbortAfterWriteTxn(db, context, 0, rc);
+   }
++  if( dirty ){
++    ProllyHash headCatHash, stagedHash, trackedHash;
++    rc = doltliteGetHeadCatalogHash(db, &headCatHash);
++    doltliteGetSessionStaged(db, &stagedHash);
++    if( rc==SQLITE_OK && (prollyHashIsEmpty(&stagedHash)
++     || prollyHashCompare(&stagedHash, &headCatHash)==0) ){
++      rc = mergeSplitWorkingCatalog(db, &headCatHash, 0, &trackedHash,
++                                     &ignoredCatHash, &zOwnedErr);
++      if( rc==SQLITE_OK ){
++        dirty = prollyHashCompare(&trackedHash, &headCatHash)!=0;
++      }
++    }
++    if( rc!=SQLITE_OK ){
++      rc = mergeRefAbortAfterWriteTxn(db, context, zOwnedErr, rc);
++      sqlite3_free(zOwnedErr);
++      return rc;
++    }
++  }
+   if( dirty ){
+     return mergeRefAbortAfterWriteTxn(db, context,
+       "uncommitted changes \xe2\x80\x94 commit or reset before merging", rc);
+@@ -588,7 +846,8 @@ int doltliteMergeRef(
+   }
+ 
+   if( prollyHashCompare(&ancestorHash, &ourHead)==0 && !noFastForward ){
+-    return mergeFastForward(db, context, cs, &ourHead, &theirHead, squash);
++    return mergeFastForward(db, context, cs, &ourHead, &theirHead,
++                             &ignoredCatHash, squash);
+   }
+ 
+   rc = mergeRefLoadCatalogs(db, &ourHead, &theirHead, &ancestorHash,
+@@ -636,13 +895,20 @@ int doltliteMergeRef(
+   rc = doltliteSwitchCatalog(db, &mergedCatHash);
+   doltliteCommitClear(&ourCommit);
+   doltliteCommitClear(&theirCommit);
++  workingCatHash = mergedCatHash;
++  if( rc==SQLITE_OK && !prollyHashIsEmpty(&ignoredCatHash) ){
++    rc = mergeWorkingCatalog(db, &ignoredCatHash, &mergedCatHash,
++                              &workingCatHash, &zOwnedErr);
++    if( rc==SQLITE_OK ) rc = doltliteSwitchCatalog(db, &workingCatHash);
++  }
+   if( rc!=SQLITE_OK ){
+     bRestoreOnFail = 1;
+     goto merge_fail;
+   }
+ 
+   rc = mergeRefInstallMergedCatalog(db, &ancCatHash, &theirCatHash,
+-                                    &mergedCatHash, nMergeConflicts,
++                                    &mergedCatHash, &ignoredCatHash,
++                                    &workingCatHash, nMergeConflicts,
+                                     &aSchemaActions, &nSchemaActions,
+                                     &azReindex, &nReindex,
+                                     &azRebuildVtabs, &nRebuildVtabs);
+@@ -701,11 +967,12 @@ int doltliteMergeRef(
+ 
+   if( noCommit ){
+     return mergeRefLeaveUncommitted(
+-        db, context, &savedState, &ourHead, &theirHead, &mergedCatHash,
++        db, context, &savedState, &ourHead, &theirHead, &workingCatHash,
+         zBranch, !squash);
+   }
+   return mergeRefCreateMergeCommit(
+       db, context, &savedState, &ourHead, &theirHead, &mergedCatHash,
++      &workingCatHash,
+       zBranch, zMessage, squash ? 0 : 1);
+ 
+ merge_fail:
+diff --git a/src/doltlite_schema_diff.c b/src/doltlite_schema_diff.c
+index cad0389..07ae651 100644
+--- a/src/doltlite_schema_diff.c
++++ b/src/doltlite_schema_diff.c
+@@ -209,7 +209,13 @@ int loadSchemaFromCatalog(
+           rc = appendSchemaEntry(&aEntries, &nEntries, &nAlloc,
+                                  zName, zTblName, zSql, zType,
+                                  (Pgno)iRootpage);
+-          if( rc!=SQLITE_OK ) goto load_schema_done;
++          if( rc!=SQLITE_OK ){
++            sqlite3_free(zType);
++            sqlite3_free(zName);
++            sqlite3_free(zTblName);
++            sqlite3_free(zSql);
++            goto load_schema_done;
++          }
+           zName = 0;
+           zTblName = 0;
+           zSql = 0;
+diff --git a/src/doltlite_status.c b/src/doltlite_status.c
+index 796af8f..6e331eb 100644
+--- a/src/doltlite_status.c
++++ b/src/doltlite_status.c
+@@ -533,6 +533,20 @@ static int statusCompareIndexSchemaObjects(
+         continue;
+       }
+     }
++    if( !staged && !pFromEnt && pToEnt ){
++      int ignored = 0;
++      char *zIgnErr = 0;
++      rc = doltliteCheckIgnore(db, pRow->zTblName, &ignored, &zIgnErr);
++      if( rc==SQLITE_CONSTRAINT ){
++        sqlite3_free(pCur->base.pVtab->zErrMsg);
++        pCur->base.pVtab->zErrMsg = zIgnErr;
++        rc = SQLITE_ERROR;
++        goto index_schema_done;
++      }
++      sqlite3_free(zIgnErr);
++      if( rc!=SQLITE_OK ) goto index_schema_done;
++      if( ignored ) continue;
++    }
+     if( doltliteIndexSchemaRowsDifferForTable(aFrom, nFrom, aTo, nTo,
+                                               pRow->zTblName)
+      || statusIndexRootsDifferForTable(aFrom, nFrom, aFromEnt, nFromEnt,
+diff --git a/test/doltlite_merge_ignored.test b/test/doltlite_merge_ignored.test
+new file mode 100644
+index 0000000..86d8919
+--- /dev/null
++++ b/test/doltlite_merge_ignored.test
+@@ -0,0 +1,260 @@
++set testdir [file dirname $argv0]
++source $testdir/tester.tcl
++
++set testprefix doltlite_merge_ignored
++
++proc ignored_merge_setup {indexed diverged} {
++  reset_db
++  execsql {
++    CREATE TABLE items(id INTEGER PRIMARY KEY, label TEXT);
++    INSERT INTO items VALUES(1,'base'),(2,'base');
++    INSERT INTO dolt_ignore VALUES('runtime_%',1);
++    SELECT dolt_add('items','dolt_ignore');
++    SELECT dolt_commit('-m','base');
++    CREATE TABLE runtime_jobs(id INTEGER PRIMARY KEY, kind VARCHAR(64));
++    INSERT INTO runtime_jobs VALUES(1,'keep');
++  }
++  if {$indexed} {
++    execsql { CREATE INDEX runtime_jobs_kind ON runtime_jobs(kind) }
++  }
++  execsql {
++    SELECT dolt_branch('feature');
++    SELECT dolt_checkout('feature');
++    UPDATE items SET label='feature' WHERE id=1;
++    CREATE INDEX item_label ON items(label);
++    SELECT dolt_add('items');
++    SELECT dolt_commit('-m','feature');
++    SELECT dolt_checkout('main');
++  }
++  if {$diverged} {
++    execsql {
++      UPDATE items SET label='main' WHERE id=2;
++      SELECT dolt_add('items');
++      SELECT dolt_commit('-m','main');
++    }
++  }
++  execsql { SELECT dolt_reset('--hard') }
++}
++
++foreach indexed {0 1} {
++  foreach {mode diverged flags noCommit} {
++    ff        0 {}                         0
++    noff      0 {'--no-ff',}               0
++    threeway  1 {}                         0
++    squashff  0 {'--squash',}              1
++    squash    1 {'--squash',}              0
++    nocommit  1 {'--no-commit',}           1
++  } {
++    do_test $indexed.$mode.1 {
++      ignored_merge_setup $indexed $diverged
++      execsql { SELECT count(*) FROM dolt_status }
++    } {0}
++    do_test $indexed.$mode.2 {
++      execsql "SELECT dolt_merge(${flags}'feature')"
++      execsql {
++        SELECT kind FROM runtime_jobs WHERE id=1;
++        SELECT label FROM items WHERE id=1;
++        SELECT count(*) FROM dolt_status WHERE table_name LIKE 'runtime_%';
++      }
++    } {keep feature 0}
++    do_test $indexed.$mode.3 {
++      if {$noCommit} {
++        execsql { SELECT dolt_commit('-m','finish merge') }
++      }
++      db close
++      sqlite3 db test.db
++      set result [execsql {
++        SELECT kind FROM runtime_jobs WHERE id=1;
++        SELECT label FROM items WHERE id=1;
++        SELECT count(*) FROM dolt_status;
++        PRAGMA integrity_check;
++      }]
++      if {$indexed} {
++        lappend result [db one {
++          SELECT id FROM runtime_jobs INDEXED BY runtime_jobs_kind WHERE kind='keep'
++        }]
++      } else {
++        lappend result 1
++      }
++      set result
++    } {keep feature 0 ok 1}
++    do_test $indexed.$mode.4 {
++      execsql { SELECT dolt_checkout('-b','committed','HEAD') }
++      set result [execsql {
++        SELECT count(*) FROM sqlite_master WHERE name LIKE 'runtime_%';
++        SELECT label FROM items WHERE id=1;
++      }]
++      execsql { SELECT dolt_checkout('main') }
++      lappend result [db one { SELECT kind FROM runtime_jobs WHERE id=1 }]
++      set result
++    } {0 feature keep}
++  }
++}
++
++foreach {name change} {
++  tracked {UPDATE items SET label='dirty' WHERE id=2;}
++  index {CREATE INDEX local_index ON items(id,label);}
++  untracked {CREATE TABLE local_table(id INTEGER PRIMARY KEY);}
++  staged {SELECT dolt_add('-f','runtime_jobs');}
++  metadata {PRAGMA user_version=17;}
++} {
++  do_test dirty.$name {
++    ignored_merge_setup 1 0
++    execsql $change
++    set failed [catch {execsql {SELECT dolt_merge('feature')}} message]
++    list $failed [string match {*uncommitted changes*} $message] \
++        [db one {SELECT kind FROM runtime_jobs WHERE id=1}] \
++        [db one {SELECT label FROM items WHERE id=1}]
++  } {1 1 keep base}
++}
++
++do_test tracked-ignore {
++  reset_db
++  execsql {
++    CREATE TABLE runtime_tracked(id INTEGER PRIMARY KEY, v TEXT);
++    INSERT INTO runtime_tracked VALUES(1,'base');
++    INSERT INTO dolt_ignore VALUES('runtime_%',1);
++    SELECT dolt_add('-f','runtime_tracked','dolt_ignore');
++    SELECT dolt_commit('-m','base');
++    SELECT dolt_checkout('-b','feature');
++    INSERT INTO runtime_tracked VALUES(2,'feature');
++    SELECT dolt_add('-f','runtime_tracked');
++    SELECT dolt_commit('-m','feature');
++    SELECT dolt_checkout('main');
++    UPDATE runtime_tracked SET v='dirty' WHERE id=1;
++  }
++  set failed [catch {execsql {SELECT dolt_merge('feature')}} message]
++  list $failed [string match {*uncommitted changes*} $message] \
++      [db one {SELECT v FROM runtime_tracked WHERE id=1}]
++} {1 1 dirty}
++
++foreach {name change} {
++  table {
++    CREATE TABLE runtime_jobs(id INTEGER PRIMARY KEY, kind VARCHAR(64));
++    INSERT INTO runtime_jobs VALUES(2,'incoming');
++    SELECT dolt_add('-f','runtime_jobs');
++  }
++  index {
++    CREATE INDEX runtime_jobs_kind ON items(id);
++    SELECT dolt_add('items');
++  }
++} {
++  do_test collision.$name {
++    ignored_merge_setup 1 0
++    execsql {SELECT dolt_checkout('feature')}
++    execsql $change
++    execsql {
++      SELECT dolt_commit('-m','collision');
++      SELECT dolt_checkout('main');
++    }
++    set head [db one {SELECT dolt_hashof('HEAD')}]
++    set failed [catch {execsql {SELECT dolt_merge('feature')}} message]
++    db close
++    sqlite3 db test.db
++    list $failed [string match {*overwrite ignored object*} $message] \
++        [expr {$head eq [db one {SELECT dolt_hashof('HEAD')}]}] \
++        [db one {SELECT kind FROM runtime_jobs INDEXED BY runtime_jobs_kind WHERE id=1}] \
++        [db one {SELECT label FROM items WHERE id=1}]
++  } {1 1 1 keep base}
++}
++
++do_test conflict-autocommit {
++  ignored_merge_setup 1 0
++  execsql {
++    UPDATE items SET label='ours' WHERE id=1;
++    SELECT dolt_add('items');
++    SELECT dolt_commit('-m','conflict');
++  }
++  set head [db one {SELECT dolt_hashof('HEAD')}]
++  set failed [catch {execsql {SELECT dolt_merge('feature')}} message]
++  db close
++  sqlite3 db test.db
++  list $failed [string match {*conflicts detected*} $message] \
++      [expr {$head eq [db one {SELECT dolt_hashof('HEAD')}]}] \
++      [db one {SELECT kind FROM runtime_jobs WHERE id=1}] \
++      [db one {SELECT label FROM items WHERE id=1}] \
++      [db one {SELECT count(*) FROM dolt_merge_status WHERE is_merging=1}]
++} {1 1 1 keep ours 0}
++
++do_test conflict-abort {
++  execsql {BEGIN}
++  catch {execsql {SELECT dolt_merge('feature')}}
++  execsql {
++    UPDATE runtime_jobs SET kind='updated' WHERE id=1;
++    SELECT dolt_merge('--abort');
++    COMMIT;
++  }
++  db close
++  sqlite3 db test.db
++  execsql {
++    SELECT kind FROM runtime_jobs WHERE id=1;
++    SELECT label FROM items WHERE id=1;
++    SELECT count(*) FROM dolt_merge_status WHERE is_merging=1;
++    PRAGMA integrity_check;
++  }
++} {updated ours 0 ok}
++
++do_test composite-primary-key {
++  ignored_merge_setup 1 1
++  execsql {
++    CREATE TABLE runtime_pairs(
++      a TEXT, b TEXT, kind TEXT UNIQUE, payload BLOB, PRIMARY KEY(a,b)
++    );
++    CREATE INDEX runtime_pairs_payload ON runtime_pairs(payload) WHERE kind='keep';
++    INSERT INTO runtime_pairs VALUES('a','b','keep',x'010203'),('c','d','other',x'00');
++    SELECT dolt_merge('feature');
++  }
++  db close
++  sqlite3 db test.db
++  execsql {
++    SELECT a,b,hex(payload) FROM runtime_pairs INDEXED BY runtime_pairs_payload
++      WHERE kind='keep' AND payload=x'010203';
++    SELECT count(*) FROM dolt_status;
++    PRAGMA integrity_check;
++  }
++} {a b 010203 0 ok}
++
++do_test incoming-metadata {
++  ignored_merge_setup 1 0
++  execsql {
++    SELECT dolt_checkout('feature');
++    PRAGMA user_version=17;
++    SELECT dolt_commit('-A','-m','metadata');
++    SELECT dolt_checkout('main');
++    SELECT dolt_merge('feature');
++  }
++  db close
++  sqlite3 db test.db
++  execsql {PRAGMA user_version; SELECT kind FROM runtime_jobs WHERE id=1;}
++} {17 keep}
++
++source $testdir/malloc_common.tcl
++foreach diverged {0 1} {
++  ignored_merge_setup 1 $diverged
++  faultsim_save_and_close
++  do_faultsim_test oom.$diverged -faults oom-transient -prep {
++    faultsim_restore_and_reopen
++  } -body {
++    db eval {SELECT dolt_merge('feature') IS NOT NULL}
++  } -test {
++    faultsim_test_result {0 1} {1 {disk I/O error}} \
++        {1 {merge source not found}} {1 {no common ancestor found}} \
++        {1 {failed to load commit}} {1 {failed to load our commit}} \
++        {1 {failed to load their commit}} {1 {failed to load ancestor}} \
++        {1 {merge failed}} {1 {failed to create merge commit}}
++    catchsql ROLLBACK
++    db close
++    sqlite3 db test.db
++    if {[db eval {SELECT kind FROM runtime_jobs WHERE id=1}] ne "keep"} {
++      error "ignored rows lost during merge"
++    }
++    if {[db eval {
++      SELECT id FROM runtime_jobs INDEXED BY runtime_jobs_kind WHERE kind='keep'
++    }] ne "1"} {
++      error "ignored index lost during merge"
++    }
++    faultsim_integrity_check
++  }
++}
++
++finish_test
+diff --git a/test/regression-buckets/ported.txt b/test/regression-buckets/ported.txt
+index 2e1fb3f..5da785b 100644
+--- a/test/regression-buckets/ported.txt
++++ b/test/regression-buckets/ported.txt
+@@ -34,6 +34,7 @@ doltlite_page_size_default
+ doltlite_savepoint_release
+ doltlite_default_materialization
+ doltlite_merge_constraint_prune
++doltlite_merge_ignored
+ doltlite_recover_changes
+ doltlite_gc_stop_world
+ doltlite_reload_uncommitted_recent
+diff --git a/test/vc_oracle_ignored_merge_test.sh b/test/vc_oracle_ignored_merge_test.sh
+new file mode 100755
+index 0000000..9c9f55e
+--- /dev/null
++++ b/test/vc_oracle_ignored_merge_test.sh
+@@ -0,0 +1,76 @@
++#!/bin/bash
++set -u
++set -o pipefail
++
++DOLTLITE="${1:-./doltlite}"
++DOLT="${2:-dolt}"
++TMPROOT=$(mktemp -d)
++trap 'rm -rf "$TMPROOT"' EXIT
++pass=0; fail=0; FAILED_NAMES=""
++source "$(dirname "$0")/lib/vc_oracle_common.sh"
++
++oracle() {
++  local name="$1" indexed="$2" diverged="$3" merge_sql="$4"
++  local dir="$TMPROOT/$name"
++  local index_sql="" main_sql="" setup dl_out dt_out dl_rc dt_rc
++  mkdir -p "$dir/dl" "$dir/dt"
++  if [ "$indexed" = 1 ]; then
++    index_sql="CREATE INDEX runtime_jobs_kind ON runtime_jobs(kind);"
++  fi
++  if [ "$diverged" = 1 ]; then
++    main_sql="UPDATE items SET label='main' WHERE id=2;
++      SELECT dolt_add('items'); SELECT dolt_commit('-m','main');"
++  fi
++  setup="CREATE TABLE items(id INTEGER PRIMARY KEY,label VARCHAR(64));
++    INSERT INTO items VALUES(1,'base'),(2,'base');
++    INSERT INTO dolt_ignore VALUES('runtime_%',1);
++    SELECT dolt_add('items','dolt_ignore'); SELECT dolt_commit('-m','base');
++    CREATE TABLE runtime_jobs(id INTEGER PRIMARY KEY,kind VARCHAR(64));
++    INSERT INTO runtime_jobs VALUES(1,'keep');
++    $index_sql
++    SELECT dolt_branch('feature'); SELECT dolt_checkout('feature');
++    UPDATE items SET label='feature' WHERE id=1;
++    CREATE INDEX item_label ON items(label);
++    SELECT dolt_add('items'); SELECT dolt_commit('-m','feature');
++    SELECT dolt_checkout('main');
++    $main_sql
++    SELECT dolt_reset('--hard');
++    SELECT concat('R|before|',count(*)) FROM dolt_status;
++    $merge_sql
++    SELECT concat('R|item|',id,'|',label) FROM items ORDER BY id;
++    SELECT concat('R|runtime|',id,'|',kind) FROM runtime_jobs ORDER BY id;
++    SELECT concat('R|after|',table_name,'|',staged,'|',status)
++      FROM dolt_status ORDER BY table_name,staged;"
++  printf '.bail on\n%s\n' "$setup" | "$DOLTLITE" "$dir/dl/db" >"$dir/dl.out" 2>"$dir/dl.err"
++  dl_rc=$?
++  vc_oracle_run_dolt_script "$dir/dt" "$dir/dt.out" "$dir/dt.err" \
++    "$(vc_oracle_translate_for_dolt "$setup")" -r csv
++  dt_rc=$?
++  if [ "$dl_rc" -ne 0 ] || [ "$dt_rc" -ne 0 ]; then
++    fail=$((fail+1)); FAILED_NAMES="$FAILED_NAMES $name"
++    echo "FAIL: $name (DoltLite=$dl_rc, Dolt=$dt_rc)"
++    cat "$dir/dl.err" "$dir/dt.err"
++    return
++  fi
++  dl_out=$(grep '^R|' "$dir/dl.out" | tr -d '\r' | sort)
++  dt_out=$(grep '^R|' "$dir/dt.out" | tr -d '\r"' | sort)
++  vc_oracle_assert_match "$name" "$dl_out" "$dt_out"
++}
++
++for indexed in 0 1; do
++  oracle "ff_$indexed" "$indexed" 0 "SELECT dolt_merge('feature');"
++  oracle "noff_$indexed" "$indexed" 0 "SELECT dolt_merge('--no-ff','feature');"
++  oracle "threeway_$indexed" "$indexed" 1 "SELECT dolt_merge('feature');"
++  oracle "nocommit_$indexed" "$indexed" 1 \
++    "SELECT dolt_merge('--no-commit','feature'); SELECT dolt_commit('-m','finish');"
++  oracle "abort_$indexed" "$indexed" 1 \
++    "SELECT dolt_merge('--no-commit','feature');
++     UPDATE runtime_jobs SET kind='updated' WHERE id=1;
++     SELECT dolt_merge('--abort');"
++done
++
++echo "Results: $pass passed, $fail failed"
++if [ "$fail" -ne 0 ]; then
++  echo "Failures:$FAILED_NAMES"
++  exit 1
++fi

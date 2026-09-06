@@ -52,6 +52,13 @@ future dependency version. The engine retains its working projection merge,
 including singleton reconciliation and forget-wins object handling, while
 this native merge gate remains unresolved.
 
+A [native source patch with validation and reproduction steps](../patches/doltlite/README.md)
+is now prepared on upstream commit `37a390eb7b021962d9d287a465a2da3c9f59c3cf`.
+It passes 4,156 focused checks including allocation failures, all 126 native
+suites, all 33 C suites, and the full 56-table engine catalog probe. Production
+adoption still requires upstream review and validation of a published native
+build; the dependency remains 0.50.6.
+
 Compatibility smoke tests created separate synthetic catalogs with the previous
 engine dependency (0.11.37) and the installed application dependency (0.11.51),
 then opened them in separate 0.50.6 processes. Book identity, head, history
