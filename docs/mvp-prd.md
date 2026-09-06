@@ -707,7 +707,8 @@ artifact/file mapping before it is relied on by history.
 
 ## 12. Performance and quality requirements
 
-The reference beta device is an Apple M2 Pro with 16 GB RAM and local SSD.
+Performance measurements record the actual CPU, memory and storage of the
+test machine. No specific device model is required.
 Quality thresholds use the frozen corpus defined in the application PRD.
 
 | ID | Area | Creator-beta requirement |

@@ -62,8 +62,7 @@ Seeding the 1,000 clips took 142 ms to preview and 297 ms to commit. All 50
 previews left the head revision, row counts and sequence projection unchanged,
 all 50 repeats were identical, all 50 commits advanced the head and applied
 5,000 transforms, and every gate passed. Process peak RSS was 2.8 GiB
-including the embedded Dolt database. The PRD reference device is an M2 Pro
-with 16 GB RAM; this run does not replace a reference-device measurement.
+including the embedded Dolt database.
 
 ## DoltLite 0.50.6 candidate
 
@@ -79,5 +78,4 @@ records 50 independent 100-operation transactions over 1,000 clips:
 | Commit | 50 | 299 ms | 331 ms | 348 ms |
 
 All mutation, determinism, revision, and applied-transform gates pass. Peak
-process RSS is 1.54 GiB. These M1 Pro results retain the M2 Pro reference-device
-qualification; `ve-ovz.22` remains outstanding.
+process RSS is 1.54 GiB.

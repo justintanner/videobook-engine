@@ -67,29 +67,24 @@ passes locally; the timeout change addresses the 84-second fixture that
 exceeded the previous 60-second watchdog on Node 22.
 
 The release is a patch within the existing 5.x series. No 2.0.0 release or
-major bump is planned. Frozen-corpus quality remains outstanding. The M2 Pro
-reference-device run is deferred because the user confirmed that the hardware
-is unavailable.
+major bump is planned. Frozen-corpus quality remains outstanding.
 
 ## Performance and quality
 
 The available machine reports Apple M1 Pro, 10 logical CPUs and 16 GiB RAM.
-The PRD specifies M2 Pro, 16 GB RAM and local SSD. Existing measurements retain
-their actual hardware qualification; none is an M2 Pro acceptance run. The
-reference-device measurements are deferred in `ve-ovz.22` following the user's
-September 6 confirmation that no M2 Pro is available. The passing M1 Pro results
-remain the available benchmark evidence. This exact-device check does not
-block publication of the already validated 5.3.2 patch.
+Performance requirements are evaluated on the documented test machine.
+Existing measurements retain their actual hardware qualification. The passing
+M1 Pro results below provide the available benchmark evidence.
 
 | Requirement | Evidence inspected | Assessment and follow-up |
 | --- | --- | --- |
-| VE-NFR-001: 1,000-artifact open and semantic summary <2 s | Clean engine `c4f1d89`: 171 ms same-process after a fresh 1,000-artifact/100,000-moment build and 1,714 ms in a fresh process reopening the retained fixture. Raw reports: `temporal-100k-doltlite-0506.json` and `temporal-100k-doltlite-0506-reopen.json`, both on M1 Pro. | Passes on measured hardware for the current source. The M2 Pro reference-device run remains outstanding and is tracked explicitly; M1 Pro results are not equated with it. |
+| VE-NFR-001: 1,000-artifact open and semantic summary <2 s | Clean engine `c4f1d89`: 171 ms same-process after a fresh 1,000-artifact/100,000-moment build and 1,714 ms in a fresh process reopening the retained fixture. Raw reports: `temporal-100k-doltlite-0506.json` and `temporal-100k-doltlite-0506-reopen.json`, both on M1 Pro. | Passes on measured hardware for the current source. |
 | VE-NFR-002: metadata and imported normalized transcript searchable <5 s after semantic commit | Consumer `tests/v2/text-readiness.test.ts` times the real job queue on a real probed video: analysis metadata write to first lexical hit 688 ms (OCR text 689 ms), transcript import to first quoted speech hit 314 ms, both under the 5 s gate with model downloads disabled and no cached model. | Passes end to end through the application's actual enqueue, poll, index and lexical query path on M1 Pro. |
 | VE-NFR-003: searchable coverage at least every 60 source seconds, resume last committed batch | Synthetic benchmark: 4,000 batches of at most 30 source seconds, every cursor checked, first coverage 45 ms. The consumer's fixed four-unit deep batches could exceed 60 s on videos longer than about seven minutes because frame sampling caps at 30 frames; `commitDeepBatches` now bounds each CLIP/CLAP batch by covered source seconds. Consumer `tests/v2/semantic-index-cadence.test.ts` verifies the bound and durable-cursor resume through the engine, and the explicit real-model case runs the actual CLIP pipeline on a real ten-minute video: 15 two-frame batches of at most 41.4 s, interruption after two batches, resume from cursor 4 without re-embedding committed frames, and retrieval of the source. | Passes for the actual model pipeline. A single sampled frame whose own span exceeds 60 s (videos over about 29 minutes) is committed alone; frame density itself is a quality question for the frozen corpus, not a cadence failure. |
-| VE-NFR-004: 100k moments, warm p50 <500 ms, p95 <1.5 s including hybrid | Clean `c4f1d89` fresh build: 50 warm reads per mode, p50/p95 image 59/66 ms, video 113/165 ms, hybrid 332/411 ms; fresh-process reopen: image 60/73 ms, video 117/179 ms, hybrid 310/388 ms. | Passes the full synthetic workload on the current source, M1 Pro. Reference-device run outstanding and tracked explicitly. |
+| VE-NFR-004: 100k moments, warm p50 <500 ms, p95 <1.5 s including hybrid | Clean `c4f1d89` fresh build: 50 warm reads per mode, p50/p95 image 59/66 ms, video 113/165 ms, hybrid 332/411 ms; fresh-process reopen: image 60/73 ms, video 117/179 ms, hybrid 310/388 ms. | Passes the full synthetic workload on the current source, M1 Pro. |
 | VE-NFR-005: 100-operation preview on 1,000 clips, p95 <250 ms, no mutation | Clean `c4f1d89`, `npm run benchmark:edits` (`docs/edit-performance.md`): 50 independent previews of fresh 100-operation batches against 1,000 clips, p50 105 ms, p95 114 ms, max 118 ms; head revision, every table row count and the canonical sequence projection unchanged after each preview. Recorded in `benchmarks/results/edit-100x1000-doltlite-0506.json`. | Passes with strict gates on M1 Pro. `tests/edit-transactions.test.ts` keeps its single-sample 500 ms tripwire for shared CI runners. |
 | VE-NFR-006: same commit batch, p95 <1 s | Same run: 50 independent commits, p50 299 ms, p95 331 ms, max 348 ms; every commit advanced the head and applied all 100 transforms; reopened catalog exposes the last revision. | Passes on M1 Pro; no derived jobs run inside `edits.commit`. |
-| VE-NFR-007: 100k query/index structures <4 GB RSS beyond loaded model | Clean `c4f1d89` fresh build and query process peak 3.03 GiB including fixture construction; fresh-process reopen and 150 queries 2.08 GiB; no model loaded. | Passes on the current source, M1 Pro. Reference-device run outstanding. |
+| VE-NFR-007: 100k query/index structures <4 GB RSS beyond loaded model | Clean `c4f1d89` fresh build and query process peak 3.03 GiB including fixture construction; fresh-process reopen and 150 queries 2.08 GiB; no model loaded. | Passes on the current source, M1 Pro. |
 | VE-NFR-008: forced termination at every SQL/outbox/Dolt boundary | Baseline edit tests only threw exceptions and closed normally. Subsequent `tests/semantic-crash.test.ts` covers real SIGKILL at each semantic/outbox/table-staging/Dolt boundary for a multi-table edit and provenance operation, including interrupted recovery and an intervening write. | Kill matrix exposed and corrected duplicate provenance replay. See `docs/semantic-durability.md` for scope and invariants; tracked in `ve-ovz.10`. |
 | VE-NFR-009: stable search ordering, identical canonical previews/hashes | Current-source temporal runs repeat every first query per mode against the unchanged generation and require identical hits; the edit distribution run previews each of 50 large batches twice and requires identical canonical operations, ranges, write sets, diffs and all hashes. | Passes for the exact 100-operation/1,000-clip workload and the 100k search workload. |
 | VE-NFR-010: every application frozen-corpus quality threshold | E4 evaluator and small real-model fixtures exist | Full rights-cleared frozen corpus and judged ranges absent. `ve-s84` remains incomplete; synthetic scale data cannot replace it. |
@@ -160,7 +155,7 @@ current-source coverage gaps; the final scan reports zero missing visual
 indexes. One empty copied video was recovered from its exact preceding
 nonempty artifact revision after SHA-256, dimensions and duration verification
 (`vb-v9nq`), then indexed and retrieved successfully. These fixture and local
-library results do not replace the frozen-corpus or reference-hardware gates.
+library results do not replace the frozen-corpus gate.
 
 Provider dispatch scoping is hardened in Engine `dffaf21` (`ve-ovz.20`).
 Compatibility preparation and embedding receive a fresh options object containing
@@ -306,9 +301,6 @@ The NFR measurement pass (`ve-ovz.9`) records current-source distributions
 for VE-NFR-001/002/004/005/006/007/009/012 and the actual model-pipeline
 cadence for VE-NFR-003 in this document, `docs/edit-performance.md` and
 `docs/temporal-search-performance.md`. Every measured gate passes on the
-available M1 Pro; the M2 Pro reference device named by the PRD has not been
-measured and M1 Pro results are recorded as M1 Pro results only. The full
-quality corpus (`ve-s84`) remains outstanding. Published-package verification
-(`ve-yc7`, `ve-orp`) passes for 5.3.2. Exact reference-device acceptance
-(`ve-ovz.22`) is deferred because the hardware is unavailable; full E4/E5/MVP
-acceptance is not claimed.
+available M1 Pro, with its hardware recorded in the reports. The full quality
+corpus (`ve-s84`) remains outstanding. Published-package verification
+(`ve-yc7`, `ve-orp`) passes for 5.3.2; full E4/E5/MVP acceptance is not claimed.

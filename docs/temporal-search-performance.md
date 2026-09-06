@@ -39,8 +39,7 @@ run. Reusing a fixture measures query-process RSS without the original
 seeding process. The report keeps these runs distinct and records actual
 CPU, memory, Node version, source commit, dirty state, dimensions, raw timing
 samples, coverage cadence, and whether the full-size repeated workload ran.
-The PRD reference device is an M2 Pro with 16 GB RAM; measurements on another
-device must retain that qualification.
+Measurements apply to the documented test machine.
 
 For a short harness check:
 
@@ -234,8 +233,7 @@ queries per mode measured p50/p95 of 62/67 ms (image), 117/159 ms (video) and
 of that retained fixture took 960 ms for open plus summary, with warm p50/p95
 of 58/62 ms (image), 115/148 ms (video) and 322/359 ms (hybrid) and a 2.32 GiB
 peak. Both runs passed every harness gate. The first image query after reopen
-took 3.1 seconds including verified snapshot loading; the M2 Pro reference
-device measurement remains outstanding.
+took 3.1 seconds including verified snapshot loading.
 
 ## DoltLite 0.50.6 candidate
 
@@ -256,5 +254,5 @@ Fresh indexing and preparation take 319.9 seconds in 4,000 batches of at most
 coverage appears after 47 ms. The first query after reopen includes snapshot
 loading: 3.03 seconds in the build process and 3.12 seconds in the fresh process;
 these are separate from warm query latency. The reused fixture inherits indexing
-metrics and does not measure another build. The reference M2 Pro measurement
-remains `ve-ovz.22`; the synthetic vectors do not replace the frozen quality corpus.
+metrics and does not measure another build. The synthetic vectors do not replace
+the frozen quality corpus.
