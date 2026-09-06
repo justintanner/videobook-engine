@@ -233,7 +233,9 @@ parallel audit graph.
 Similarity is opt-in. Provide a media embedding provider or use the built-in
 local CLIP configuration. Text similarity is enabled separately.
 
-Local model loaders, including temporal CLIP/CLAP providers, use cached files by default. Downloads require `allowModelDownload: true` during an explicit preparation step. Missing cached models return `OFFLINE`; after preparing the models, reopen providers with downloads disabled or omitted for offline use. Model revisions remain pinned during file discovery and loading.
+Local model loaders, including temporal CLIP/CLAP providers, use cached files by default. Downloads require `allowModelDownload: true` during an explicit preparation step. Missing cached models return `OFFLINE`; after preparing the models, reopen providers with downloads disabled or omitted for offline use. Built-in model revisions remain pinned during file discovery and loading.
+
+Model files are checksum-verified before inference, including cached files and external ONNX weights. Corrupted files fail with `MODEL_UNAVAILABLE`. Built-in caches can be verified offline; custom remote-model caches without integrity metadata require explicit preparation. See [model integrity](docs/model-integrity.md) for verification, cache repair, and supported upstream metadata.
 
 ```ts
 const engine = createEngine({
