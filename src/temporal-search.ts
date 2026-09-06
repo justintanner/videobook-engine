@@ -195,18 +195,28 @@ const INDEX_PHASES: IndexPhase[] = [
 
 export function createTemporalSearchApi(context: EngineContext) {
   const providers = new Map<string, TemporalSearchProvider>();
+  const registrations = new Map<string, ReturnType<typeof guardSearchProvider<TemporalSearchProvider>>>();
   return {
     providers: {
       register: (provider: TemporalSearchProvider, consent: SearchProviderConsent = {}): void => {
         const id = requiredText(provider.manifestId, "Provider manifest ID");
+        const existing = registrations.get(id);
+        if (existing?.matches(provider, consent)) {
+          existing.validate();
+          return;
+        }
         let registered = false;
         const guarded = guardSearchProvider(provider, consent, (): boolean => !registered || providers.get(id) === guarded.provider);
         guarded.validate();
         providers.set(id, guarded.provider);
+        registrations.set(id, guarded);
         registered = true;
       },
       list: (): string[] => [...providers.keys()].sort(),
-      unregister: (manifestId: string): boolean => providers.delete(manifestId),
+      unregister: (manifestId: string): boolean => {
+        registrations.delete(manifestId);
+        return providers.delete(manifestId);
+      },
     },
     manifests: {
       register: (manifest: IndexManifest): Result<IndexManifest, EngineError> =>

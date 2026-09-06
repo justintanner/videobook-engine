@@ -28,7 +28,7 @@ Authorization is checked before every `prepare` and embedding invocation, includ
 engine.temporalSearch.providers.unregister(provider.manifestId);
 ```
 
-Removal or successful replacement revokes future calls through the old registration, including the embedding stage of a query currently awaiting preparation. It cannot recall content already delivered to a running provider. Registrations and grants belong to one Engine instance and are not persisted in semantic data, history, or action logs. Reopening an Engine requires registration again.
+Registering the same provider with unchanged capabilities and grants is idempotent, so repeated registration does not interrupt overlapping searches. Removal or successful replacement revokes future calls through the old registration, including the embedding stage of a query currently awaiting preparation. It cannot recall content already delivered to a running provider. Registrations and grants belong to one Engine instance and are not persisted in semantic data, history, or action logs. Reopening an Engine requires registration again.
 
 ## Compatibility similarity API
 

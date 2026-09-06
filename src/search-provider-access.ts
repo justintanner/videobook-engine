@@ -9,7 +9,7 @@ export function guardSearchProvider<T extends NetworkProvider>(
   source: T,
   consent: SearchProviderConsent = {},
   isActive: () => boolean = () => true,
-): { provider: T; validate: () => void } {
+): { provider: T; validate: () => void; matches: (candidate: T, grant: SearchProviderConsent) => boolean } {
   const downloads = source.networkAccess?.modelDownloads;
   const inference = source.networkAccess?.inference;
   const allowDownloads = consent.modelDownloads === true;
@@ -39,5 +39,12 @@ export function guardSearchProvider<T extends NetworkProvider>(
       },
     });
   }
-  return { provider, validate };
+  return {
+    provider, validate,
+    matches: (candidate, grant) => candidate === source
+      && candidate.networkAccess?.modelDownloads === downloads
+      && candidate.networkAccess?.inference === inference
+      && (grant.modelDownloads === true) === allowDownloads
+      && (grant.inference === true) === allowInference,
+  };
 }

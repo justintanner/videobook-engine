@@ -111,7 +111,7 @@ describe("application-owned search provider consent", () => {
     expect(requests).toHaveLength(2);
   });
 
-  it.each(["declaration", "unregister", "replace"])("rechecks authorization after asynchronous preparation: %s", async (change) => {
+  it.each(["declaration", "unregister", "replace", "same"])("rechecks authorization after asynchronous preparation: %s", async (change) => {
     const target = engine();
     await indexed(target);
     const networkAccess = { modelDownloads: false, inference: false };
@@ -119,8 +119,10 @@ describe("application-owned search provider consent", () => {
     let resume!: () => void;
     const preparing = new Promise<void>((resolve) => { started = resolve; });
     const continuation = new Promise<void>((resolve) => { resume = resolve; });
+    let embedded = false;
     const provider = {
       ...remote(networkAccess),
+      async embedText() { embedded = true; return new Float32Array([1, 0, 0]); },
       async prepare() { started(); await continuation; },
     };
     target.temporalSearch.providers.register(provider);
@@ -128,9 +130,13 @@ describe("application-owned search provider consent", () => {
     await preparing;
     if (change === "declaration") networkAccess.inference = true;
     else if (change === "unregister") target.temporalSearch.providers.unregister(manifest.manifestId);
+    else if (change === "same") target.temporalSearch.providers.register(provider);
     else target.temporalSearch.providers.register({ ...provider, async prepare() {} });
     resume();
-    expect(await pending).toMatchObject({ ok: false, error: { code: change === "declaration" ? "INVALID_INPUT" : "OFFLINE" } });
+    expect(await pending).toMatchObject(change === "same"
+      ? { ok: true }
+      : { ok: false, error: { code: change === "declaration" ? "INVALID_INPUT" : "OFFLINE" } });
+    expect(embedded).toBe(change === "same");
     expect(requests).toEqual([]);
   });
 
