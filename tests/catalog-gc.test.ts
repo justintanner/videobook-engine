@@ -140,7 +140,7 @@ describe("catalog dolt_gc", () => {
 
   it(
     "keeps a churned catalog size-bounded and reopening under 200 ms",
-    { timeout: 60_000 },
+    { timeout: 180_000 },
     async () => {
       const { engine, dataDir, root } = await setup();
       churnRuntimeJobs(engine);

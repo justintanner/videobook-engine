@@ -64,3 +64,20 @@ all 50 repeats were identical, all 50 commits advanced the head and applied
 5,000 transforms, and every gate passed. Process peak RSS was 2.8 GiB
 including the embedded Dolt database. The PRD reference device is an M2 Pro
 with 16 GB RAM; this run does not replace a reference-device measurement.
+
+## DoltLite 0.50.6 candidate
+
+Engine `c4f1d89` (5.3.2) was measured from a clean committed tree on the same
+M1 Pro, 16 GB RAM, Node 24.10.0. The
+[complete report](../benchmarks/results/edit-100x1000-doltlite-0506.json)
+records 50 independent 100-operation transactions over 1,000 clips:
+
+| Measurement | Samples | p50 | p95 | Max |
+| --- | ---: | ---: | ---: | ---: |
+| Preview | 50 | 105 ms | 114 ms | 118 ms |
+| Repeated preview | 50 | 105 ms | 111 ms | 115 ms |
+| Commit | 50 | 299 ms | 331 ms | 348 ms |
+
+All mutation, determinism, revision, and applied-transform gates pass. Peak
+process RSS is 1.54 GiB. These M1 Pro results retain the M2 Pro reference-device
+qualification; `ve-ovz.22` remains outstanding.

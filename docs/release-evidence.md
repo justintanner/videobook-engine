@@ -1,14 +1,52 @@
 # MVP release evidence
 
 Audit date: September 6, 2026 (Asia/Bangkok). Functional baseline: engine
-`8b235f2` plus the NFR measurement working tree, consumer `fc751e79`
-(batch cadence, readiness, range scoping and hostile-content regressions).
+`c4f1d89` (5.3.2, DoltLite 0.50.6), consumer `b4e369b5`.
 Performance artifacts retain their original revision and hardware
 qualifications.
 This is an assessment of the requirements in
 `docs/mvp-prd.md`, not a release approval. E4, E5 and the MVP remain incomplete.
 Beads contains the work assignments and current status; this report records
 the evidence and its limits at these revisions.
+
+## Current patch candidate
+
+Engine `c4f1d89` adopts DoltLite 0.50.6. Both default and all-table staging
+probes now pass on the real 12-table fixture, and URL bootstrap preserves the
+complete catalog. Catalogs seeded with the previous engine's 0.11.37 and the
+consumer's 0.11.51 reopen with identical committed head, history, table counts,
+semantic projections, contents, and runtime settings; restore and new writes
+remain durable after another reopen.
+
+Native merge still rejects clean catalogs containing ignored runtime tables.
+`scripts/dolt-ignored-merge-probe.cjs` reproduces this even without secondary
+indexes; its semantic-only control succeeds. Production retains the projection
+merge and its existing policies. `ve-wsu` remains blocked on the native merge
+limitation; the staging and URL-bootstrap fixes do not close it.
+
+The engine passes 352 default tests, typecheck, dead-code checks, build, and
+clean packed README/reopen/media checks, including cached CLIP/CLAP image,
+audio, and text inference. The package has one Sharp resolution and no
+production audit findings. Consumer `b4e369b5` passes 3,213 tests across 375
+files, lint, all four test typechecks, dead-code checks, and client/server builds.
+Its explicit cached-model, readiness, bounded-batch/resume, and reference-range
+run passes all 24 cases. Both isolated worktree and exact committed-source
+(`b4e369b5`) clean installs pass native Sharp,
+MCP create/list, client delivery, and graceful shutdown without a sibling engine
+checkout. The consumer corpus validator now rejects unverified rights metadata,
+non-finite durations/counts, and fractional counts; its runner is typechecked
+against the current book identity API. These synthetic manifest checks do not
+supply a quality corpus.
+
+The catalog-GC churn case allows 180 seconds for its 2,000 synchronous job
+write/dequeue/heartbeat iterations on shared CI runners. Its 200 ms reopen and
+16 MiB catalog-size assertions are unchanged. The focused seven-case suite
+passes locally; the timeout change addresses the 84-second fixture that
+exceeded the previous 60-second watchdog on Node 22.
+
+The candidate is a patch within the existing 5.x series. No 2.0.0 release or
+major bump is planned. Registry publication, frozen-corpus quality, and the
+M2 Pro reference-device run remain outstanding.
 
 ## Performance and quality
 
@@ -19,18 +57,18 @@ reference-device measurements are tracked in `ve-ovz.22`.
 
 | Requirement | Evidence inspected | Assessment and follow-up |
 | --- | --- | --- |
-| VE-NFR-001: 1,000-artifact open and semantic summary <2 s | Current-source runs on engine `8b235f2`: 206 ms same-process after a fresh 1,000-artifact/100,000-moment build (`temporal-100k-current-source.json`) and 960 ms in a fresh process reopening the retained fixture (`temporal-100k-current-source-reopen.json`); earlier `temporal-100k-fresh-process.json`: 1.14 s. All on M1 Pro. | Passes on measured hardware for the current source. The M2 Pro reference-device run remains outstanding and is tracked explicitly; M1 Pro results are not equated with it. |
+| VE-NFR-001: 1,000-artifact open and semantic summary <2 s | Clean engine `c4f1d89`: 171 ms same-process after a fresh 1,000-artifact/100,000-moment build and 1,714 ms in a fresh process reopening the retained fixture. Raw reports: `temporal-100k-doltlite-0506.json` and `temporal-100k-doltlite-0506-reopen.json`, both on M1 Pro. | Passes on measured hardware for the current source. The M2 Pro reference-device run remains outstanding and is tracked explicitly; M1 Pro results are not equated with it. |
 | VE-NFR-002: metadata and imported normalized transcript searchable <5 s after semantic commit | Consumer `tests/v2/text-readiness.test.ts` times the real job queue on a real probed video: analysis metadata write to first lexical hit 688 ms (OCR text 689 ms), transcript import to first quoted speech hit 314 ms, both under the 5 s gate with model downloads disabled and no cached model. | Passes end to end through the application's actual enqueue, poll, index and lexical query path on M1 Pro. |
 | VE-NFR-003: searchable coverage at least every 60 source seconds, resume last committed batch | Synthetic benchmark: 4,000 batches of at most 30 source seconds, every cursor checked, first coverage 45 ms. The consumer's fixed four-unit deep batches could exceed 60 s on videos longer than about seven minutes because frame sampling caps at 30 frames; `commitDeepBatches` now bounds each CLIP/CLAP batch by covered source seconds. Consumer `tests/v2/semantic-index-cadence.test.ts` verifies the bound and durable-cursor resume through the engine, and the explicit real-model case runs the actual CLIP pipeline on a real ten-minute video: 15 two-frame batches of at most 41.4 s, interruption after two batches, resume from cursor 4 without re-embedding committed frames, and retrieval of the source. | Passes for the actual model pipeline. A single sampled frame whose own span exceeds 60 s (videos over about 29 minutes) is committed alone; frame density itself is a quality question for the frozen corpus, not a cadence failure. |
-| VE-NFR-004: 100k moments, warm p50 <500 ms, p95 <1.5 s including hybrid | Current-source fresh build on `8b235f2`: 50 warm reads per mode, p50/p95 image 62/67 ms, video 117/159 ms, hybrid 333/391 ms; fresh-process reopen: image 58/62 ms, video 115/148 ms, hybrid 322/359 ms. | Passes the full synthetic workload on the current source, M1 Pro. Reference-device run outstanding and tracked explicitly. |
-| VE-NFR-005: 100-operation preview on 1,000 clips, p95 <250 ms, no mutation | `npm run benchmark:edits` (`docs/edit-performance.md`): 50 independent previews of fresh 100-operation batches against 1,000 clips, p50 106 ms, p95 110 ms, max 113 ms; head revision, every table row count and the canonical sequence projection unchanged after each preview. Recorded in `benchmarks/results/edit-100x1000-distribution.json`. | Passes with strict gates on M1 Pro. `tests/edit-transactions.test.ts` keeps its single-sample 500 ms tripwire for shared CI runners. |
-| VE-NFR-006: same commit batch, p95 <1 s | Same run: 50 independent commits, p50 300 ms, p95 334 ms, max 335 ms; every commit advanced the head and applied all 100 transforms; reopened catalog exposes the last revision. | Passes on M1 Pro; no derived jobs run inside `edits.commit`. |
-| VE-NFR-007: 100k query/index structures <4 GB RSS beyond loaded model | Current-source fresh build and query process peak 2.43 GiB including fixture construction; fresh-process reopen and 150 queries 2.32 GiB; no model loaded. | Passes on the current source, M1 Pro. Reference-device run outstanding. |
+| VE-NFR-004: 100k moments, warm p50 <500 ms, p95 <1.5 s including hybrid | Clean `c4f1d89` fresh build: 50 warm reads per mode, p50/p95 image 59/66 ms, video 113/165 ms, hybrid 332/411 ms; fresh-process reopen: image 60/73 ms, video 117/179 ms, hybrid 310/388 ms. | Passes the full synthetic workload on the current source, M1 Pro. Reference-device run outstanding and tracked explicitly. |
+| VE-NFR-005: 100-operation preview on 1,000 clips, p95 <250 ms, no mutation | Clean `c4f1d89`, `npm run benchmark:edits` (`docs/edit-performance.md`): 50 independent previews of fresh 100-operation batches against 1,000 clips, p50 105 ms, p95 114 ms, max 118 ms; head revision, every table row count and the canonical sequence projection unchanged after each preview. Recorded in `benchmarks/results/edit-100x1000-doltlite-0506.json`. | Passes with strict gates on M1 Pro. `tests/edit-transactions.test.ts` keeps its single-sample 500 ms tripwire for shared CI runners. |
+| VE-NFR-006: same commit batch, p95 <1 s | Same run: 50 independent commits, p50 299 ms, p95 331 ms, max 348 ms; every commit advanced the head and applied all 100 transforms; reopened catalog exposes the last revision. | Passes on M1 Pro; no derived jobs run inside `edits.commit`. |
+| VE-NFR-007: 100k query/index structures <4 GB RSS beyond loaded model | Clean `c4f1d89` fresh build and query process peak 3.03 GiB including fixture construction; fresh-process reopen and 150 queries 2.08 GiB; no model loaded. | Passes on the current source, M1 Pro. Reference-device run outstanding. |
 | VE-NFR-008: forced termination at every SQL/outbox/Dolt boundary | Baseline edit tests only threw exceptions and closed normally. Subsequent `tests/semantic-crash.test.ts` covers real SIGKILL at each semantic/outbox/table-staging/Dolt boundary for a multi-table edit and provenance operation, including interrupted recovery and an intervening write. | Kill matrix exposed and corrected duplicate provenance replay. See `docs/semantic-durability.md` for scope and invariants; tracked in `ve-ovz.10`. |
 | VE-NFR-009: stable search ordering, identical canonical previews/hashes | Current-source temporal runs repeat every first query per mode against the unchanged generation and require identical hits; the edit distribution run previews each of 50 large batches twice and requires identical canonical operations, ranges, write sets, diffs and all hashes. | Passes for the exact 100-operation/1,000-clip workload and the 100k search workload. |
 | VE-NFR-010: every application frozen-corpus quality threshold | E4 evaluator and small real-model fixtures exist | Full rights-cleared frozen corpus and judged ranges absent. `ve-s84` remains incomplete; synthetic scale data cannot replace it. |
 | VE-NFR-011: with required models cached, search/index/edit/history initiates no network | Per-Engine local-media scopes; nine engine regressions and ten installed-app workflow cases. A real cached CLIP queue index/reference/library/temporal-search/edit/history workflow makes zero model or B2 HTTP requests. Missing-media cases also stay offline, including migration frame preparation. | Media hydration policy and these complete built-in workflows are verified in `ve-ovz.19`. Arbitrary callback networking and explicitly consented remote providers are separate boundaries; input scoping and the remaining owned-service privacy checks are complete in `ve-ovz.14`. |
-| VE-NFR-012: bounded scale degradation, no corruption/unbounded React payloads/full-vector scan each query | Native ANN candidate retrieval, bounded video starts/windows, stable pagination, cache deletion/replacement regressions; current-source 100k runs index in 4,000 bounded batches (333 s including preparation) and page at most 100 hits per query; consumer deep batches are bounded by source seconds. | Search architecture and the measured 100k workload pass on the current source. Larger-than-100k books degrade through longer indexing only by design; no measurement beyond 100k moments exists. |
+| VE-NFR-012: bounded scale degradation, no corruption/unbounded React payloads/full-vector scan each query | Native ANN candidate retrieval, bounded video starts/windows, stable pagination, cache deletion/replacement regressions; clean `c4f1d89` indexes 100k moments in 4,000 bounded batches (320 s including preparation) and pages at most 100 hits per query; consumer deep batches are bounded by source seconds. | Search architecture and the measured 100k workload pass on the current source. Larger-than-100k books degrade through longer indexing only by design; no measurement beyond 100k moments exists. |
 
 Detailed benchmark provenance and raw samples are linked from
 `docs/temporal-search-performance.md`. Reused fixtures inherit original
@@ -192,8 +230,10 @@ Both worktree and exact committed-source (`80ce4f58`) clean installs passed
 native Sharp, MCP create/list, client delivery and graceful shutdown without a
 sibling engine checkout.
 
-Consumer `fc751e79` vendors `videobook-engine-5.3.1-dffaf21.tgz`, SHA-256
-`cb71bf39f3a088058b44273e402569c0a7c90bbb8abb8866f4118979d5ddfbb8`.
+Consumer `b4e369b5` vendors `videobook-engine-5.3.2-c4f1d89.tgz`, SHA-256
+`79f42f492fa569d13993f433da44a3b1ee11a4536fb54246d825d61978284c54`.
+Its provenance file records the exact engine revision; application and engine
+resolve one DoltLite 0.50.6 and one Sharp 0.35.4. The application remains 0.1.0.
 Local package smoke and
 vendored-consumer verification do not prove installation of a published
 registry package: `ve-yc7` and `ve-orp` retain that release gate. Registry

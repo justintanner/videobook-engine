@@ -236,3 +236,25 @@ of 58/62 ms (image), 115/148 ms (video) and 322/359 ms (hybrid) and a 2.32 GiB
 peak. Both runs passed every harness gate. The first image query after reopen
 took 3.1 seconds including verified snapshot loading; the M2 Pro reference
 device measurement remains outstanding.
+
+## DoltLite 0.50.6 candidate
+
+Engine `c4f1d89` (5.3.2) was measured from a clean committed tree on an Apple
+M1 Pro with 16 GB RAM and Node 24.10.0. The
+[fresh build](../benchmarks/results/temporal-100k-doltlite-0506.json) and
+[fresh-process reopen](../benchmarks/results/temporal-100k-doltlite-0506-reopen.json)
+retain all samples for 100,000 moments, 1,000 artifacts, 512 dimensions, and
+50 warm queries per mode. Every harness gate passes.
+
+| Run | Open + summary | Image p50 / p95 | Video p50 / p95 | Hybrid p50 / p95 | Peak RSS |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Fresh build, same-process reopen | 171 ms | 59 / 66 ms | 113 / 165 ms | 332 / 411 ms | 3.03 GiB |
+| Fresh process, retained fixture | 1,714 ms | 60 / 73 ms | 117 / 179 ms | 310 / 388 ms | 2.08 GiB |
+
+Fresh indexing and preparation take 319.9 seconds in 4,000 batches of at most
+30 source seconds. All durable resume cursors are verified, and first searchable
+coverage appears after 47 ms. The first query after reopen includes snapshot
+loading: 3.03 seconds in the build process and 3.12 seconds in the fresh process;
+these are separate from warm query latency. The reused fixture inherits indexing
+metrics and does not measure another build. The reference M2 Pro measurement
+remains `ve-ovz.22`; the synthetic vectors do not replace the frozen quality corpus.
