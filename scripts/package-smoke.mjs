@@ -63,6 +63,21 @@ try {
   reopened.temporalSearch.providers.register(provider, { inference: true });
   assert.equal(reopened.temporalSearch.providers.unregister(provider.manifestId), true);
 } finally { reopened.close(); }
+const dispatchedOptions = [];
+const scopedProvider = {
+  networkAccess: { modelDownloads: false, inference: false }, embeddingSpace: "package-scoped-inputs", dimensions: 3,
+  async prepare(options) { dispatchedOptions.push({ ...options }); Object.assign(options, { limit: 0, privateContext: "provider mutation" }); },
+  async embedText(text, options) { dispatchedOptions.push({ ...options }); return [{ startOffset: 0, endOffset: text.length, vector: new Float32Array([1, 0, 0]) }]; },
+};
+const scopedInputs = createEngine({ rootDir: ".scoped-provider-inputs", initialBookName: "scoped", similarity: { text: { provider: scopedProvider } } });
+try {
+  await scopedInputs.ready;
+  const controls = { limit: 1, timeoutMs: 3210, privateContext: "must not reach provider" };
+  const result = await scopedInputs.similarity.findSimilarText("Selected query", controls);
+  assert.equal(result.ok, true);
+  assert.deepEqual(dispatchedOptions, [{ timeoutMs: 3210 }, { timeoutMs: 3210 }]);
+  assert.deepEqual(controls, { limit: 1, timeoutMs: 3210, privateContext: "must not reach provider" });
+} finally { scopedInputs.close(); }
 const missingRevision = createEngine({ rootDir: ".custom-model-missing-revision", initialBookName: "custom", similarity: { modelId: "fixture/custom" } });
 try {
   await missingRevision.ready;

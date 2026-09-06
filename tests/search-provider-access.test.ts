@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import {
   createEngine, LocalClipTemporalProvider, LocalClapTemporalProvider,
   type Engine, type IndexManifest, type SearchProviderNetworkAccess,
-  type SimilarityConfig, type TemporalSearchProvider,
+  type SimilarityConfig, type TemporalSearchProvider, type MediaOperationOptions,
 } from "../src/index.js";
 
 const manifest: IndexManifest = {
@@ -214,4 +214,103 @@ describe("application-owned search provider consent", () => {
     expect(await permitted.similarity.findSimilarText("explicit query")).toMatchObject({ ok: true });
     expect(requests.at(-1)).toEqual({ path: "/inference", body: "explicit query" });
   });
+  it.each([["image", "original.jpg"], ["video", "original.mp4"], ["audio", "original.wav"], ["script", "original.txt"]] as const)(
+    "scopes %s provider dispatch to the selected local file/text and operation controls", async (kind, filename) => {
+      const controller = new AbortController();
+      const receivedSignals: Array<AbortSignal | undefined> = [];
+      const capture = async (phase: string, options?: MediaOperationOptions, source?: string) => {
+        receivedSignals.push(options?.signal);
+        await send(JSON.stringify({ phase, ...(source === undefined ? {} : { source }), options }));
+        Object.assign(options ?? {}, { callerContext: "provider-change", force: false, limit: 0 });
+        return new Float32Array([1, 0, 0]);
+      };
+      const provider = {
+        networkAccess: { modelDownloads: false, inference: true }, dimensions: 3, embeddingSpace: "scoped-input-fixture",
+        async prepare(options?: MediaOperationOptions) { await capture("prepare", options); },
+        async embedImage(path: string, options?: MediaOperationOptions) { return capture("image", options, await readFile(path, "utf8")); },
+        async embedVideo(path: string, options?: MediaOperationOptions) { return { vector: await capture("video", options, await readFile(path, "utf8")), frameCount: 1 }; },
+        async embedAudio(path: string, options?: MediaOperationOptions) { return capture("audio", options, await readFile(path, "utf8")); },
+        async embedText(text: string, options?: MediaOperationOptions) { return [{ startOffset: 0, endOffset: text.length, vector: await capture("text", options, text) }]; },
+      };
+      const providerConsent = { inference: true };
+      const first = engine({ provider, providerConsent, audio: { provider, providerConsent }, text: { provider, providerConsent } });
+      const second = engine();
+      await Promise.all([first.ready, second.ready]);
+      const owned = value(await first.artifacts.create(kind, "Unsent label"));
+      const foreign = value(await second.artifacts.create(kind, "Other book private label"));
+      value(await first.files.write(owned.artifactId, filename, `${kind} selected bytes`));
+      value(await first.files.write(owned.artifactId, "private-sidecar.txt", "Unsent adjacent content"));
+      value(await first.metadata.artifacts.write(owned.artifactId, "original", { secret: "Unsent metadata" }));
+      value(await second.files.write(foreign.artifactId, filename, "Other book secret bytes"));
+      const foreignManifest = value(await second.files.manifest(foreign.artifactId));
+      const foreignHash = foreignManifest.files[0]!.objectHash;
+      const ownManifest = value(await first.files.manifest(owned.artifactId));
+      const ownHash = ownManifest.files.find((file) => file.name === filename)!.objectHash;
+      for (const reference of [foreign.artifactId, foreignHash, join(foreignManifest.path, filename), ownHash, join(ownManifest.path, filename)]) {
+        expect(await first.similarity.index(reference)).toMatchObject({ ok: false, error: { code: "NOT_FOUND" } });
+        expect(await first.similarity.findSimilar(reference)).toMatchObject({ ok: false, error: { code: "NOT_FOUND" } });
+      }
+      expect(requests).toEqual([]);
+      const options = { force: true, signal: controller.signal, timeoutMs: 3_210, callerContext: { secret: "Unsent application context" } };
+      expect(await first.similarity.index(owned.artifactId, options)).toMatchObject({ ok: true });
+      expect(requests.map((request) => JSON.parse(request.body))).toEqual([
+        { phase: "prepare", options: { signal: {}, timeoutMs: 3_210 } },
+        { phase: kind === "script" ? "text" : kind, source: `${kind} selected bytes`, options: { signal: {}, timeoutMs: 3_210 } },
+      ]);
+      expect(receivedSignals).toEqual([controller.signal, controller.signal]);
+      expect(options).toMatchObject({ force: true, callerContext: { secret: "Unsent application context" } });
+      expect(value(await first.files.read(owned.artifactId, "private-sidecar.txt")).toString()).toBe("Unsent adjacent content");
+      expect(value(await second.files.read(foreign.artifactId, filename)).toString()).toBe("Other book secret bytes");
+    },
+  );
+
+  it("does not expose or allow provider mutation of preparation and text-query controls", async () => {
+    const observed: unknown[] = [];
+    const provider = {
+      networkAccess: { modelDownloads: false, inference: true }, dimensions: 3, embeddingSpace: "scoped-text-query",
+      async prepare(options?: MediaOperationOptions) {
+        observed.push({ ...options });
+        await send(JSON.stringify(options));
+        Object.assign(options ?? {}, { limit: 0, kind: "audio", callerContext: "changed" });
+      },
+      async embedText(text: string, options?: MediaOperationOptions) {
+        observed.push({ ...options });
+        return [{ startOffset: 0, endOffset: text.length, vector: await send(JSON.stringify({ text, options })) }];
+      },
+    };
+    const target = engine({ text: { provider, providerConsent: { inference: true } } });
+    await target.ready;
+    const prepare = { kind: "text" as const, timeoutMs: 3_210, callerContext: "private preparation context" };
+    expect(await target.similarity.prepare(prepare)).toMatchObject({ ok: true });
+    expect(observed).toEqual([{ timeoutMs: 3_210 }]);
+    const query = { limit: 1, minScore: 0.5, timeoutMs: 3_210, callerContext: "private query context" };
+    expect(await target.similarity.findSimilarText("Selected query", query)).toMatchObject({ ok: true });
+    expect(observed).toEqual([{ timeoutMs: 3_210 }, { timeoutMs: 3_210 }, { timeoutMs: 3_210 }]);
+    expect(requests.map((request) => JSON.parse(request.body))).toEqual([
+      { timeoutMs: 3_210 }, { timeoutMs: 3_210 }, { text: "Selected query", options: { timeoutMs: 3_210 } },
+    ]);
+    expect(prepare).toEqual({ kind: "text", timeoutMs: 3_210, callerContext: "private preparation context" });
+    expect(query).toEqual({ limit: 1, minScore: 0.5, timeoutMs: 3_210, callerContext: "private query context" });
+  });
+
+  it("keeps temporal references and candidate filters book-scoped without sending them to providers", async () => {
+    const first = engine();
+    const second = engine();
+    const ownId = await indexed(first);
+    const foreignId = await indexed(second);
+    first.temporalSearch.providers.register(remote({ modelDownloads: false, inference: true }), { inference: true });
+    const denied = await first.temporalSearch.query({ reference: { kind: "image", artifact: foreignId }, modalities: ["visual"] });
+    expect(denied).toMatchObject({ ok: false, error: { code: "NOT_FOUND" } });
+    expect(requests).toEqual([]);
+    const prepared = { kind: "image" as const, embeddingSpace: manifest.embeddingSpace, vector: [1, 0, 0], callerContext: "Unsent reference context" };
+    const empty = value(await first.temporalSearch.queryPrepared({ sourceArtifactIds: [foreignId], modalities: ["visual"] }, prepared));
+    expect(empty.hits).toEqual([]);
+    const own = value(await first.temporalSearch.queryPrepared({ sourceArtifactIds: [ownId], modalities: ["visual"] }, prepared));
+    expect(own.hits[0]?.artifactId).toBe(ownId);
+    expect(requests).toEqual([]);
+    const query = { text: "Explicit text", modalities: ["visual" as const], sourceArtifactIds: [ownId], callerContext: "Unsent query context" };
+    expect(value(await first.temporalSearch.query(query)).hits[0]?.artifactId).toBe(ownId);
+    expect(requests).toEqual([{ path: "/prepare", body: "" }, { path: "/inference", body: "Explicit text" }]);
+  });
+
 });

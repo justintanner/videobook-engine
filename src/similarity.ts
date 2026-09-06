@@ -45,6 +45,13 @@ import { EngineFault } from "./store.js";
 import { isolatedModelCall } from "./isolated-models.js";
 import type { ModelWorkerConfiguration } from "./model-worker-protocol.js";
 
+function providerOperationOptions(options: MediaOperationOptions): MediaOperationOptions {
+  return {
+    ...(options.signal === undefined ? {} : { signal: options.signal }),
+    ...(options.timeoutMs === undefined ? {} : { timeoutMs: options.timeoutMs }),
+  };
+}
+
 const DEFAULT_DIMENSIONS = 512;
 
 const DEFAULT_AUDIO_DIMENSIONS = 512;
@@ -256,12 +263,12 @@ class LocalSimilarityApi implements SimilarityApi {
       for (const kind of kinds) {
         if (kind === "text") {
           const provider = this.requireTextProvider();
-          await provider.prepare(options);
+          await provider.prepare(providerOperationOptions(options));
           spaces.text = provider.embeddingSpace;
         } else {
           const provider = this.providerFor(kind);
           if (!preparedMedia.has(provider)) {
-            await provider.prepare(options);
+            await provider.prepare(providerOperationOptions(options));
             preparedMedia.add(provider);
           }
           spaces[kind] = provider.embeddingSpace;
@@ -959,22 +966,22 @@ class LocalSimilarityApi implements SimilarityApi {
     );
     if (source.kind === "audio") {
       const provider = this.requireAudioProvider();
-      await provider.prepare(options);
+      await provider.prepare(providerOperationOptions(options));
       return {
-        vector: normalized(await provider.embedAudio(localPath, options)),
+        vector: normalized(await provider.embedAudio(localPath, providerOperationOptions(options))),
         frameCount: null,
         reused: false,
       };
     }
-    await this.provider.prepare(options);
+    await this.provider.prepare(providerOperationOptions(options));
     if (source.kind === "image") {
       return {
-        vector: normalized(await this.provider.embedImage(localPath, options)),
+        vector: normalized(await this.provider.embedImage(localPath, providerOperationOptions(options))),
         frameCount: null,
         reused: false,
       };
     }
-    const video = await this.provider.embedVideo(localPath, options);
+    const video = await this.provider.embedVideo(localPath, providerOperationOptions(options));
     return {
       vector: normalized(video.vector),
       frameCount: video.frameCount,
@@ -984,8 +991,8 @@ class LocalSimilarityApi implements SimilarityApi {
 
   private async embedText(text: string, options: MediaOperationOptions): Promise<SimilarityTextChunk[]> {
     const provider = this.requireTextProvider();
-    await provider.prepare(options);
-    const chunks = await provider.embedText(text, options);
+    await provider.prepare(providerOperationOptions(options));
+    const chunks = await provider.embedText(text, providerOperationOptions(options));
     checkMediaCancellation(options);
     this.validateTextChunks(text, chunks, provider.dimensions);
     const maxChunks = checkedTextMaxChunks(this.context.config.similarity?.text);
