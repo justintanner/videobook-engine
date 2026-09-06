@@ -59,15 +59,19 @@ passes locally; the timeout change addresses the 84-second fixture that
 exceeded the previous 60-second watchdog on Node 22.
 
 The candidate is a patch within the existing 5.x series. No 2.0.0 release or
-major bump is planned. Registry publication, frozen-corpus quality, and the
-M2 Pro reference-device run remain outstanding.
+major bump is planned. Registry publication and frozen-corpus quality remain
+outstanding. The M2 Pro reference-device run is deferred because the user
+confirmed that the hardware is unavailable.
 
 ## Performance and quality
 
 The available machine reports Apple M1 Pro, 10 logical CPUs and 16 GiB RAM.
 The PRD specifies M2 Pro, 16 GB RAM and local SSD. Existing measurements retain
 their actual hardware qualification; none is an M2 Pro acceptance run. The
-reference-device measurements are tracked in `ve-ovz.22`.
+reference-device measurements are deferred in `ve-ovz.22` following the user's
+September 6 confirmation that no M2 Pro is available. The passing M1 Pro results
+remain the available benchmark evidence. This exact-device check does not
+block publication of the already validated 5.3.2 patch.
 
 | Requirement | Evidence inspected | Assessment and follow-up |
 | --- | --- | --- |
@@ -251,8 +255,14 @@ resolve one DoltLite 0.50.6 and one Sharp 0.35.4. The application remains 0.1.0.
 Local package smoke and
 vendored-consumer verification do not prove installation of a published
 registry package: `ve-yc7` and `ve-orp` retain that release gate. Registry
-authentication was rechecked on September 6, 2026 and `npm whoami` returned
-E401. The obsolete 0.1.0 and 2.0.0 publication tickets are superseded by
+authentication was rechecked on September 6, 2026 using the environment's
+`NPM_TOKEN` explicitly through an isolated temporary npm configuration.
+Both npm authentication and a direct registry authentication request returned
+401. Publishing the packed 5.3.2 candidate from `4b85f01` then failed with
+`E404` on the registry PUT, reporting that the package was unavailable or the
+token lacked access. No package version or release tag was created. The
+temporary authentication configuration was removed. The obsolete 0.1.0 and
+2.0.0 publication tickets are superseded by
 `ve-yc7`; they are not additional release targets.
 
 Subsequent checksum hardening adds verified file resolution for all built-in
@@ -285,5 +295,6 @@ cadence for VE-NFR-003 in this document, `docs/edit-performance.md` and
 `docs/temporal-search-performance.md`. Every measured gate passes on the
 available M1 Pro; the M2 Pro reference device named by the PRD has not been
 measured and M1 Pro results are recorded as M1 Pro results only. The full
-quality corpus (`ve-s84`), reference-device runs (`ve-ovz.22`), and published-package
-verification (`ve-yc7`, `ve-orp`) prevent closing E4/E5/MVP.
+quality corpus (`ve-s84`) and published-package verification (`ve-yc7`, `ve-orp`)
+remain outstanding. Exact reference-device acceptance (`ve-ovz.22`) is deferred
+because the hardware is unavailable; full E4/E5/MVP acceptance is not claimed.
