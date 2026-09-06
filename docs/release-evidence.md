@@ -70,10 +70,30 @@ exercise the actual B2 adapter and explicit retrieval retry; the additional
 cached-model case covers search, edits, restoration and explicit backup.
 
 This completes `ve-ovz.19` / `vb-ld4o`, not the complete security/privacy audit.
-The library's missing visual coverage is separately tracked in `vb-j3qy`; these
-changes do not backfill or repair production indexes. Cold-index preparation in
-the media picker was fixed separately in consumer `185ec77c` (`vb-ackl`), with a
-real 1,200-vector queue/poll/retry and persisted-index regression.
+Cold-index preparation in the media picker was fixed separately in consumer
+`185ec77c` (`vb-ackl`), with a real 1,200-vector queue/poll/retry and
+persisted-index regression.
+
+Consumer `64da847a` completes `vb-j3qy`: completed image-subject edits, Library
+copies and Duplicate Asset schedule detached indexing jobs deduplicated by
+artifact and source hash. Semantic indexing and frame preparation select stream
+records matching the current file mapping, rather than an older stream for the
+same path. The Library reports missing current-source CLIP coverage and offers
+an explicit repair action; its MCP endpoint returns queued per-book jobs and the
+client polls their status. Repair skips covered media, prepares missing video
+frames, continues past per-asset failures and preserves source readiness.
+
+Validation includes 3,176 default tests across 371 files, explicit cached-model
+repair of zero-vector and stale-stream cases, corrupt-media continuation and
+idempotence, and a real Chromium Library repair/poll/Similar-search flow. Lint,
+test types, client/server builds, dead-code checks, generated command references
+and isolated clean installation pass. The original failing edited image now
+ranks itself first with no book errors. A saved-library repair resolved all 74
+current-source coverage gaps; the final scan reports zero missing visual
+indexes. One empty copied video was recovered from its exact preceding
+nonempty artifact revision after SHA-256, dimensions and duration verification
+(`vb-v9nq`), then indexed and retrieved successfully. These fixture and local
+library results do not replace the frozen-corpus or reference-hardware gates.
 
 ## Migration, consumer and packaging
 
