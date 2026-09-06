@@ -43,9 +43,15 @@ include snapshot loading and are not warm-query latency or cold OS-cache tests.
 | Argument arrays, bounded outputs, timeouts, cancellation and scoped workspaces; no untrusted shell | Shared media-process limits and isolated model pool provide deadlines, process-group cancellation and owned scratch cleanup. Consumer actual queue tests cancel stalled model requests and preserve source bytes/status. | Engine isolation and consumer signal forwarding are implemented and tested. See `docs/media-limits.md` and `docs/model-isolation.md`. |
 | Malformed codec, oversized image, decompression bomb and model OOM fail job without book corruption | Tests reject malformed/oversized/high-expansion inputs; an actual heap-exhausted worker leaves a live engine writable and reopenable and permits fresh-worker retry. Consumer cached-model queue tests verify malformed-image failure and corrected retry. | Process isolation, typed job failures and consumer integration are verified. The worker heap cap is not an OS-wide memory limit. |
 | Excerpts/explanations treated as user content | `MomentSearch.tsx` interpolates excerpt text and explanation title through React | Local inspection supports escaping on this surface; cross-surface hostile-content tests remain in `ve-ovz.14`. |
-| Logs contain IDs/hashes/sizes/phases/codes rather than secrets/full content | Consumer logger accepts arbitrary arguments; `tools/log-wrapper.ts` includes first 300 characters of tool error text | Truncation is not redaction. Review and regression coverage required in `ve-ovz.14`. |
+| Logs contain IDs/hashes/sizes/phases/codes rather than secrets/full content | Consumer `7cd32e85` routes owned runtime console and persistent diagnostics through fixed events and validated UUIDs, queue IDs, counts, enums and error codes. Tool/job names require trusted registration. Tests cover private returned/thrown errors, real queue/provider failures, book reopening, explicit chat history and a real subprocess with multi-megabyte private output. | `vb-wtu9` is complete: 3,160 default tests, 19 model/queue tests including all 3 real cached-model cases, media rollback E2E, lint/types/knip/builds and isolated clean install pass. Full caller/job error details and explicit chat content remain available; old diagnostic files are not rewritten. Broader offline/privacy invariants remain `ve-ovz.14`. |
 | Content hashes are identity, not authorization | Book-scoped engines exist; CAS can retrieve by hash through configured remote storage | Cross-book/API authorization cannot be inferred from hash identity. Complete access-path audit/tests in `ve-ovz.14`. |
 | Remote publication/backup explicit, never triggered by local search | Inspected semantic indexing uses scoped engine reads, not publish/backup calls | Direct inspection is narrower than a complete operation-level invariant. Counter-based verification and missing-local-object behavior in `ve-ovz.14`. |
+
+The remote-content audit also confirmed that `ObjectStore.ensureLocal` accepts
+downloaded bytes without comparing their SHA-256 to the requested object hash.
+A disposable `ContentStore` reproduction returned incorrect bytes successfully;
+remote hydration integrity remains open in `ve-ovz.18`. This is separate from
+the verified model-download resolver and from cross-book authorization.
 
 ## Migration, consumer and packaging
 
