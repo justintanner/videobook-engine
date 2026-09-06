@@ -1,7 +1,7 @@
 # MVP release evidence
 
 Audit date: September 6, 2026 (Asia/Bangkok). Functional baseline: engine
-`07f0515`, consumer `20db91d1`. Performance artifacts retain their original
+`e328f5e` (runtime `bf952c5`), consumer `96892e26`. Performance artifacts retain their original
 revision and hardware qualifications.
 This is an assessment of the requirements in
 `docs/mvp-prd.md`, not a release approval. E4, E5 and the MVP remain incomplete.
@@ -26,7 +26,7 @@ their actual hardware qualification; none is an M2 Pro acceptance run.
 | VE-NFR-008: forced termination at every SQL/outbox/Dolt boundary | Baseline edit tests only threw exceptions and closed normally. Subsequent `tests/semantic-crash.test.ts` covers real SIGKILL at each semantic/outbox/table-staging/Dolt boundary for a multi-table edit and provenance operation, including interrupted recovery and an intervening write. | Kill matrix exposed and corrected duplicate provenance replay. See `docs/semantic-durability.md` for scope and invariants; tracked in `ve-ovz.10`. |
 | VE-NFR-009: stable search ordering, identical canonical previews/hashes | Temporal benchmark repeats queries against unchanged generations; temporal/edit regressions assert stable ordering and equivalent previews | Functional evidence present; include exact repeated large edit workload in `ve-ovz.9`. |
 | VE-NFR-010: every application frozen-corpus quality threshold | E4 evaluator and small real-model fixtures exist | Full rights-cleared frozen corpus and judged ranges absent. `ve-s84` remains incomplete; synthetic scale data cannot replace it. |
-| VE-NFR-011: cached search/index/edit/history initiates no network | Model policy HTTP counters and real cached CLIP/CLAP inference pass | Does not cover every complete operation or remote-backed missing media. Injected-provider dispatch has explicit consent gates and HTTP tests; whole-application verification remains `ve-ovz.14`. |
+| VE-NFR-011: with required models cached, search/index/edit/history initiates no network | Per-Engine local-media scopes; nine engine regressions and ten installed-app workflow cases. A real cached CLIP queue index/reference/library/temporal-search/edit/history workflow makes zero model or B2 HTTP requests. Missing-media cases also stay offline, including migration frame preparation. | Media hydration policy and these complete built-in workflows are verified in `ve-ovz.19`. Arbitrary callback networking and explicitly consented remote providers are separate boundaries; broader input-scoping/privacy verification remains `ve-ovz.14`. |
 | VE-NFR-012: bounded scale degradation, no corruption/unbounded React payloads/full-vector scan each query | Native ANN candidate retrieval, bounded video starts/windows, stable pagination, cache deletion/replacement regressions; 100k benchmark | Search architecture and measured workload supported. End-to-end larger-book/payload evidence remains part of `ve-ovz.9`; malformed-input and recovery cases are separate. |
 
 Detailed benchmark provenance and raw samples are linked from
@@ -45,7 +45,7 @@ include snapshot loading and are not warm-query latency or cold OS-cache tests.
 | Excerpts/explanations treated as user content | `MomentSearch.tsx` interpolates excerpt text and explanation title through React | Local inspection supports escaping on this surface; cross-surface hostile-content tests remain in `ve-ovz.14`. |
 | Logs contain IDs/hashes/sizes/phases/codes rather than secrets/full content | Consumer `7cd32e85` routes owned runtime console and persistent diagnostics through fixed events and validated UUIDs, queue IDs, counts, enums and error codes. Tool/job names require trusted registration. Tests cover private returned/thrown errors, real queue/provider failures, book reopening, explicit chat history and a real subprocess with multi-megabyte private output. | `vb-wtu9` is complete: 3,160 default tests, 19 model/queue tests including all 3 real cached-model cases, media rollback E2E, lint/types/knip/builds and isolated clean install pass. Full caller/job error details and explicit chat content remain available; old diagnostic files are not rewritten. Broader offline/privacy invariants remain `ve-ovz.14`. |
 | Content hashes are identity, not authorization | Book-scoped engines exist; CAS can retrieve by hash through configured remote storage | Cross-book/API authorization cannot be inferred from hash identity. Complete access-path audit/tests in `ve-ovz.14`. |
-| Remote publication/backup explicit, never triggered by local search | Inspected semantic indexing uses scoped engine reads, not publish/backup calls | Direct inspection is narrower than a complete operation-level invariant. Counter-based verification and missing-local-object behavior in `ve-ovz.14`. |
+| Remote publication/backup explicit, never triggered by local search | Actual application B2 HTTP counters stay empty through cached indexing, reference preparation, search, edits and history. Explicit backup then performs HEAD/PUT/verification. A configured local catalog backup target stays absent through indexing/search/history and is written only by explicit backup. | The tested object-store and catalog publication boundaries are verified. This is not an authorization audit of every transport or remote service. Cross-book/API access and remaining privacy checks stay in `ve-ovz.14`. |
 
 Remote hydration integrity is verified in engine `07f0515` and consumer
 `20db91d1` (`ve-ovz.18` / `vb-fuib`). Eight engine HTTP/public-API cases cover
@@ -58,6 +58,23 @@ valid retry and cached reads after the fixture server shuts down. Existing local
 objects are not rehashed on every read. This evidence does not establish
 cross-book authorization or the complete offline workflow.
 
+Engine `bf952c5` adds `withLocalMedia`: asynchronous per-book scopes block implicit
+CAS downloads with typed `MEDIA_MISSING`, while concurrent explicit reads and
+other books remain independent. Compatibility and temporal search/indexing,
+edits and history use the policy automatically. Restores succeed for committed
+metadata when unavailable bytes prevent workspace hydration. Consumer `96892e26`
+applies the scope to direct and queued semantic indexing (including migration
+frames), temporary references, library asset projection, and ingest status/retry.
+Auxiliary failures preserve source-media readiness. Nine missing-media app cases
+exercise the actual B2 adapter and explicit retrieval retry; the additional
+cached-model case covers search, edits, restoration and explicit backup.
+
+This completes `ve-ovz.19` / `vb-ld4o`, not the complete security/privacy audit.
+The library's missing visual coverage is separately tracked in `vb-j3qy`; these
+changes do not backfill or repair production indexes. Cold-index preparation in
+the media picker was fixed separately in consumer `185ec77c` (`vb-ackl`), with a
+real 1,200-vector queue/poll/retry and persisted-index regression.
+
 ## Migration, consumer and packaging
 
 Section 15.4 migration is covered by `tests/migration.test.ts`, the pinned v4
@@ -69,13 +86,18 @@ publication. Consumer queue tests cover durable status/cancel, archive/switch
 recovery and idempotent reindex scheduling. `ve-ovz.5`, `ve-ovz.6` and `vb-6eu9`
 are complete. This migration evidence does not prove general edit durability.
 
-Engine `07f0515` passed 332 default tests (12 opt-in cases skipped), typecheck,
-knip, build and standalone package smoke, including installed-package checksum
-rejection and valid retry. [Node 22/24 CI](https://github.com/justintanner/videobook-engine/actions/runs/34006199273)
-passed the full suite and package checks. Consumer `20db91d1` passed 3,161 tests
-across 369 files, 17 focused content/library checks, lint, test types, dead-code
-checks, both builds and an isolated worktree clean install with native image
-processing, MCP book operations, client delivery and graceful shutdown.
+Engine `e328f5e` passed 341 default tests (12 opt-in cases skipped), typecheck
+and knip. Runtime `bf952c5` also passed build and standalone installed-package
+checks for local-media denial, explicit retry, checksum rejection, README usage,
+and native image decoding. [Node 22/24 runtime CI](https://github.com/justintanner/videobook-engine/actions/runs/34007728660)
+passed. `e328f5e` adds only the configured-catalog publication regression.
+Consumer `96892e26` passed 3,171 default tests across 370 files (4 opt-in cases
+skipped), 38 final explicit workflow/migration/indexing checks including the real
+cached-model workflow, and the separate 19 model/queue cases with all three
+cached-model cases enabled. Lint, test types, dead-code checks, client/server
+builds and the final isolated worktree clean install passed. The initial full run
+caught the migration-frame hydration bypass while it was being fixed; the final
+full-source run is green.
 
 The earlier model-revision baseline `3f9b37d` passed 324 tests (12 opt-in tests skipped), typecheck, knip,
 build and the 22-group API benchmark smoke. Node 22/24 CI passed tests,
@@ -102,8 +124,8 @@ Both worktree and exact committed-source (`80ce4f58`) clean installs passed
 native Sharp, MCP create/list, client delivery and graceful shutdown without a
 sibling engine checkout.
 
-Consumer vendors `videobook-engine-5.3.1-07f0515.tgz`, SHA-256
-`88c3ce8a081befa7712f3e7a31026834b3213a4066e327654fba5748a8a66f91`.
+Consumer vendors `videobook-engine-5.3.1-bf952c5.tgz`, SHA-256
+`38df1a6e8d33d805dd8dda8b35fc14b999889dc341a6f15a8d2e2acce380616c`.
 Consumer commits are local per its repository policy. Local package smoke and
 vendored-consumer verification do not prove installation of a published
 registry package: `ve-yc7` and `ve-orp` retain that release gate. Registry
