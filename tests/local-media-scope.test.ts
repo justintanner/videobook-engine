@@ -86,6 +86,32 @@ async function fixture() {
 }
 
 describe("local media scope", () => {
+  it("leaves a configured catalog unpublished through local indexing, search and history until explicit backup", async () => {
+    const root = await mkdtemp(join(tmpdir(), "videobook-local-catalog-"));
+    const catalog = join(root, "remote-catalog");
+    const engine = createEngine({
+      rootDir: join(root, "book"), initialBookName: "local catalog", similarity: { provider },
+      catalogBackup: { name: "backup", url: `file://${catalog}` },
+    });
+    cleanups.push(async () => {
+      engine.close();
+      await rm(root, { recursive: true, force: true, maxRetries: 3 });
+    });
+    await engine.ready;
+    const artifact = value(await engine.artifacts.create("image", "Original"));
+    value(await engine.files.write(artifact.artifactId, "original.png", bytes));
+    const revision = engine.head;
+    expect((await engine.similarity.index(artifact.artifactId)).ok).toBe(true);
+    expect((await engine.similarity.findSimilar(artifact.artifactId)).ok).toBe(true);
+    expect((await engine.history.restoreArtifact(artifact.artifactId, revision)).ok).toBe(true);
+    expect((await engine.history.restore(revision)).ok).toBe(true);
+    await expect(stat(catalog)).rejects.toMatchObject({ code: "ENOENT" });
+    const head = engine.head;
+    expect(value(await engine.storage.backup()).state).toBe("backed_up");
+    expect((await stat(catalog)).size).toBeGreaterThan(0);
+    expect(engine.head).toBe(head);
+  });
+
   it.each(["read", "manifest", "workspace"])("rejects missing %s media across awaits without fetching or changing history", async (operation) => {
     const f = await fixture();
     await f.removeLocalBytes();
