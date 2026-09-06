@@ -1,7 +1,7 @@
 # MVP release evidence
 
 Audit date: September 6, 2026 (Asia/Bangkok). Functional baseline: engine
-`c4f1d89` (5.3.2, DoltLite 0.50.6), consumer `b4e369b5`.
+`c4f1d89` (5.3.2, DoltLite 0.50.6), consumer `92f1f2c6`.
 Performance artifacts retain their original revision and hardware
 qualifications.
 This is an assessment of the requirements in
@@ -27,16 +27,30 @@ limitation; the staging and URL-bootstrap fixes do not close it.
 The engine passes 352 default tests, typecheck, dead-code checks, build, and
 clean packed README/reopen/media checks, including cached CLIP/CLAP image,
 audio, and text inference. The package has one Sharp resolution and no
-production audit findings. Consumer `b4e369b5` passes 3,213 tests across 375
+production audit findings. Consumer `92f1f2c6` passes 3,218 tests across 375
 files, lint, all four test typechecks, dead-code checks, and client/server builds.
 Its explicit cached-model, readiness, bounded-batch/resume, and reference-range
-run passes all 24 cases. Both isolated worktree and exact committed-source
-(`b4e369b5`) clean installs pass native Sharp,
+run passes all 24 cases on `92f1f2c6`. Its isolated exact committed-source
+clean install passes native Sharp,
 MCP create/list, client delivery, and graceful shutdown without a sibling engine
 checkout. The consumer corpus validator now rejects unverified rights metadata,
 non-finite durations/counts, and fractional counts; its runner is typechecked
 against the current book identity API. These synthetic manifest checks do not
 supply a quality corpus.
+
+The application CI run exposed three additional issues, corrected in
+`92f1f2c6`. Watermark text is now centered by its rendered glyph bounds rather
+than platform-specific SVG baseline metrics; changed badge variants use new
+cache layout identifiers. Queued watermark burns declare processing work, and
+upload discovery respects active queued jobs even before they claim a lock.
+This prevents a second processing job from racing the watermark operation and
+removing its frame directory during ingestion. The GC fixture stops its
+background worker before creating 2,000 leased churn rows, avoiding a large
+expired-job abort sweep during teardown. Its size assertions are unchanged.
+The original rendering and queued-job failures reproduce on Linux; all 41
+focused cases pass after the fixes on both macOS and Debian 13/x64. The full
+application CI command passes locally in both stages (3,214 plus four tests),
+with all typechecks, lint, dead-code checks and both builds passing.
 
 The catalog-GC churn case allows 180 seconds for its 2,000 synchronous job
 write/dequeue/heartbeat iterations on shared CI runners. Its 200 ms reopen and
