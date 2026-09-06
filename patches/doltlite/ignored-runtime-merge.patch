@@ -792,6 +792,18 @@ index 0000000..86d8919
 +}
 +
 +finish_test
+diff --git a/test/oracle-buckets/merge-replay-schema.txt b/test/oracle-buckets/merge-replay-schema.txt
+index d20bf39..442e78a 100644
+--- a/test/oracle-buckets/merge-replay-schema.txt
++++ b/test/oracle-buckets/merge-replay-schema.txt
+@@ -7,6 +7,7 @@ vc_oracle_constraints_triggers_replay_test.sh
+ vc_oracle_correct_schema_merge_matrix_test.sh
+ vc_oracle_cross_op_conflict_cv_test.sh
+ vc_oracle_fk_merge_test.sh
++vc_oracle_ignored_merge_test.sh
+ vc_oracle_merge_base_test.sh
+ vc_oracle_merge_status_test.sh
+ vc_oracle_merge_test.sh
 diff --git a/test/regression-buckets/ported.txt b/test/regression-buckets/ported.txt
 index 2e1fb3f..5da785b 100644
 --- a/test/regression-buckets/ported.txt

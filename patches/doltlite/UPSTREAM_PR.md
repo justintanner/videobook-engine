@@ -23,6 +23,7 @@ Validation on base `37a390eb7b021962d9d287a465a2da3c9f59c3cf`, macOS arm64:
 - New Dolt oracle: 10/10 pass; unpatched base fails all ten.
 - Existing Dolt ignore and merge oracles: 50/50 and 104/104 pass using Dolt 2.3.1.
 - Native lint and clean stock-SQLite parity pass.
+- Both new suites are registered in their CI buckets; oracle inventory checks pass.
 - A full Videobook catalog passes merge, conflict rollback, reopen, and object
   contents checks across 56 tables, 23 ignored runtime tables, and 107 schema
   objects. Opening with published 0.50.6, merging with this patch in a separate

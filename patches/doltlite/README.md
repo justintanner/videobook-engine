@@ -11,8 +11,8 @@ engine's projection merge. The patch is submitted for upstream review in
 
 - Source: [dolthub/doltlite](https://github.com/dolthub/doltlite).
 - Base: [`37a390eb7b021962d9d287a465a2da3c9f59c3cf`](https://github.com/dolthub/doltlite/commit/37a390eb7b021962d9d287a465a2da3c9f59c3cf).
-- Patch SHA-256: `98f12c7a4daed1908ce6c3fc2c8543773d4661f50205080c6748778968ae5c96`.
-- Submitted commit: [`97b1ca775b82907a85195c7c20cb29d6e0133ad6`](https://github.com/justintanner/doltlite/commit/97b1ca775b82907a85195c7c20cb29d6e0133ad6).
+- Patch SHA-256: `73876308d3ae045bfba59d807eb027a58b556cec882c8554665b2e97d66d4008`.
+- Submitted commit: [`b3981dc9ed6b2e39c247b4d598b2691e19dd0b25`](https://github.com/justintanner/doltlite/commit/b3981dc9ed6b2e39c247b4d598b2691e19dd0b25).
 - Validated September 6, 2026 on Apple M1 Pro, 16 GiB RAM, macOS arm64,
   Node 24.10.0, with Dolt 2.3.1 as the semantic reference.
 - DoltLite extensions are Apache-2.0, copyright 2024–2026 DoltHub, Inc.
@@ -20,7 +20,7 @@ engine's projection merge. The patch is submitted for upstream review in
 - Beads: preparation `ve-wsu.1`; published dependency adoption `ve-wsu`.
 
 The patch changes four native source/header files, adds a focused regression
-and a Dolt comparison suite, and registers the regression in the ported bucket.
+and a Dolt comparison suite, and registers both in their CI buckets.
 It changes no public API, file-format version, or package version.
 
 ## Behavior
@@ -83,6 +83,7 @@ MAKEFLAGS=-j8 LIBRARY_PATH=/opt/homebrew/lib bash test/run_c_tests.sh build all
 bash test/vc_oracle_ignored_merge_test.sh build/doltlite dolt
 bash test/vc_oracle_ignore_test.sh build/doltlite dolt
 bash test/vc_oracle_merge_test.sh build/doltlite dolt
+bash test/check_oracle_buckets.sh
 ```
 
 The separate stock build prevents accidentally using DoltLite objects for the
@@ -124,9 +125,11 @@ The installed production dependency was not replaced.
 
 The [prepared upstream PR description](UPSTREAM_PR.md) accompanies the patch.
 [PR 2664](https://github.com/dolthub/doltlite/pull/2664) publishes the validated
-seven-file change against upstream `master`.
+eight-file change against upstream `master`.
+[Hosted CI](https://github.com/justintanner/doltlite/actions/runs/34043532585)
+is running against the submitted commit, including the oracle registration.
 Upstream review, a published native build, and validation of that exact build
-remain before production adoption. The native patch has been tested on macOS
-arm64; packaged builds for other platforms have not been produced here.
-The application remains 0.1.0 and the prepared engine patch remains 5.3.2.
+remain before production adoption. Local native validation passes on macOS
+arm64; the hosted platform and sanitizer results remain pending.
+The application remains 0.1.0 and engine patch 5.3.2 is published.
 No 2.0.0 release or major-version bump is part of this work.
