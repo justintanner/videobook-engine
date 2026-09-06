@@ -4,13 +4,15 @@ The [source patch](ignored-runtime-merge.patch) fixes a native DoltLite merge
 failure when an otherwise clean working catalog contains ignored local tables.
 It also keeps their rows and indexes local through merge, abort, reopen, and
 allocation failures. Production still uses published DoltLite 0.50.6 and the
-engine's projection merge; this patch is prepared for upstream review.
+engine's projection merge. The patch is submitted for upstream review in
+[DoltLite PR 2664](https://github.com/dolthub/doltlite/pull/2664).
 
 ## Provenance
 
 - Source: [dolthub/doltlite](https://github.com/dolthub/doltlite).
 - Base: [`37a390eb7b021962d9d287a465a2da3c9f59c3cf`](https://github.com/dolthub/doltlite/commit/37a390eb7b021962d9d287a465a2da3c9f59c3cf).
 - Patch SHA-256: `98f12c7a4daed1908ce6c3fc2c8543773d4661f50205080c6748778968ae5c96`.
+- Submitted commit: [`97b1ca775b82907a85195c7c20cb29d6e0133ad6`](https://github.com/justintanner/doltlite/commit/97b1ca775b82907a85195c7c20cb29d6e0133ad6).
 - Validated September 6, 2026 on Apple M1 Pro, 16 GiB RAM, macOS arm64,
   Node 24.10.0, with Dolt 2.3.1 as the semantic reference.
 - DoltLite extensions are Apache-2.0, copyright 2024–2026 DoltHub, Inc.
@@ -121,6 +123,8 @@ The installed production dependency was not replaced.
 ## Adoption
 
 The [prepared upstream PR description](UPSTREAM_PR.md) accompanies the patch.
+[PR 2664](https://github.com/dolthub/doltlite/pull/2664) publishes the validated
+seven-file change against upstream `master`.
 Upstream review, a published native build, and validation of that exact build
 remain before production adoption. The native patch has been tested on macOS
 arm64; packaged builds for other platforms have not been produced here.
