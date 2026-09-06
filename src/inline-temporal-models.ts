@@ -77,7 +77,7 @@ export class InlineClipTemporalProvider implements TemporalSearchProvider {
 
   async prepare(options: MediaOperationOptions = {}): Promise<void> {
     checkMediaCancellation(options);
-    await Promise.all([this.loadImagePipeline(), this.loadTextModel()]);
+    await prepareModelBranches([this.loadImagePipeline(), this.loadTextModel()]);
     checkMediaCancellation(options);
   }
 
@@ -189,7 +189,7 @@ export class InlineClapTemporalProvider implements TemporalSearchProvider {
 
   async prepare(options: MediaOperationOptions = {}): Promise<void> {
     checkMediaCancellation(options);
-    await Promise.all([this.loadAudioModel(), this.loadTextModel()]);
+    await prepareModelBranches([this.loadAudioModel(), this.loadTextModel()]);
     checkMediaCancellation(options);
   }
 
@@ -398,4 +398,13 @@ function localModelFault(
 
 function downloadHint(allowed: boolean | undefined): string {
   return allowed === true ? "" : " Model downloads are disabled. Explicitly prepare the model with allowModelDownload: true, then retry using the populated cache.";
+}
+
+async function prepareModelBranches(branches: Promise<unknown>[]): Promise<void> {
+  const settled = await Promise.allSettled(branches);
+  const failures = settled.filter((result): result is PromiseRejectedResult => result.status === "rejected");
+  const integrityFailure = failures.find(({ reason }: { reason: unknown }) =>
+    reason instanceof EngineFault && ["MODEL_UNAVAILABLE", "RESOURCE_EXHAUSTED"].includes(reason.error.code));
+  const failure = integrityFailure ?? failures[0];
+  if (failure) throw failure.reason;
 }

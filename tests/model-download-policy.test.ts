@@ -31,7 +31,7 @@ describe("local model download permission", () => {
     env.remoteHost = originalHost;
     server.closeAllConnections();
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
-    await rm(root, { recursive: true, force: true });
+    await rm(root, { recursive: true, force: true, maxRetries: 3 });
   });
 
   it.each([undefined, false])("does not fetch temporal model files with permission %s", async (allowModelDownload) => {
@@ -47,10 +47,13 @@ describe("local model download permission", () => {
     { Provider: LocalClipTemporalProvider, modelId: LOCAL_CLIP_MODEL_ID, revision: LOCAL_CLIP_MODEL_REVISION, file: "config.json" },
     { Provider: LocalClapTemporalProvider, modelId: LOCAL_CLAP_MODEL_ID, revision: LOCAL_CLAP_MODEL_REVISION, file: "preprocessor_config.json" },
   ])("prioritizes an active integrity check over concurrent missing files for $modelId", async ({ Provider, modelId, revision, file }) => {
-    const path = join(root, modelId, revision);
-    await mkdir(path, { recursive: true });
-    await writeFile(join(path, file), '{"model_type":"clip"}');
-    await expect(new Provider({ modelCacheDir: root }).prepare()).rejects.toMatchObject({ error: { code: "MODEL_UNAVAILABLE" } });
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      const cache = join(root, `attempt-${attempt}`);
+      const path = join(cache, modelId, revision);
+      await mkdir(path, { recursive: true });
+      await writeFile(join(path, file), '{"model_type":"clip"}');
+      await expect(new Provider({ modelCacheDir: cache }).prepare()).rejects.toMatchObject({ error: { code: "MODEL_UNAVAILABLE" } });
+    }
     expect(requests).toEqual([]);
   });
 
