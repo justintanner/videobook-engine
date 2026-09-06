@@ -10,6 +10,7 @@ import { ENGINE_ERROR_CODES } from "./engine-types.js";
 import { checkMediaCancellation, mediaTimeout } from "./media-process.js";
 import { MAX_MODEL_MESSAGE_BYTES, type ModelWorkerCall, type ModelWorkerConfiguration, type ModelWorkerResponse, type ModelWorkerValue } from "./model-worker-protocol.js";
 import { EngineFault } from "./store.js";
+import { modelCacheStagingRoot } from "./model-cache-paths.js";
 
 interface PendingCall {
   id: number;
@@ -26,6 +27,7 @@ interface Session {
   key: string;
   child?: ChildProcess;
   root?: string;
+  cacheStaging?: string;
   job?: PendingCall;
   initialized: Promise<void>;
   exited?: Promise<void>;
@@ -44,6 +46,7 @@ export class ModelWorkerPool {
     for (const session of this.sessions.values()) {
       killTree(session.child);
       if (session.root) { try { rmSync(session.root, { recursive: true, force: true, maxRetries: 3 }); } catch {} }
+      if (session.cacheStaging) { try { rmSync(session.cacheStaging, { recursive: true, force: true, maxRetries: 3 }); } catch {} }
     }
   };
 
@@ -120,6 +123,7 @@ export class ModelWorkerPool {
 
   private async start(session: Session, configuration: ModelWorkerConfiguration): Promise<void> {
     session.root = await mkdtemp(join(tmpdir(), "videobook-model-worker-"));
+    session.cacheStaging = modelCacheStagingRoot(configuration.modelCacheDir, session.root);
     if (session.closing) return;
     const child = fork(this.options.workerUrl, [], {
       cwd: session.root, detached: process.platform !== "win32", serialization: "advanced",
@@ -213,6 +217,7 @@ export class ModelWorkerPool {
       killTree(session.child);
       await session.exited;
       if (session.root) await rm(session.root, { recursive: true, force: true, maxRetries: 3 }).catch(() => undefined);
+      if (session.cacheStaging) await rm(session.cacheStaging, { recursive: true, force: true, maxRetries: 3 }).catch(() => undefined);
       if (this.sessions.get(session.key) === session) this.sessions.delete(session.key);
       this.pump();
     })();

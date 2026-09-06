@@ -37,7 +37,7 @@ include snapshot loading and are not warm-query latency or cold OS-cache tests.
 
 | Section 13 requirement | Evidence inspected | Assessment and follow-up |
 | --- | --- | --- |
-| Opt-in/configurable, pinned, checksum-verified and disableable model downloads | Engine defaults local-only; consumer requires exact `VIDEOBOOK_MODEL_DOWNLOAD=enabled` or preparation CLI `--download`; real HTTP tests verify default zero requests and pinned revisions | Opt-in/pinning/offline discovery completed in `ve-ovz.7` and `vb-3tss`. Transformers hub loader uses size metadata but has no inspected model digest verification; `ve-ovz.11` must verify supported upstream digests. Native index SHA-256 is unrelated. |
+| Opt-in/configurable, pinned, checksum-verified and disableable model downloads | Engine defaults local-only; built-in pinned model inventories carry upstream Git/LFS digests. The verified file resolver checks downloads and cached files before returning bytes or ONNX paths, including external weights. Real transfers, corrupt caches and installed-package rejection are tested. | Checksum hardening follows the baseline revision; see `docs/model-integrity.md`. Consumer integration remains in `vb-v1vl`. Custom compatibility model revisions still need immutable pinning in `ve-ovz.15`; built-in pinning and opt-in policy are already implemented. |
 | Scoped provider inputs, local built-in provider, injected network declaration and application consent | `TemporalSearchProvider` has `manifestId`, `prepare`, `embedText`; registration checks only manifest ID. CLIP/CLAP receive text or selected media paths/ranges. | Network capability/consent contract missing. `ve-ovz.12`; complete input-scoping verification in `ve-ovz.14`. |
 | Argument arrays, bounded outputs, timeouts, cancellation and scoped workspaces; no untrusted shell | Shared media-process limits and isolated model pool provide deadlines, process-group cancellation and owned scratch cleanup. Consumer actual queue tests cancel stalled model requests and preserve source bytes/status. | Engine isolation and consumer signal forwarding are implemented and tested. See `docs/media-limits.md` and `docs/model-isolation.md`. |
 | Malformed codec, oversized image, decompression bomb and model OOM fail job without book corruption | Tests reject malformed/oversized/high-expansion inputs; an actual heap-exhausted worker leaves a live engine writable and reopenable and permits fresh-worker retry. Consumer cached-model queue tests verify malformed-image failure and corrected retry. | Process isolation, typed job failures and consumer integration are verified. The worker heap cap is not an OS-wide memory limit. |
@@ -73,6 +73,14 @@ Consumer commits are local per its repository policy. Local package smoke and
 vendored-consumer verification do not prove installation of a published
 registry package: `ve-yc7` and `ve-orp` retain that release gate. Registry
 authentication is an unresolved external prerequisite, not retested here.
+
+Subsequent checksum hardening adds verified file resolution for all built-in
+model paths, complete upstream digest inventories for three pinned snapshots,
+cache-staging cleanup and public-provider corruption regressions. Nine explicit
+real-model tests pass, including MiniLM external ONNX weights and offline reopen.
+The installed package rejects corrupt pinned configuration and runs cached
+CLIP/CLAP inference. The application remains on the baseline vendored engine
+until `vb-v1vl` is completed.
 
 The full quality corpus, reference-device evidence, newly identified NFR and
 security gaps, and published-package verification prevent closing E4/E5/MVP.

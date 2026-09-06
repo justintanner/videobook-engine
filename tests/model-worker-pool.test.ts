@@ -1,6 +1,6 @@
 import { access, mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 import { afterEach, expect, it } from "vitest";
@@ -45,6 +45,23 @@ async function dead(pid: number): Promise<void> {
   }
   throw new Error(`Worker process ${pid} is still alive`);
 }
+
+it("removes owned cache-publication staging after a killed worker", async () => {
+  const workers = pool(1);
+  const sourcePath = await marker();
+  const controller = new AbortController();
+  const call = workers.request({ ...configuration, modelCacheDir: join(dirname(sourcePath), "cache") },
+    { method: "embedText", text: "cache-stage", sourcePath }, { signal: controller.signal });
+  const assertion = expect(call).rejects.toMatchObject({ error: { code: "CANCELLED" } });
+  let record: { pid: number; cwd: string; stage?: string };
+  do { record = await started(sourcePath); } while (!("stage" in record));
+  expect(await readFile(join(record.stage!, "incomplete-model"), "utf8")).toBe("incomplete");
+  controller.abort();
+  await assertion;
+  await dead(record.pid);
+  await expect(access(record.cwd)).rejects.toMatchObject({ code: "ENOENT" });
+  await expect(access(record.stage!)).rejects.toMatchObject({ code: "ENOENT" });
+});
 
 it("reuses a model process and removes idle worker workspaces", async () => {
   const workers = pool(1, 100);

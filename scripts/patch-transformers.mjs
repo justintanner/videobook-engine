@@ -6,6 +6,8 @@ const entry = fileURLToPath(import.meta.resolve("@huggingface/transformers"));
 const manifest = JSON.parse(await readFile(join(dirname(entry), "..", "package.json"), "utf8"));
 if (manifest.version !== "4.2.0") throw new Error("Review the model-discovery download-policy patch before changing Transformers.js 4.2.0");
 const replacements = [
+  ['async function getModelFile(path_or_repo_id, filename, fatal = true, options = {}, return_path = false) {',
+    'async function getModelFile(path_or_repo_id, filename, fatal = true, options = {}, return_path = false) {\n  if (env.videobookModelFileResolver) return await env.videobookModelFileResolver(path_or_repo_id, filename, fatal, options, return_path);'],
   ['async function get_tokenizer_files(modelId) {', 'async function get_tokenizer_files(modelId, options = {}) {'],
   ['get_file_metadata(modelId, "tokenizer_config.json", {})', 'get_file_metadata(modelId, "tokenizer_config.json", options)'],
   ['get_tokenizer_files(pretrained_model_name_or_path);', 'get_tokenizer_files(pretrained_model_name_or_path, options);'],
@@ -33,7 +35,7 @@ let patched = original;
 for (const [before, after] of replacements) {
   const beforeCount = patched.split(before).length - 1;
   const afterCount = patched.split(after).length - 1;
-  if (beforeCount === 0 && afterCount === 1) continue;
+  if (afterCount === 1 && (beforeCount === 0 || after.startsWith(before) && beforeCount === 1)) continue;
   if (beforeCount !== 1 || afterCount !== 0) throw new Error(`Unexpected Transformers.js model-discovery source: ${before}`);
   patched = patched.replace(before, after);
 }

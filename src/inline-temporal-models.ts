@@ -363,6 +363,7 @@ function modelFault(
   error: unknown,
   allowModelDownload: boolean | undefined,
 ): EngineFault {
+  if (error instanceof EngineFault) return error;
   return new EngineFault({
     code: allowModelDownload !== true ? "OFFLINE" : "FEATURE_UNAVAILABLE",
     message: `Unable to load the pinned local CLIP model: ${
@@ -376,6 +377,7 @@ function localModelFault(
   error: unknown,
   allowModelDownload: boolean | undefined,
 ): EngineFault {
+  if (error instanceof EngineFault) return error;
   return new EngineFault({
     code: allowModelDownload !== true ? "OFFLINE" : "FEATURE_UNAVAILABLE",
     message: `Unable to load the pinned local ${label} model: ${

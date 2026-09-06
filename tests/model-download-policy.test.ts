@@ -1,10 +1,11 @@
 import { createServer, type Server } from "node:http";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { createEngine, LocalClapTemporalProvider, LocalClipTemporalProvider } from "../src/index.js";
 import { env } from "../src/transformers-runtime.js";
+import { LOCAL_CLIP_MODEL_ID, LOCAL_CLIP_MODEL_REVISION, LOCAL_CLAP_MODEL_ID, LOCAL_CLAP_MODEL_REVISION } from "../src/temporal-model-manifests.js";
 
 describe("local model download permission", () => {
   let root: string;
@@ -39,6 +40,17 @@ describe("local model download permission", () => {
       await expect(provider.prepare()).rejects.toMatchObject({ error: { code: "OFFLINE" } });
       await expect(provider.embedText("a red bicycle")).rejects.toThrow("Model downloads are disabled");
     }
+    expect(requests).toEqual([]);
+  });
+
+  it.each([
+    { Provider: LocalClipTemporalProvider, modelId: LOCAL_CLIP_MODEL_ID, revision: LOCAL_CLIP_MODEL_REVISION, file: "config.json" },
+    { Provider: LocalClapTemporalProvider, modelId: LOCAL_CLAP_MODEL_ID, revision: LOCAL_CLAP_MODEL_REVISION, file: "preprocessor_config.json" },
+  ])("prioritizes an active integrity check over concurrent missing files for $modelId", async ({ Provider, modelId, revision, file }) => {
+    const path = join(root, modelId, revision);
+    await mkdir(path, { recursive: true });
+    await writeFile(join(path, file), '{"model_type":"clip"}');
+    await expect(new Provider({ modelCacheDir: root }).prepare()).rejects.toMatchObject({ error: { code: "MODEL_UNAVAILABLE" } });
     expect(requests).toEqual([]);
   });
 

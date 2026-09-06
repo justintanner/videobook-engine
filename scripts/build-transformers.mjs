@@ -40,7 +40,7 @@ for (const name of ["@huggingface/transformers", "@huggingface/jinja", "@hugging
     licenseSourceVersion: manifest.version,
     license: manifest.license,
     ...(name === "@huggingface/transformers" ? {
-      enginePatches: ["model-discovery-options-v1"],
+      enginePatches: ["model-discovery-options-v1", "verified-model-files-v1"],
     } : {}),
     ...(name === "onnxruntime-common" ? {
       licenseSource: "https://github.com/microsoft/onnxruntime/blob/v1.29.0/LICENSE",

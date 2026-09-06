@@ -7,10 +7,12 @@ import { afterEach, describe, expect, it } from "vitest";
 import { createEngine, type Engine } from "../src/index.js";
 
 const roots: string[] = [];
+const engines: Engine[] = [];
 
 afterEach(async () => {
+  for (const engine of engines.splice(0)) engine.close();
   await Promise.all(
-    roots.splice(0).map((root) => rm(root, { recursive: true, force: true })),
+    roots.splice(0).map((root) => rm(root, { recursive: true, force: true, maxRetries: 3 })),
   );
 });
 
@@ -18,6 +20,7 @@ async function setup(): Promise<{ engine: Engine; root: string }> {
   const root = await mkdtemp(path.join(tmpdir(), "videobook-hydration-"));
   roots.push(root);
   const engine = createEngine({ rootDir: root, initialBookName: "hydration" });
+  engines.push(engine);
   await engine.ready;
   return { engine, root };
 }

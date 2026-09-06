@@ -74,6 +74,12 @@ assert.equal(decoded.height, 12);
 const { LocalClipTemporalProvider: OfflineClipProvider } = await import("videobook-engine");
 await assert.rejects(new OfflineClipProvider({ modelCacheDir: ".missing-model-cache" }).prepare(),
   (error) => error.error?.code === "OFFLINE", "Packaged worker must start and preserve offline model policy");
+const { mkdir: createModelDirectory, writeFile: writeModelFile } = await import("node:fs/promises");
+const corruptModelRoot = ".corrupted-model-cache/Xenova/clip-vit-base-patch32/d15189d7028b43f1d3e65039190477f6af591c2a";
+await createModelDirectory(corruptModelRoot, { recursive: true });
+await writeModelFile(corruptModelRoot + "/config.json", '{"model_type":"clip"}');
+await assert.rejects(new OfflineClipProvider({ modelCacheDir: ".corrupted-model-cache" }).prepare(),
+  (error) => error.error?.code === "MODEL_UNAVAILABLE", "Packaged worker must reject corrupted pinned model files");
 if (process.env.VIDEOBOOK_RUN_MODEL_E2E === "1") {
   const { writeFile } = await import("node:fs/promises");
   const { homedir } = await import("node:os");
