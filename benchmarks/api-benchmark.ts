@@ -212,6 +212,7 @@ class MemoryContentStore implements ContentStore {
 }
 
 const mediaSimilarityProvider: SimilarityEmbeddingProvider = {
+  networkAccess: { modelDownloads: false, inference: false },
   embeddingSpace: "api-benchmark-media-v1",
   dimensions: 3,
   async prepare() {},
@@ -227,6 +228,7 @@ const mediaSimilarityProvider: SimilarityEmbeddingProvider = {
 };
 
 const audioSimilarityProvider: SimilarityAudioEmbeddingProvider = {
+  networkAccess: { modelDownloads: false, inference: false },
   embeddingSpace: "api-benchmark-audio-v1",
   dimensions: 3,
   async prepare() {},
@@ -236,6 +238,7 @@ const audioSimilarityProvider: SimilarityAudioEmbeddingProvider = {
 };
 
 const textSimilarityProvider: SimilarityTextEmbeddingProvider = {
+  networkAccess: { modelDownloads: false, inference: false },
   embeddingSpace: "api-benchmark-text-v1",
   dimensions: 3,
   async prepare() {},
@@ -251,6 +254,7 @@ const textSimilarityProvider: SimilarityTextEmbeddingProvider = {
 };
 
 class BenchmarkTemporalProvider implements TemporalSearchProvider {
+  readonly networkAccess = { modelDownloads: false, inference: false };
   readonly manifestId = temporalManifest.manifestId;
 
   async prepare(): Promise<void> {}

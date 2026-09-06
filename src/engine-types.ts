@@ -176,7 +176,19 @@ export interface MediaOperationOptions {
   timeoutMs?: number;
 }
 
+export interface SearchProviderNetworkAccess {
+  readonly modelDownloads: boolean;
+  readonly inference: boolean;
+}
+
+export interface SearchProviderConsent {
+  readonly modelDownloads?: boolean;
+  readonly inference?: boolean;
+}
+
 export interface SimilarityEmbeddingProvider {
+  /** Required at runtime for injected providers; omission fails closed before dispatch. */
+  readonly networkAccess?: SearchProviderNetworkAccess;
   readonly embeddingSpace: string;
   readonly dimensions: number;
   prepare(options?: MediaOperationOptions): Promise<void>;
@@ -194,6 +206,8 @@ export interface SimilarityTextChunk {
 }
 
 export interface SimilarityTextEmbeddingProvider {
+  /** Required at runtime for injected providers; omission fails closed before dispatch. */
+  readonly networkAccess?: SearchProviderNetworkAccess;
   readonly embeddingSpace: string;
   readonly dimensions: number;
   prepare(options?: MediaOperationOptions): Promise<void>;
@@ -201,6 +215,8 @@ export interface SimilarityTextEmbeddingProvider {
 }
 
 export interface SimilarityAudioEmbeddingProvider {
+  /** Required at runtime for injected providers; omission fails closed before dispatch. */
+  readonly networkAccess?: SearchProviderNetworkAccess;
   readonly embeddingSpace: string;
   readonly dimensions: number;
   prepare(options?: MediaOperationOptions): Promise<void>;
@@ -208,6 +224,8 @@ export interface SimilarityAudioEmbeddingProvider {
 }
 
 export interface SimilarityAudioConfig {
+  /** Application consent for this injected provider; does not inherit across modalities. */
+  providerConsent?: SearchProviderConsent;
   /** A Hugging Face CLAP model ID or a local compatible model directory. */
   modelId?: string;
   /** A cache directory for the audio model. */
@@ -221,6 +239,8 @@ export interface SimilarityAudioConfig {
 }
 
 export interface SimilarityTextConfig {
+  /** Application consent for this injected provider; does not inherit across modalities. */
+  providerConsent?: SearchProviderConsent;
   /** A Hugging Face model ID or a local compatible model directory. */
   modelId?: string;
   /** A cache directory for the text model. */
@@ -236,6 +256,8 @@ export interface SimilarityTextConfig {
 }
 
 export interface SimilarityConfig {
+  /** Application consent for this injected provider; does not inherit across modalities. */
+  providerConsent?: SearchProviderConsent;
   /** Enables local similarity when present on the engine configuration. */
   modelCacheDir?: string;
   /** A Hugging Face model ID or a local compatible model directory. */

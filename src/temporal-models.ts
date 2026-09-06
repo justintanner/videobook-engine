@@ -8,7 +8,12 @@ export class LocalClipTemporalProvider implements TemporalSearchProvider {
   readonly manifestId = LOCAL_CLIP_MANIFEST.manifestId;
   readonly embeddingSpace = LOCAL_CLIP_MANIFEST.embeddingSpace;
   readonly dimensions = LOCAL_CLIP_MANIFEST.dimensions;
-  constructor(private readonly options: LocalClipTemporalProviderOptions) {}
+  readonly networkAccess;
+  private readonly options: LocalClipTemporalProviderOptions;
+  constructor(options: LocalClipTemporalProviderOptions) {
+    this.options = Object.freeze({ ...options });
+    this.networkAccess = Object.freeze({ modelDownloads: options.allowModelDownload === true, inference: false });
+  }
   async prepare(options: MediaOperationOptions = {}): Promise<void> {
     await isolatedModelCall({ ...this.options, kind: "clip" }, { method: "prepare" }, options);
   }
@@ -24,7 +29,12 @@ export class LocalClapTemporalProvider implements TemporalSearchProvider {
   readonly manifestId = LOCAL_CLAP_MANIFEST.manifestId;
   readonly embeddingSpace = LOCAL_CLAP_MANIFEST.embeddingSpace;
   readonly dimensions = LOCAL_CLAP_MANIFEST.dimensions;
-  constructor(private readonly options: LocalClapTemporalProviderOptions) {}
+  readonly networkAccess;
+  private readonly options: LocalClapTemporalProviderOptions;
+  constructor(options: LocalClapTemporalProviderOptions) {
+    this.options = Object.freeze({ ...options });
+    this.networkAccess = Object.freeze({ modelDownloads: options.allowModelDownload === true, inference: false });
+  }
   async prepare(options: MediaOperationOptions = {}): Promise<void> {
     await isolatedModelCall({ ...this.options, kind: "clap" }, { method: "prepare" }, options);
   }

@@ -3,6 +3,7 @@ import type {
   EngineError,
   EngineErrorCode,
   MediaOperationOptions,
+  SearchProviderNetworkAccess,
 } from "./engine-types.js";
 import type {
   MediaSourceSnapshot,
@@ -811,6 +812,8 @@ export interface TemporalIndexPlan {
 }
 
 export interface TemporalSearchProvider {
+  /** Required at registration; optional in the type for source compatibility with legacy integrations. */
+  readonly networkAccess?: SearchProviderNetworkAccess;
   readonly manifestId: string;
   prepare(options?: MediaOperationOptions): Promise<void>;
   embedText(text: string, options?: MediaOperationOptions): Promise<Float32Array>;

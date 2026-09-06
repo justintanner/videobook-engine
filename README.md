@@ -230,6 +230,8 @@ parallel audit graph.
 
 ## Similarity
 
+Injected providers must explicitly declare network capabilities; remote access requires application-owned consent. See [search provider consent](docs/search-provider-consent.md) for registration, revocation, and the migration for existing custom providers.
+
 Similarity is opt-in. Provide a media embedding provider or use the built-in
 local CLIP configuration. Text similarity is enabled separately.
 

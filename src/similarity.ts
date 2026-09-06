@@ -1,3 +1,4 @@
+import { guardSearchProvider } from "./search-provider-access.js";
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import { readFile } from "node:fs/promises";
@@ -224,13 +225,18 @@ class LocalSimilarityApi implements SimilarityApi {
     private readonly context: EngineContext,
     config: SimilarityConfig,
   ) {
-    this.provider = config.provider ?? isolatedCompatibilityProvider("compat-clip", context, config) as SimilarityEmbeddingProvider;
+    this.provider = config.provider
+      ? guardSearchProvider(config.provider, config.providerConsent).provider
+      : isolatedCompatibilityProvider("compat-clip", context, config) as SimilarityEmbeddingProvider;
     this.audioProvider = config.audio
-      ? config.audio.provider ??
-        isolatedCompatibilityProvider("compat-clap", context, config) as SimilarityAudioEmbeddingProvider
+      ? config.audio.provider
+        ? guardSearchProvider(config.audio.provider, config.audio.providerConsent).provider
+        : isolatedCompatibilityProvider("compat-clap", context, config) as SimilarityAudioEmbeddingProvider
       : null;
     this.textProvider = config.text
-      ? config.text.provider ?? isolatedCompatibilityProvider("compat-text", context, config) as SimilarityTextEmbeddingProvider
+      ? config.text.provider
+        ? guardSearchProvider(config.text.provider, config.text.providerConsent).provider
+        : isolatedCompatibilityProvider("compat-text", context, config) as SimilarityTextEmbeddingProvider
       : null;
   }
 
@@ -1471,6 +1477,7 @@ function isolatedCompatibilityProvider(
   const audioSpace = modelId && modelId !== DEFAULT_AUDIO_MODEL_ID ? `audio-${modelId.replace(/[^a-zA-Z0-9]+/g, "-")}-v1` : DEFAULT_AUDIO_EMBEDDING_SPACE;
   const textSpace = modelId && modelId !== DEFAULT_TEXT_MODEL_ID ? `text-${modelId.replace(/[^a-zA-Z0-9]+/g, "-")}-v1` : DEFAULT_TEXT_EMBEDDING_SPACE;
   return {
+    networkAccess: Object.freeze({ modelDownloads: configuration.allowModelDownload === true, inference: false }),
     embeddingSpace: kind === "compat-clip" ? DEFAULT_EMBEDDING_SPACE : kind === "compat-clap" ? audioSpace : textSpace,
     dimensions: kind === "compat-text" ? DEFAULT_TEXT_DIMENSIONS : DEFAULT_DIMENSIONS,
     async prepare(options = {}) { await isolatedModelCall(configuration, { method: "prepare" }, options); },
@@ -1491,6 +1498,7 @@ export function createInlineSimilarityProvider(configuration: ModelWorkerConfigu
 }
 
 class LocalClipProvider implements SimilarityEmbeddingProvider {
+  get networkAccess() { return { modelDownloads: this.config.allowModelDownload === true, inference: false }; }
   readonly embeddingSpace = DEFAULT_EMBEDDING_SPACE;
   readonly dimensions = DEFAULT_DIMENSIONS;
   private embedder: FeaturePipeline | null = null;
@@ -1610,6 +1618,7 @@ class LocalClipProvider implements SimilarityEmbeddingProvider {
 }
 
 class LocalClapAudioProvider implements SimilarityAudioEmbeddingProvider {
+  get networkAccess() { return { modelDownloads: (this.config.allowModelDownload ?? this.sharedConfig.allowModelDownload) === true, inference: false }; }
   readonly embeddingSpace: string;
   readonly dimensions = DEFAULT_AUDIO_DIMENSIONS;
   private processor: AudioProcessor | null = null;
@@ -1718,6 +1727,7 @@ class LocalClapAudioProvider implements SimilarityAudioEmbeddingProvider {
 }
 
 class LocalTextProvider implements SimilarityTextEmbeddingProvider {
+  get networkAccess() { return { modelDownloads: (this.config.allowModelDownload ?? this.sharedConfig.allowModelDownload) === true, inference: false }; }
   readonly embeddingSpace: string;
   readonly dimensions = DEFAULT_TEXT_DIMENSIONS;
   private embedder: TextFeaturePipeline | null = null;

@@ -111,6 +111,7 @@ function vector(seed: number): number[] {
 }
 const registerProvider = (target: Engine): void => {
   target.temporalSearch.providers.register({
+    networkAccess: { modelDownloads: false, inference: false },
     manifestId: manifest.manifestId,
     prepare: async () => {},
     embedText: async (text) => Float32Array.from(vector(Number(text.match(/moment (\d+)/)?.[1] ?? 0))),

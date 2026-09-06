@@ -56,6 +56,12 @@ const reopened = createEngine({ rootDir: ".videobook" });
 try {
   assert.equal(reopened.book.get().bookId, book.bookId);
   assert.equal(reopened.artifacts.get(script.value.artifactId).value.label, "opening draft");
+  const provider = { manifestId: "package-consent", async prepare() {}, async embedText() { return new Float32Array([1]); } };
+  assert.throws(() => reopened.temporalSearch.providers.register(provider), /must declare/);
+  provider.networkAccess = { modelDownloads: false, inference: true };
+  assert.throws(() => reopened.temporalSearch.providers.register(provider), /application consent/);
+  reopened.temporalSearch.providers.register(provider, { inference: true });
+  assert.equal(reopened.temporalSearch.providers.unregister(provider.manifestId), true);
 } finally { reopened.close(); }
 const engineRequire = createRequire(import.meta.resolve("videobook-engine"));
 const transformersUrl = new URL("./transformers-runtime.js", import.meta.resolve("videobook-engine"));

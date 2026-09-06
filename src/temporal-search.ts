@@ -1,9 +1,10 @@
+import { guardSearchProvider } from "./search-provider-access.js";
 import { createHash } from "node:crypto";
 import { join } from "node:path";
 
 import type { StatementSync } from "@dolthub/doltlite";
 
-import type { ArtifactKind, EngineError, Result } from "./engine-types.js";
+import type { ArtifactKind, EngineError, Result, SearchProviderConsent } from "./engine-types.js";
 import type {
   CommitTemporalIndexBatchInput,
   IndexBatchResult,
@@ -196,11 +197,16 @@ export function createTemporalSearchApi(context: EngineContext) {
   const providers = new Map<string, TemporalSearchProvider>();
   return {
     providers: {
-      register: (provider: TemporalSearchProvider): void => {
-        requiredText(provider.manifestId, "Provider manifest ID");
-        providers.set(provider.manifestId, provider);
+      register: (provider: TemporalSearchProvider, consent: SearchProviderConsent = {}): void => {
+        const id = requiredText(provider.manifestId, "Provider manifest ID");
+        let registered = false;
+        const guarded = guardSearchProvider(provider, consent, (): boolean => !registered || providers.get(id) === guarded.provider);
+        guarded.validate();
+        providers.set(id, guarded.provider);
+        registered = true;
       },
       list: (): string[] => [...providers.keys()].sort(),
+      unregister: (manifestId: string): boolean => providers.delete(manifestId),
     },
     manifests: {
       register: (manifest: IndexManifest): Result<IndexManifest, EngineError> =>

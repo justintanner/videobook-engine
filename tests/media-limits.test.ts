@@ -89,6 +89,7 @@ it("rejects already cancelled model work before preparation or decoding", async 
 it("keeps book state and prior coverage intact when real image decoding fails, then allows retry", async () => {
   const rootDir = await root();
   const engine = createEngine({ rootDir, initialBookName: "decode-retry", similarity: { provider: {
+    networkAccess: { modelDownloads: false, inference: false },
     embeddingSpace: "real-image-decoder-fixture", dimensions: 3, async prepare() {},
     async embedImage(source, options) { await decodeModelImage(source, options); return Float32Array.from([1, 0, 0]); },
     async embedVideo() { throw new Error("Video is outside this fixture"); },

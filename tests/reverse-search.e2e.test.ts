@@ -117,7 +117,7 @@ describe.runIf(enabled)("real-media reverse search", () => {
       initialBookName: "reverse-search-e2e",
     });
     value(engine.temporalSearch.manifests.register(LOCAL_CLIP_MANIFEST));
-    engine.temporalSearch.providers.register(provider);
+    engine.temporalSearch.providers.register(provider, { modelDownloads: true });
 
     referenceImage = value(
       await engine.artifacts.create({ kind: "image", label: "white-cat-reference" }),

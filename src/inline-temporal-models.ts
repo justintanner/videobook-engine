@@ -68,7 +68,12 @@ export class InlineClipTemporalProvider implements TemporalSearchProvider {
   private tokenizer: ClipTokenizer | null = null;
   private textModel: ClipTextModel | null = null;
 
-  constructor(private readonly options: LocalClipTemporalProviderOptions) {}
+  readonly networkAccess;
+  private readonly options: LocalClipTemporalProviderOptions;
+  constructor(options: LocalClipTemporalProviderOptions) {
+    this.options = Object.freeze({ ...options });
+    this.networkAccess = Object.freeze({ modelDownloads: options.allowModelDownload === true, inference: false });
+  }
 
   async prepare(options: MediaOperationOptions = {}): Promise<void> {
     checkMediaCancellation(options);
@@ -175,7 +180,12 @@ export class InlineClapTemporalProvider implements TemporalSearchProvider {
   private tokenizer: ClipTokenizer | null = null;
   private textModel: ClapTextModel | null = null;
 
-  constructor(private readonly options: LocalClapTemporalProviderOptions) {}
+  readonly networkAccess;
+  private readonly options: LocalClapTemporalProviderOptions;
+  constructor(options: LocalClapTemporalProviderOptions) {
+    this.options = Object.freeze({ ...options });
+    this.networkAccess = Object.freeze({ modelDownloads: options.allowModelDownload === true, inference: false });
+  }
 
   async prepare(options: MediaOperationOptions = {}): Promise<void> {
     checkMediaCancellation(options);

@@ -21,6 +21,7 @@ afterEach(async () => {
 });
 
 const provider: SimilarityEmbeddingProvider = {
+  networkAccess: { modelDownloads: false, inference: false },
   embeddingSpace: "test-v1",
   dimensions: 3,
   async prepare() {},
@@ -33,6 +34,7 @@ const provider: SimilarityEmbeddingProvider = {
 };
 
 const textProvider: SimilarityTextEmbeddingProvider = {
+  networkAccess: { modelDownloads: false, inference: false },
   embeddingSpace: "text-test-v1",
   dimensions: 4,
   async prepare() {},
@@ -55,6 +57,7 @@ const textProvider: SimilarityTextEmbeddingProvider = {
 };
 
 const audioProvider: SimilarityAudioEmbeddingProvider = {
+  networkAccess: { modelDownloads: false, inference: false },
   embeddingSpace: "audio-test-v1",
   dimensions: 3,
   async prepare() {},
