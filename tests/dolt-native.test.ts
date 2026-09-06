@@ -667,7 +667,7 @@ describe("single-book Dolt engine", () => {
     db.doltCheckout("main");
     db.doltReset("--hard");
     expect(db.doltMerge("same-cell-left").conflicts).toBe(0);
-    expect(() => db.doltMerge("same-cell-right")).toThrow("Merge conflict");
+    expect(() => db.doltMerge("same-cell-right")).toThrow(/cannot merge: conflicts detected/i);
     db.close();
   });
 

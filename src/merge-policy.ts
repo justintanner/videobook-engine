@@ -17,7 +17,8 @@ import { EngineFault } from "./store.js";
  *   scans are the post-merge verification primitives.
  *   `dolt_constraint_violations[_<table>]` views exist but stay empty
  *   because violating merges never commit.
- * - Same-row modifications on both sides throw "Merge conflict".
+ * - Same-row modifications on both sides refuse the merge with a conflict
+ *   error; the working set and accepted head remain intact.
  *
  * Policy:
  *
@@ -241,7 +242,7 @@ function mapMergeError(branch: string, error: unknown): never {
       details: { branch, cause: message },
     });
   }
-  if (/merge conflict/i.test(message)) {
+  if (/merge conflict|cannot merge: conflicts detected/i.test(message)) {
     throw new EngineFault({
       code: "MERGE_CONFLICT",
       message: `Merge of ${branch} has row-level conflicts: ${message}`,
@@ -279,15 +280,10 @@ function commitReconcile(
  * deterministic singleton-flag reconcile, and a post-merge constraint
  * health check.
  *
- * NOTE (ve-wsu): doltlite corrupts full engine catalogs on checkout and
- * clone, misfires its "uncommitted changes" merge guard on the full
- * 28-table working set, and — when the guard is bypassed — fails true
- * merges of engine history in schema loading. The dedicated merge-back
- * flow in src/fork.ts therefore applies this policy's primitives around a
- * projection-level three-way merge instead of calling this function;
- * `mergeWithPolicy` remains the drop-in mechanism once the upstream bugs
- * are fixed, and it is exercised against the real semantic schema in
- * tests/merge-policy.test.ts.
+ * Native merge still refuses catalogs with ignored runtime tables in
+ * DoltLite 0.50.6 (ve-wsu). The dedicated merge-back flow in src/fork.ts
+ * keeps its projection merge; this native policy is validated on complete
+ * semantic table definitions without ignored runtime tables.
  */
 export function mergeWithPolicy(
   db: DatabaseSync,

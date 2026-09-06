@@ -15,7 +15,7 @@ import {
   reconcileSingletonFlags,
   verifyConstraintHealth,
 } from "../src/merge-policy.js";
-import { SEMANTIC_SCHEMA_SQL } from "../src/schema.js";
+import { RUNTIME_TABLES, SEMANTIC_SCHEMA_SQL, SEMANTIC_TABLES } from "../src/schema.js";
 import { EngineFault } from "../src/store.js";
 
 // These tests merge against the REAL semantic table DDL (extracted verbatim
@@ -23,15 +23,10 @@ import { EngineFault } from "../src/store.js";
 // intact — unlike the older merge tests in tests/dolt-native.test.ts, which
 // use stripped-down table definitions.
 //
-// ve-wsu: doltlite corrupts a full engine catalog on dolt_checkout, its
-// "uncommitted changes" merge guard deterministically misfires once a
-// working root has >=10 tables, and dolt_checkout drops secondary UNIQUE
-// index rows once the working set has three or more tables (so branch
-// writes to tables carrying secondary UNIQUE indexes fail with "database
-// disk image is malformed" in larger fixtures). Each test database stays
-// well under the guard limit and picks branch-write tables accordingly,
-// while covering every table its scenario touches. Engine-level
-// branch/merge on the full catalog is the ve-mim.7 follow-up.
+// Native merge is validated against the complete definitions of each
+// scenario's semantic tables. Full-catalog checkout additionally verifies
+// ignored runtime rows and indexes. Native merge with ignored tables remains
+// reproducible in scripts/dolt-ignored-merge-probe.cjs (ve-wsu).
 
 const roots: string[] = [];
 
@@ -339,26 +334,9 @@ describe("merge policy for derived singleton flags", () => {
     expect(first.reconciledTranscripts).toBe(0);
     expect(currentTranscripts(db)).toEqual(["t-a"]);
 
-    // ve-wsu: a second doltMerge on this database deterministically
-    // misfires doltlite's "uncommitted changes" guard once the first merge
-    // has persisted the checkout-corrupted working set (reproduced
-    // minimally while building this test). fork-b's row-level merge
-    // outcome is therefore applied directly: both forks flipped t-base to
-    // derived (already merged above) and fork-b added t-b as current, so
-    // the merged state holds exactly two current rows.
-    db.prepare(
-      `INSERT INTO transcripts(
-        transcript_id, artifact_id, stream_id, object_hash, payload_hash,
-        language, state, created_at
-      ) VALUES ('t-b', ?, ?, 'h-source', 'h-payload', 'en', 'current', 300)`,
-    ).run(artifactId, streamId);
-    expect(currentTranscripts(db)).toEqual(["t-a", "t-b"]);
-
-    // The reconcile keeps the latest created_at.
-    expect(reconcileSingletonFlags(db)).toEqual({
-      transcripts: 1,
-      sequences: 0,
-    });
+    const second = mergeWithPolicy(db, "fork-b");
+    expect(second.reconciledTranscripts).toBe(1);
+    expect(second.reconciledSequences).toBe(0);
     expect(currentTranscripts(db)).toEqual(["t-b"]);
 
     // A transcript crowned with the same created_at loses to the lowest
@@ -423,16 +401,9 @@ describe("merge policy for derived singleton flags", () => {
         .all() as Array<{ sequence_id: string }>,
     ).toEqual([{ sequence_id: primaryId }]);
 
-    // ve-wsu: a second doltMerge misfires doltlite's "uncommitted changes"
-    // guard once the first merge has persisted the checkout-corrupted
-    // working set (see the transcripts reconcile test), so fork-b's
-    // row-level merge outcome — one more primary row — is applied
-    // directly.
-    insertSequence.run(forkBPrimary, bookId, "Cut fork-b", 150);
-    expect(reconcileSingletonFlags(db)).toEqual({
-      transcripts: 0,
-      sequences: 1,
-    });
+    const second = mergeWithPolicy(db, "fork-b");
+    expect(second.reconciledTranscripts).toBe(0);
+    expect(second.reconciledSequences).toBe(1);
     expect(
       db
         .prepare("SELECT sequence_id FROM sequences WHERE is_primary=1")
@@ -444,6 +415,75 @@ describe("merge policy for derived singleton flags", () => {
 });
 
 describe("engine-level merge policy behavior", () => {
+  it("repeatedly checks out a complete catalog without losing runtime rows or indexes", async () => {
+    const { engine, dataDir, root } = await setupEngine();
+    await engine.ready;
+    const artifact = value(await engine.artifacts.create({ kind: "script", label: "base" }));
+    value(await engine.files.write(artifact.artifactId, "original.md", "base content"));
+    value(engine.settings.set("test.native-merge", { marker: 42 }));
+    const job = engine.jobs.queue.enqueue({ type: "native-merge-test", payload: { marker: 42 } }).job;
+    const expectedTables = [...SEMANTIC_TABLES, ...RUNTIME_TABLES, "dolt_ignore"].sort();
+    expect(Object.keys(engine.catalogIntegrity().tableRowCounts).sort()).toEqual(expectedTables);
+    engine.close();
+
+    const db = new DatabaseSync(path.join(dataDir, "videobook.db"));
+    const runtimeRows = () => Object.fromEntries(RUNTIME_TABLES.map((table) => [
+      table, db.prepare(`SELECT * FROM ${table}`).all().map((row) => JSON.stringify(row)).sort(),
+    ]));
+    const beforeRuntime = runtimeRows();
+    try {
+      db.exec("PRAGMA foreign_keys = ON");
+      const insert = db.prepare("INSERT INTO artifacts(artifact_id, kind, label, created_at) VALUES (?, 'script', ?, 100)");
+      fork(db, "full-a", ["artifacts"], () => insert.run(uuidv7(), "from a"));
+      expect(runtimeRows()).toEqual(beforeRuntime);
+      fork(db, "full-b", ["artifacts"], () => insert.run(uuidv7(), "from b"));
+      expect(runtimeRows()).toEqual(beforeRuntime);
+      expect(db.prepare("SELECT label FROM artifacts ORDER BY label").all()).toEqual([
+        { label: "base" },
+      ]);
+      expect(db.prepare("SELECT object_hash FROM artifact_files WHERE artifact_id=? AND path=?").get(artifact.artifactId, "original.md")).toBeDefined();
+      expect(db.prepare("PRAGMA integrity_check").all()).toEqual([{ integrity_check: "ok" }]);
+      verifyConstraintHealth(db);
+    } finally {
+      db.close();
+    }
+
+    const reopened = createEngine({ dataDir, workspaceDir: path.join(root, "workspace") });
+    try {
+      await reopened.ready;
+      expect(reopened.artifacts.list().map((row) => row.label)).toEqual(["base"]);
+      expect(value(await reopened.files.read(artifact.artifactId, "original.md")).toString()).toBe("base content");
+      expect(Object.keys(reopened.catalogIntegrity().tableRowCounts).sort()).toEqual(expectedTables);
+      expect(reopened.jobs.queue.get(job.id)?.state).toBe(job.state);
+    } finally {
+      reopened.close();
+    }
+  });
+
+  it("maps native row conflicts to MERGE_CONFLICT and leaves the accepted head intact", async () => {
+    const db = await mergeDb(["engine_schema", "artifacts"]);
+    const artifactId = uuidv7();
+    try {
+      db.exec("INSERT INTO engine_schema VALUES(1, 24, 0)");
+      db.prepare("INSERT INTO artifacts(artifact_id, kind, label, created_at) VALUES(?, 'script', 'base', 0)").run(artifactId);
+      commitTables(db, ["engine_schema", "artifacts"], "base");
+      const rename = db.prepare("UPDATE artifacts SET label=? WHERE artifact_id=?");
+      fork(db, "conflict-a", ["artifacts"], () => rename.run("from a", artifactId));
+      fork(db, "conflict-b", ["artifacts"], () => rename.run("from b", artifactId));
+      mergeWithPolicy(db, "conflict-a");
+      const accepted = db.doltLog({ limit: 1 })[0]!.hash;
+      const error = expectFault(() => mergeWithPolicy(db, "conflict-b"));
+      expect(error.code).toBe("MERGE_CONFLICT");
+      expect(error.details?.branch).toBe("conflict-b");
+      expect(db.doltLog({ limit: 1 })[0]!.hash).toBe(accepted);
+      expect(db.prepare("SELECT label FROM artifacts WHERE artifact_id=?").get(artifactId)).toEqual({ label: "from a" });
+      expect(db.prepare("PRAGMA integrity_check").all()).toEqual([{ integrity_check: "ok" }]);
+      verifyConstraintHealth(db);
+    } finally {
+      db.close();
+    }
+  });
+
   it("reports IN_USE with every RESTRICT reference kind on delete", async () => {
     const { engine } = await setupEngine();
     const artifact = value(

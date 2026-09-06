@@ -40,27 +40,13 @@ import { canonicalJson, EngineFault } from "./store.js";
  * (`mergeBack`) that runs on a throwaway copy of a closed catalog database
  * in a temp directory, never on the user's open live catalog.
  *
- * ve-wsu routing (doltlite 0.11.37, verified empirically):
- *
- * - `dolt_clone` of the full 28-table catalog produces a malformed database
- *   (`invalid rootpage` on a secondary autoindex; the file cannot even be
- *   opened for reads). `bootstrapFork` therefore bootstraps from a byte
- *   snapshot of a healthy catalog database; a URL clone is attempted and
- *   health-validated, and surfaces a typed FEATURE_UNAVAILABLE error while
- *   the upstream bug stands.
- * - `dolt_merge`'s uncommitted-changes guard misfires on the full catalog
- *   (every table reports phantom `modified` status with zero row diffs).
- *   Committing the phantom dirt passes the guard, but the merge then dies
- *   in schema loading (`schema conflict on table 'sqlite_autoindex_*'`),
- *   and `dolt_checkout` corrupts the working set, so no branch dance can
- *   produce a true two-parent merge commit either. `mergeBack` therefore
- *   performs the same three-way merge at the projection layer
- *   (`dolt_merge_base` + `dolt_at_<table>` snapshots, which are unaffected)
- *   under the exact src/merge-policy.ts policy, and lands a forward
- *   integration commit on main that records the integrated fork head in a
- *   `merged-revision` trailer. When ve-wsu is fixed, the projection merge
- *   in `mergeRefs` is the single swap point for `mergeWithPolicy` +
- *   `dolt_merge`.
+ * DoltLite 0.50.6 fixes per-table staging and full-catalog URL cloning.
+ * Previously corrupted commits remain unchanged. Native merging still
+ * refuses catalogs containing ignored runtime tables (ve-wsu), including
+ * a two-table reproduction with no visible semantic changes. mergeBack
+ * therefore keeps its projection merge, deterministic singleton policy,
+ * forget-wins object handling, and forward integration commit carrying a
+ * merged-revision trailer.
  */
 
 export interface ForkBootstrapOptions {
@@ -68,16 +54,13 @@ export interface ForkBootstrapOptions {
   workspaceDir: string;
   /**
    * Byte snapshot of a healthy upstream catalog database (a copy of its
-   * `videobook.db` taken while the upstream engine was closed). This is the
-   * bootstrap that works with doltlite 0.11.37; the hosting layer provides
-   * the snapshot when it creates the platform fork.
+   * `videobook.db` taken while the upstream engine was closed). The hosting
+   * layer can provide this snapshot when it creates the platform fork.
    */
   snapshotPath?: string;
   /**
-   * Upstream catalog remote URL to `dolt_clone`. Currently blocked by
-   * ve-wsu for full engine catalogs; the clone is attempted and the result
-   * health-validated so this path starts working unchanged once doltlite
-   * is fixed. Mutually exclusive with `snapshotPath`.
+   * Upstream catalog remote URL to `dolt_clone`. The cloned schema is
+   * validated before the engine opens. Mutually exclusive with `snapshotPath`.
    */
   upstreamUrl?: string;
   remoteObjects?: ContentStore;
@@ -182,9 +165,8 @@ export async function bootstrapFork(
     const db = new DatabaseSync(databasePath);
     try {
       db.prepare("SELECT dolt_clone(?) AS result").get(options.upstreamUrl);
-      // ve-wsu: dolt_clone of a full engine catalog yields a database whose
-      // schema does not even parse (invalid rootpage on a secondary
-      // autoindex). Validate before handing the catalog to the engine.
+      // Older commits can retain invalid index roots even after upgrading
+      // DoltLite. Validate before handing the catalog to the engine.
       db.prepare("SELECT COUNT(*) AS count FROM sqlite_master").get();
       db.close();
     } catch (error) {
@@ -197,10 +179,9 @@ export async function bootstrapFork(
       throw new EngineFault({
         code: "FEATURE_UNAVAILABLE",
         message:
-          "dolt_clone produced a corrupt catalog (upstream doltlite bug " +
-          "ve-wsu: multi-table working-set materialization drops index " +
-          "rootpages). Bootstrap from a snapshot of the upstream database " +
-          "with snapshotPath instead.",
+          "Could not clone a readable upstream catalog. Check the remote " +
+          "or bootstrap from a healthy snapshot of the upstream database " +
+          "with snapshotPath.",
         details: {
           cause: error instanceof Error ? error.message : String(error),
         },

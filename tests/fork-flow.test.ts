@@ -13,16 +13,9 @@ import { EngineFault } from "../src/store.js";
 // End-to-end fork flow: fork bootstrap from a catalog snapshot, divergent
 // edits on both sides, and the dedicated merge-back integration flow.
 //
-// ve-wsu routing (see src/fork.ts module comment for the full matrix):
-// - bootstrap uses a byte snapshot of a healthy catalog database, because
-//   dolt_clone corrupts full 28-table catalogs (the last test pins the
-//   typed error the URL-clone path surfaces while the bug stands);
-// - mergeBack runs on a throwaway copy of the upstream database in a temp
-//   directory and merges at the projection layer, because dolt_merge's
-//   uncommitted-changes guard misfires on the full catalog and true merges
-//   die in schema loading — dolt_checkout corrupts too, so no branch dance
-//   can produce a two-parent merge commit. Everything around the merge
-//   mechanism (fetch, policy, objects-before-push, push) is the real flow.
+// URL and snapshot bootstrap use real catalogs and object stores. Merge-back
+// keeps the projection flow because native merge rejects ignored runtime
+// tables; its fetch, policy, object upload, and push are exercised here.
 
 const roots: string[] = [];
 
@@ -223,23 +216,49 @@ describe("fork bootstrap", () => {
     fork.close();
   });
 
-  it("surfaces the ve-wsu clone corruption as a typed error on URL bootstrap", async () => {
+  it("clones a complete catalog from its URL and reopens it with intact history", async () => {
     const fixture = await setupForkedCatalogs();
-    // dolt_clone of a full engine catalog deterministically produces a
-    // database whose schema does not parse (invalid rootpage on a secondary
-    // autoindex). The bootstrap validates the clone and refuses with a
-    // typed error pointing at snapshot bootstrap; when doltlite is fixed
-    // this path should flip to a plain successful clone.
-    const error = await expectFault(() =>
-      bootstrapFork({
-        upstreamUrl: fixture.upstreamUrl,
-        dataDir: path.join(fixture.root, "url-clone-data"),
-        workspaceDir: path.join(fixture.root, "url-clone-workspace"),
-      }),
-    );
+    const options = {
+      dataDir: path.join(fixture.root, "url-clone-data"),
+      workspaceDir: path.join(fixture.root, "url-clone-workspace"),
+      remoteObjects: fixture.upstreamObjects,
+      objectPrefix: "videobook",
+    };
+    const fork = await bootstrapFork({ ...options, upstreamUrl: fixture.upstreamUrl });
+    let head: string;
+    try {
+      await fork.ready;
+      expect(value(fork.artifacts.get(fixture.baseArtifactId)).label).toBe("img-base");
+      expect(value(await fork.files.read(fixture.baseArtifactId, "original.png")).toString()).toBe("base bytes");
+      expect(fork.catalogIntegrity().tableRowCounts.artifacts).toBe(1);
+      const artifact = value(await fork.artifacts.create({ kind: "script", label: "from URL" }));
+      value(await fork.files.write(artifact.artifactId, "original.md", "after clone"));
+      head = fork.head;
+      expect(fork.history.revisions().length).toBeGreaterThan(2);
+    } finally {
+      fork.close();
+    }
+    const reopened = createEngine(options);
+    try {
+      await reopened.ready;
+      expect(reopened.head).toBe(head);
+      expect(reopened.artifacts.list().map((artifact) => artifact.label).sort()).toEqual(["from URL", "img-base"]);
+      expect(reopened.catalogIntegrity().tableRowCounts.artifacts).toBe(2);
+    } finally {
+      reopened.close();
+    }
+  });
+
+  it("rejects an unavailable catalog URL with a typed bootstrap error", async () => {
+    const fixture = await setupForkedCatalogs();
+    const error = await expectFault(() => bootstrapFork({
+      upstreamUrl: `file://${path.join(fixture.root, "missing-catalog.db")}`,
+      dataDir: path.join(fixture.root, "missing-url-data"),
+      workspaceDir: path.join(fixture.root, "missing-url-workspace"),
+    }));
     expect(error.code).toBe("FEATURE_UNAVAILABLE");
-    expect(error.message).toContain("ve-wsu");
     expect(error.message).toContain("snapshotPath");
+    expect(error.details?.cause).toEqual(expect.any(String));
   });
 });
 
