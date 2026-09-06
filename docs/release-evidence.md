@@ -9,7 +9,24 @@ This is an assessment of the requirements in
 Beads contains the work assignments and current status; this report records
 the evidence and its limits at these revisions.
 
-## Temporary fork adoption, September 7
+## Published 5.3.3 patch, September 7
+
+[`videobook-engine@5.3.3`](https://www.npmjs.com/package/videobook-engine/v/5.3.3)
+is published as npm `latest` from `039a4c21be706e4f12140a6b14b32e21eb573cdc`,
+tagged `v5.3.3`. [Node 22/24 CI](https://github.com/justintanner/videobook-engine/actions/runs/34050088772)
+passes. The downloaded registry archive is byte-identical to the tested build,
+SHA256 `92a19b1ef6d5860b82774bd2175f6113569f66a49cc5d30e96e7710ec851f441`.
+Its clean registry install passes the complete native catalog/sequence probe,
+README/reopen, cached CLIP/CLAP inference, media decode, one Sharp resolution,
+and zero production audit findings. The default engine suite passes 352 tests
+with 12 optional skips, alongside typecheck, lint and build.
+
+Consumer `91232cb9` vendors that exact published archive and remains version
+0.1.0. It passes 3,218 tests with six optional skips, lint, four test typechecks,
+and dead-code checks. Its isolated install passes one native fork/Sharp
+resolution, client/server builds, MCP create/list, client delivery, and graceful
+shutdown. The full-catalog native regression fails on unpatched 0.50.6 and
+passes on the fork, checking actual fast-forward and three-way HEAD changes.
 
 Engine 5.3.3 pins the tested native fork `b3981dc9ed6b2e39c247b4d598b2691e19dd0b25`
 with the published 0.50.6 Node wrapper. The fork package is
