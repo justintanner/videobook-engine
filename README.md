@@ -230,6 +230,8 @@ parallel audit graph.
 
 ## Similarity
 
+Custom remote similarity models require a full commit SHA in `modelRevision`; their vectors are isolated by repository and revision. Built-in defaults keep their existing pins. Older compatibility image/video vector caches require reindexing because they cannot distinguish custom models from the default; temporal indexes retain their identities. See [model revisions](docs/model-revisions.md) for custom configuration, offline reuse, and local directories.
+
 Injected providers must explicitly declare network capabilities; remote access requires application-owned consent. See [search provider consent](docs/search-provider-consent.md) for registration, revocation, and the migration for existing custom providers.
 
 Similarity is opt-in. Provide a media embedding provider or use the built-in

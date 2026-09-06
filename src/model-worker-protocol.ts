@@ -4,6 +4,7 @@ export interface ModelWorkerConfiguration {
   kind: "clip" | "clap" | "compat-clip" | "compat-clap" | "compat-text";
   modelCacheDir: string;
   modelId?: string;
+  modelRevision?: string;
   allowModelDownload: boolean;
   ffmpegPath?: string;
   ffprobePath?: string;

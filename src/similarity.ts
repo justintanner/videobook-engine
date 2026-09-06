@@ -1,3 +1,4 @@
+import { modelIdentity } from "./model-identity.js";
 import { guardSearchProvider } from "./search-provider-access.js";
 import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
@@ -44,27 +45,12 @@ import { EngineFault } from "./store.js";
 import { isolatedModelCall } from "./isolated-models.js";
 import type { ModelWorkerConfiguration } from "./model-worker-protocol.js";
 
-const DEFAULT_MODEL_ID = "Xenova/clip-vit-base-patch32";
-const DEFAULT_MODEL_REVISION =
-  "d15189d7028b43f1d3e65039190477f6af591c2a";
-const DEFAULT_EMBEDDING_SPACE =
-  "clip-vit-b32-q8-d15189d7028b43f1d3e65039190477f6af591c2a-v1";
 const DEFAULT_DIMENSIONS = 512;
 
-const DEFAULT_AUDIO_MODEL_ID = "Xenova/clap-htsat-unfused";
-const DEFAULT_AUDIO_MODEL_REVISION =
-  "c28f2883575e590e04d3146ff0713c2448d691ba";
-const DEFAULT_AUDIO_EMBEDDING_SPACE =
-  "clap-htsat-unfused-q8-c28f2883575e590e04d3146ff0713c2448d691ba-audio-v1";
 const DEFAULT_AUDIO_DIMENSIONS = 512;
 const DEFAULT_AUDIO_SAMPLE_RATE = 48_000;
 const DEFAULT_AUDIO_MAX_SAMPLES = 480_000;
 
-const DEFAULT_TEXT_MODEL_ID = "onnx-community/all-MiniLM-L6-v2-ONNX";
-const DEFAULT_TEXT_MODEL_REVISION =
-  "aff7a1dc4e8a1ea593e6ea21e95c22ef0a25966f";
-const DEFAULT_TEXT_EMBEDDING_SPACE =
-  "all-minilm-l6-v2-q4-aff7a1dc4e8a1ea593e6ea21e95c22ef0a25966f-text-v1";
 const DEFAULT_TEXT_DIMENSIONS = 384;
 const DEFAULT_TEXT_MAX_BYTES = 1024 * 1024;
 const DEFAULT_TEXT_MAX_CHUNKS = 256;
@@ -1469,16 +1455,14 @@ function isolatedCompatibilityProvider(
   kind: "compat-clip" | "compat-clap" | "compat-text", context: EngineContext, config: SimilarityConfig,
 ): SimilarityEmbeddingProvider & SimilarityAudioEmbeddingProvider & SimilarityTextEmbeddingProvider {
   const local = kind === "compat-clap" ? config.audio! : kind === "compat-text" ? config.text! : config;
-  const modelId = local.modelId;
+  const modelId = local.modelId?.startsWith(".") ? path.resolve(local.modelId) : local.modelId;
   const modelCacheDir = local.modelCacheDir ?? config.modelCacheDir ?? path.join(context.config.dataDir!, "similarity-models");
-  const configuration = { kind, modelCacheDir, modelId, allowModelDownload: local.allowModelDownload ?? config.allowModelDownload,
+  const configuration = { kind, modelCacheDir, modelId, modelRevision: local.modelRevision, allowModelDownload: local.allowModelDownload ?? config.allowModelDownload,
     ffmpegPath: kind === "compat-clap" ? config.audio!.ffmpegPath ?? config.ffmpegPath : config.ffmpegPath,
     ffprobePath: config.ffprobePath };
-  const audioSpace = modelId && modelId !== DEFAULT_AUDIO_MODEL_ID ? `audio-${modelId.replace(/[^a-zA-Z0-9]+/g, "-")}-v1` : DEFAULT_AUDIO_EMBEDDING_SPACE;
-  const textSpace = modelId && modelId !== DEFAULT_TEXT_MODEL_ID ? `text-${modelId.replace(/[^a-zA-Z0-9]+/g, "-")}-v1` : DEFAULT_TEXT_EMBEDDING_SPACE;
   return {
     networkAccess: Object.freeze({ modelDownloads: configuration.allowModelDownload === true, inference: false }),
-    embeddingSpace: kind === "compat-clip" ? DEFAULT_EMBEDDING_SPACE : kind === "compat-clap" ? audioSpace : textSpace,
+    get embeddingSpace() { return modelIdentity(kind, configuration).embeddingSpace; },
     dimensions: kind === "compat-text" ? DEFAULT_TEXT_DIMENSIONS : DEFAULT_DIMENSIONS,
     async prepare(options = {}) { await isolatedModelCall(configuration, { method: "prepare" }, options); },
     embedImage(sourcePath, options = {}) { return isolatedModelCall(configuration, { method: "embedImage", sourcePath }, options) as Promise<Float32Array>; },
@@ -1491,7 +1475,7 @@ function isolatedCompatibilityProvider(
 export function createInlineSimilarityProvider(configuration: ModelWorkerConfiguration) {
   const common = { modelCacheDir: configuration.modelCacheDir, allowModelDownload: configuration.allowModelDownload,
     ffmpegPath: configuration.ffmpegPath, ffprobePath: configuration.ffprobePath };
-  const model = { ...common, modelId: configuration.modelId };
+  const model = { ...common, modelId: configuration.modelId, modelRevision: configuration.modelRevision };
   if (configuration.kind === "compat-clip") return new LocalClipProvider(process.cwd(), model);
   if (configuration.kind === "compat-clap") return new LocalClapAudioProvider(process.cwd(), common, model);
   return new LocalTextProvider(process.cwd(), common, model);
@@ -1499,7 +1483,7 @@ export function createInlineSimilarityProvider(configuration: ModelWorkerConfigu
 
 class LocalClipProvider implements SimilarityEmbeddingProvider {
   get networkAccess() { return { modelDownloads: this.config.allowModelDownload === true, inference: false }; }
-  readonly embeddingSpace = DEFAULT_EMBEDDING_SPACE;
+  get embeddingSpace() { return modelIdentity("compat-clip", this.config).embeddingSpace; }
   readonly dimensions = DEFAULT_DIMENSIONS;
   private embedder: FeaturePipeline | null = null;
 
@@ -1577,16 +1561,14 @@ class LocalClipProvider implements SimilarityEmbeddingProvider {
       "similarity-models",
     );
     await mkdir(cacheDir, { recursive: true });
-    const modelId = this.config.modelId ?? DEFAULT_MODEL_ID;
+    const { modelId, modelRevision } = modelIdentity("compat-clip", this.config);
     try {
       const { pipeline } = await loadTransformers();
       this.embedder = await pipeline("image-feature-extraction", modelId, {
         dtype: "q8",
         cache_dir: cacheDir,
         local_files_only: this.config.allowModelDownload !== true,
-        ...(modelId === DEFAULT_MODEL_ID
-          ? { revision: DEFAULT_MODEL_REVISION }
-          : {}),
+        ...(modelRevision ? { revision: modelRevision } : {}),
       }) as unknown as FeaturePipeline;
       return this.embedder;
     } catch (error) {
@@ -1619,7 +1601,7 @@ class LocalClipProvider implements SimilarityEmbeddingProvider {
 
 class LocalClapAudioProvider implements SimilarityAudioEmbeddingProvider {
   get networkAccess() { return { modelDownloads: (this.config.allowModelDownload ?? this.sharedConfig.allowModelDownload) === true, inference: false }; }
-  readonly embeddingSpace: string;
+  get embeddingSpace() { return modelIdentity("compat-clap", this.config).embeddingSpace; }
   readonly dimensions = DEFAULT_AUDIO_DIMENSIONS;
   private processor: AudioProcessor | null = null;
   private model: AudioModel | null = null;
@@ -1630,12 +1612,7 @@ class LocalClapAudioProvider implements SimilarityAudioEmbeddingProvider {
     private readonly dataDir: string,
     private readonly sharedConfig: SimilarityConfig,
     private readonly config: SimilarityAudioConfig,
-  ) {
-    this.embeddingSpace =
-      config.modelId && config.modelId !== DEFAULT_AUDIO_MODEL_ID
-        ? `audio-${config.modelId.replace(/[^a-zA-Z0-9]+/g, "-")}-v1`
-        : DEFAULT_AUDIO_EMBEDDING_SPACE;
-  }
+  ) {}
 
   async prepare(options: MediaOperationOptions = {}): Promise<void> {
     checkMediaCancellation(options);
@@ -1683,12 +1660,10 @@ class LocalClapAudioProvider implements SimilarityAudioEmbeddingProvider {
       this.sharedConfig.modelCacheDir ??
       path.join(dataDir, "similarity-models");
     await mkdir(cacheDir, { recursive: true });
-    const modelId = this.config.modelId ?? DEFAULT_AUDIO_MODEL_ID;
+    const { modelId, modelRevision } = modelIdentity("compat-clap", this.config);
     const allowDownload = this.config.allowModelDownload ??
       this.sharedConfig.allowModelDownload;
-    const pinned = modelId === DEFAULT_AUDIO_MODEL_ID
-      ? { revision: DEFAULT_AUDIO_MODEL_REVISION }
-      : {};
+    const pinned = modelRevision ? { revision: modelRevision } : {};
     try {
       const { AutoProcessor, ClapAudioModelWithProjection } =
         await loadTransformers();
@@ -1728,7 +1703,7 @@ class LocalClapAudioProvider implements SimilarityAudioEmbeddingProvider {
 
 class LocalTextProvider implements SimilarityTextEmbeddingProvider {
   get networkAccess() { return { modelDownloads: (this.config.allowModelDownload ?? this.sharedConfig.allowModelDownload) === true, inference: false }; }
-  readonly embeddingSpace: string;
+  get embeddingSpace() { return modelIdentity("compat-text", this.config).embeddingSpace; }
   readonly dimensions = DEFAULT_TEXT_DIMENSIONS;
   private embedder: TextFeaturePipeline | null = null;
 
@@ -1736,11 +1711,7 @@ class LocalTextProvider implements SimilarityTextEmbeddingProvider {
     private readonly dataDir: string,
     private readonly sharedConfig: SimilarityConfig,
     private readonly config: SimilarityTextConfig,
-  ) {
-    this.embeddingSpace = config.modelId && config.modelId !== DEFAULT_TEXT_MODEL_ID
-      ? `text-${config.modelId.replace(/[^a-zA-Z0-9]+/g, "-")}-v1`
-      : DEFAULT_TEXT_EMBEDDING_SPACE;
-  }
+  ) {}
 
   async prepare(options: MediaOperationOptions = {}): Promise<void> {
     checkMediaCancellation(options);
@@ -1785,7 +1756,7 @@ class LocalTextProvider implements SimilarityTextEmbeddingProvider {
       this.sharedConfig.modelCacheDir ??
       path.join(dataDir, "similarity-models");
     await mkdir(cacheDir, { recursive: true });
-    const modelId = this.config.modelId ?? DEFAULT_TEXT_MODEL_ID;
+    const { modelId, modelRevision } = modelIdentity("compat-text", this.config);
     const allowDownload = this.config.allowModelDownload ??
       this.sharedConfig.allowModelDownload;
     try {
@@ -1794,9 +1765,7 @@ class LocalTextProvider implements SimilarityTextEmbeddingProvider {
         dtype: "q4",
         cache_dir: cacheDir,
         local_files_only: allowDownload !== true,
-        ...(modelId === DEFAULT_TEXT_MODEL_ID
-          ? { revision: DEFAULT_TEXT_MODEL_REVISION }
-          : {}),
+        ...(modelRevision ? { revision: modelRevision } : {}),
       }) as unknown as TextFeaturePipeline;
       return this.embedder;
     } catch (error) {

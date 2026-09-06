@@ -228,6 +228,8 @@ export interface SimilarityAudioConfig {
   providerConsent?: SearchProviderConsent;
   /** A Hugging Face CLAP model ID or a local compatible model directory. */
   modelId?: string;
+  /** Full remote commit SHA. Required for custom repositories; built-in models default to their pinned revision. */
+  modelRevision?: string;
   /** A cache directory for the audio model. */
   modelCacheDir?: string;
   /** Refuse network downloads when the audio model is not already available. */
@@ -243,6 +245,8 @@ export interface SimilarityTextConfig {
   providerConsent?: SearchProviderConsent;
   /** A Hugging Face model ID or a local compatible model directory. */
   modelId?: string;
+  /** Full remote commit SHA. Required for custom repositories; built-in models default to their pinned revision. */
+  modelRevision?: string;
   /** A cache directory for the text model. */
   modelCacheDir?: string;
   /** Refuse network downloads when the text model is not already available. */
@@ -262,6 +266,8 @@ export interface SimilarityConfig {
   modelCacheDir?: string;
   /** A Hugging Face model ID or a local compatible model directory. */
   modelId?: string;
+  /** Full remote commit SHA. Required for custom repositories; built-in models default to their pinned revision. */
+  modelRevision?: string;
   /** Refuse network downloads when the model is not already available. */
   allowModelDownload?: boolean;
   ffmpegPath?: string;

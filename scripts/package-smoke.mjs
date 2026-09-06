@@ -63,6 +63,21 @@ try {
   reopened.temporalSearch.providers.register(provider, { inference: true });
   assert.equal(reopened.temporalSearch.providers.unregister(provider.manifestId), true);
 } finally { reopened.close(); }
+const missingRevision = createEngine({ rootDir: ".custom-model-missing-revision", initialBookName: "custom", similarity: { modelId: "fixture/custom" } });
+try {
+  await missingRevision.ready;
+  const result = await missingRevision.similarity.prepare({ kind: "image" });
+  assert.equal(result.ok, false);
+  assert.equal(result.error.code, "INVALID_INPUT");
+} finally { missingRevision.close(); }
+const pinnedCustom = createEngine({ rootDir: ".custom-model-pinned", initialBookName: "pinned", similarity: { modelId: "fixture/custom", modelRevision: "a".repeat(40) } });
+try {
+  await pinnedCustom.ready;
+  assert.match(pinnedCustom.similarity.stats().value.embeddingSpace, /^custom-/);
+  const result = await pinnedCustom.similarity.prepare({ kind: "image" });
+  assert.equal(result.ok, false);
+  assert.equal(result.error.code, "OFFLINE");
+} finally { pinnedCustom.close(); }
 const engineRequire = createRequire(import.meta.resolve("videobook-engine"));
 const transformersUrl = new URL("./transformers-runtime.js", import.meta.resolve("videobook-engine"));
 const transformersRequire = createRequire(transformersUrl);

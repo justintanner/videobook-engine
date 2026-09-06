@@ -50,6 +50,10 @@ export class ModelFileResolver {
     safeRelative(filename);
     const revision = options.revision ?? "main";
     safeRelative(revision);
+    if ((this.config.modelId !== undefined && modelId !== this.config.modelId)
+      || (this.config.modelRevision !== undefined && revision !== this.config.modelRevision)) {
+      throw unavailable("Model file request does not match its worker repository and immutable revision");
+    }
     if (options.cache_dir && resolve(options.cache_dir) !== resolve(this.config.modelCacheDir)) throw unavailable("Model cache scope does not match its worker");
     const key = JSON.stringify([modelId, revision, filename, options.local_files_only === true]);
     let file = this.verified.get(key);
@@ -103,7 +107,7 @@ export class ModelFileResolver {
       if (expected || receipt) return (await this.snapshot(createReadStream(cachePath), expected ?? receipt)).path;
       if (!this.downloadAllowed(options)) throw new EngineFault({ code: "OFFLINE", message: "Cached model has no integrity metadata. Model downloads are disabled; explicitly prepare the model to verify it." });
     }
-    if (this.config.allowLocalModels) {
+    if (this.config.allowLocalModels && this.config.modelRevision === undefined) {
       const localPath = join(this.config.localModelPath, modelId, filename);
       if (await exists(localPath)) return (await this.snapshot(createReadStream(localPath), expected)).path;
     }

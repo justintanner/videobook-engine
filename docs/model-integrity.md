@@ -68,3 +68,5 @@ reuse CLIP/CLAP, reject modified JSON/tokenizer/ONNX bytes, and exercise MiniLM
 external weights, offline reopen and a corrupt weight shard. The installed
 package smoke always checks corrupted pinned configuration rejection and can
 also run real cached model inference.
+
+Custom remote compatibility models also require an explicit immutable commit. See [model revision selection](model-revisions.md) for coherent file loading, embedding-space isolation and migration from moving aliases. Explicit local-directory models remain trusted local inputs.
