@@ -78,6 +78,32 @@ try {
   assert.equal(result.ok, false);
   assert.equal(result.error.code, "OFFLINE");
 } finally { pinnedCustom.close(); }
+const { writeFile: writeRemoteFixture, unlink: unlinkRemoteFixture } = await import("node:fs/promises");
+let remoteBytes = Buffer.from("corrupt");
+const remoteStore = {
+  async head() { return { exists: true }; }, async uploadFile() {}, async delete() {},
+  async downloadFile(_key, destination) { await writeRemoteFixture(destination, remoteBytes); },
+};
+const remoteBook = createEngine({ rootDir: ".remote-integrity", initialBookName: "remote", remoteObjects: remoteStore });
+try {
+  await remoteBook.ready;
+  const artifact = await remoteBook.artifacts.create("video", "remote fixture");
+  assert.equal(artifact.ok, true);
+  assert.equal((await remoteBook.files.write(artifact.value.artifactId, "original.mp4", "correct")).ok, true);
+  const manifest = await remoteBook.files.manifest(artifact.value.artifactId);
+  const objectHash = manifest.value.files[0].objectHash;
+  await remoteBook.workspaces.evict(artifact.value.artifactId);
+  await unlinkRemoteFixture(".remote-integrity/data/objects/sha256/" + objectHash.slice(0, 2) + "/" + objectHash);
+  const rejected = await remoteBook.files.read(artifact.value.artifactId, "original.mp4");
+  assert.equal(rejected.ok, false);
+  assert.equal(rejected.error.code, "OBJECT_UNAVAILABLE");
+  assert.equal(rejected.error.details.reason, "checksum_mismatch");
+  remoteBytes = Buffer.from("correct");
+  const retried = await remoteBook.files.read(artifact.value.artifactId, "original.mp4");
+  assert.equal(retried.ok, true);
+  assert.equal(retried.value.toString(), "correct");
+} finally { remoteBook.close(); }
+console.log("Packaged remote object checksum rejection and retry passed");
 const engineRequire = createRequire(import.meta.resolve("videobook-engine"));
 const transformersUrl = new URL("./transformers-runtime.js", import.meta.resolve("videobook-engine"));
 const transformersRequire = createRequire(transformersUrl);

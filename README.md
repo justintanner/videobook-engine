@@ -274,3 +274,11 @@ Configure `remoteObjects` to publish content-addressed objects and
 `catalogBackup` to push the Dolt catalog. `engine.storage.backup()` publishes
 objects first, then pushes the catalog, so a restored catalog never points to
 objects that have not been uploaded.
+
+Missing local objects are downloaded through `ContentStore.downloadFile` into
+unique temporary files. The engine streams a SHA-256 check before publishing the
+requested object path or materializing it into a workspace. A mismatch returns
+`OBJECT_UNAVAILABLE` with `details.reason = "checksum_mismatch"`; failed staging
+files are removed and a later valid download can be retried. A concurrent forget
+prevents the downloaded bytes from being published. This check applies to new
+remote downloads; it does not rehash every existing local object on every read.

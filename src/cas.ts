@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { createReadStream } from "node:fs";
+import { createReadStream, renameSync } from "node:fs";
 import {
   constants,
   copyFile,
@@ -16,6 +16,7 @@ import * as path from "node:path";
 import { v7 as uuidv7 } from "uuid";
 
 import type { ContentStore } from "./engine-types.js";
+import { EngineFault } from "./store.js";
 
 export interface StoredObject {
   hash: string;
@@ -210,7 +211,18 @@ export class ObjectStore {
     const temporary = `${destination}.${uuidv7()}.download`;
     try {
       await this.remote.downloadFile(this.keyFor(hash), temporary);
-      await rename(temporary, destination);
+      const actualHash = await hashFile(temporary);
+      if (actualHash !== hash) {
+        throw new EngineFault({
+          code: "OBJECT_UNAVAILABLE",
+          message: `Downloaded object checksum mismatch: ${hash}`,
+          details: { objectHash: hash, actualHash, reason: "checksum_mismatch" },
+        });
+      }
+      // Keep the final tombstone check and publication in one synchronous
+      // section: a forget during download/verification must not resurrect bytes.
+      if (this.isForgotten?.(hash)) throw new Error(`Object unavailable: ${hash}`);
+      renameSync(temporary, destination);
     } finally {
       await rm(temporary, { force: true }).catch(() => undefined);
     }
