@@ -95,6 +95,30 @@ nonempty artifact revision after SHA-256, dimensions and duration verification
 (`vb-v9nq`), then indexed and retrieved successfully. These fixture and local
 library results do not replace the frozen-corpus or reference-hardware gates.
 
+Provider dispatch scoping is hardened in Engine `dffaf21` (`ve-ovz.20`).
+Compatibility preparation and embedding receive a fresh options object containing
+only the supplied cancellation signal and timeout. Actual HTTP fixtures showed
+that the previous implementation transmitted extra application context and let
+providers mutate query controls. Six regressions now verify all four modalities,
+selected file/text transmission, caller-option isolation, rejected foreign-book
+UUIDs and raw hash/path references, and temporal reference/query separation.
+The engine's 347 default tests, types, dead-code checks, build and installed
+package smoke test pass, as does Node 22/24 CI. See
+`docs/search-provider-consent.md` for the trusted in-process provider boundary.
+Consumer `0661c994` vendors the exact verified package (SHA-256
+`cb71bf39f3a088058b44273e402569c0a7c90bbb8abb8866f4118979d5ddfbb8`).
+Its 3,176 default tests, 35 explicit model/offline/repair cases, lint, test
+types, client/server builds, dead-code checks and isolated clean install pass.
+`vb-g3ai` is complete; the application commit remains local under its repository
+push policy.
+
+The remaining HTTP audit found an independently reproduced application gap:
+modern MCP discovery and `list_books` accepted an untrusted Origin and Host and
+returned a private fixture book. Express uses unrestricted CORS and no explicit
+listen host. `vb-0ujh` tracks request-origin/host policy and HTTP access-path
+checks. These findings keep `ve-ovz.14` open; Engine artifact scoping and
+provider consent do not establish authorization at the application's transport.
+
 ## Migration, consumer and packaging
 
 Section 15.4 migration is covered by `tests/migration.test.ts`, the pinned v4
