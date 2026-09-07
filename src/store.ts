@@ -828,6 +828,7 @@ export class DoltStore {
   private hasWorkingDiff(table: SemanticTable): boolean {
     let probe = this.workingDiffProbes.get(table);
     if (!probe) {
+      if (this.isUncommittedTable(table)) return true;
       probe = this.db.prepare(
         `SELECT 1 AS present FROM dolt_diff_${table}
          WHERE to_commit = 'WORKING' LIMIT 1`,
@@ -835,6 +836,21 @@ export class DoltStore {
       this.workingDiffProbes.set(table, probe);
     }
     return Boolean(probe.get());
+  }
+
+  /**
+   * A table Dolt has never committed has no `dolt_diff_<table>` system table
+   * yet, so preparing the probe above would throw `no such table`. That is
+   * exactly the state a structural migration leaves behind on a catalog that
+   * never carried the table — a schema 24 book gaining the asset-tag tables,
+   * say — and the table's very existence is a change against HEAD, so report
+   * it dirty. Nothing is cached: the system table appears as soon as the
+   * migration commit lands, and the ordinary row probe takes over from there.
+   */
+  private isUncommittedTable(table: SemanticTable): boolean {
+    return this.db
+      .doltStatus()
+      .some((entry) => entry.table_name === table && entry.status === "new table");
   }
 
   private assertCommittedTablesClean(

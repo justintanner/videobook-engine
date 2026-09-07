@@ -1,3 +1,4 @@
+import { rmSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import * as path from "node:path";
@@ -6,6 +7,11 @@ import { DatabaseSync } from "@dolthub/doltlite";
 import { afterEach, describe, expect, it } from "vitest";
 
 import { SCHEMA_VERSION } from "../src/catalog-metadata.js";
+import {
+  SEMANTIC_SCHEMA_SQL,
+  SEMANTIC_TABLES,
+  TAG_SCHEMA_SQL,
+} from "../src/schema.js";
 import { createEngine } from "../src/index.js";
 import {
   ASSET_TAG_TABLES,
@@ -53,6 +59,70 @@ function downgrade(root: string, version: number): void {
     "SELECT dolt_commit('-m', 'downgrade fixture', '--author', 'Videobook <videobook@localhost>') AS hash",
   ).get();
   db.close();
+}
+
+/**
+ * Rewrites a catalog the way an engine that predates asset tags would have
+ * left it: the tag tables are absent from every commit, not merely dropped
+ * from the tip. The distinction is load-bearing. Dolt exposes
+ * `dolt_diff_<table>` only for a table its history knows, so a
+ * dropped-then-committed table still answers diff probes while a genuinely
+ * old book does not — the state every real schema 24 book is in.
+ */
+function rewriteWithoutTagHistory(root: string, version: number): void {
+  const catalog = path.join(root, "data", "videobook.db");
+  const carried = SEMANTIC_TABLES.filter(
+    (table) => !(ASSET_TAG_TABLES as readonly string[]).includes(table),
+  );
+  const source = new DatabaseSync(catalog);
+  const rows = new Map<string, Array<Record<string, unknown>>>(
+    carried.map((table) => [
+      table,
+      source.prepare(`SELECT * FROM ${table}`).all() as Array<
+        Record<string, unknown>
+      >,
+    ]),
+  );
+  source.close();
+  rmSync(catalog, { recursive: true, force: true });
+
+  const rebuilt = new DatabaseSync(catalog);
+  rebuilt.exec(SEMANTIC_SCHEMA_SQL.replace(TAG_SCHEMA_SQL, ""));
+  rebuilt.exec(
+    `CREATE TABLE IF NOT EXISTS dolt_ignore(
+      pattern TEXT NOT NULL,
+      ignored TINYINT NOT NULL,
+      PRIMARY KEY(pattern)
+    )`,
+  );
+  for (const pattern of ["runtime_%", "sqlite_sequence", "job_runs"]) {
+    rebuilt
+      .prepare("INSERT INTO dolt_ignore(pattern, ignored) VALUES (?, 1)")
+      .run(pattern);
+  }
+  for (const table of carried) {
+    for (const row of rows.get(table) ?? []) {
+      const columns = Object.keys(row);
+      rebuilt
+        .prepare(
+          `INSERT INTO ${table}(${columns.join(", ")})
+           VALUES (${columns.map(() => "?").join(", ")})`,
+        )
+        .run(...columns.map((column) => row[column] as null));
+    }
+  }
+  rebuilt.prepare("UPDATE engine_schema SET version=? WHERE singleton=1").run(
+    version,
+  );
+  for (const table of [...carried, "dolt_ignore"]) {
+    rebuilt.prepare("SELECT dolt_add(?) AS result").get(table);
+  }
+  rebuilt
+    .prepare(
+      "SELECT dolt_commit('-m', 'legacy catalog without tag tables', '--author', 'Videobook <videobook@localhost>') AS hash",
+    )
+    .get();
+  rebuilt.close();
 }
 
 function tableNames(root: string): string[] {
@@ -112,6 +182,52 @@ describe("schema 24 asset tag migration", () => {
       }),
     );
     expect(tagged.effective.map((tag) => tag.key)).toEqual(["insert"]);
+    upgraded.close();
+  });
+
+  it("upgrades a catalog whose history never carried the tag tables", async () => {
+    const root = await tempRoot();
+    const engine = createEngine({ rootDir: root, initialBookName: "legacy" });
+    await engine.ready;
+    const artifact = value(
+      await engine.artifacts.create({ kind: "video", label: "clip" }),
+    );
+    engine.close();
+    rewriteWithoutTagHistory(root, 24);
+    expect(tableNames(root)).toEqual([]);
+    expect(recordedVersion(root)).toBe(24);
+
+    const upgraded = createEngine({ rootDir: root });
+    await upgraded.ready;
+    expect(recordedVersion(root)).toBe(SCHEMA_VERSION);
+    expect(tableNames(root)).toEqual([...ASSET_TAG_TABLES].sort());
+    expect(upgraded.artifacts.list().map((row) => row.artifactId)).toEqual([
+      artifact.artifactId,
+    ]);
+    expect(value(upgraded.tags.read(artifact.artifactId)).effective).toEqual([]);
+    const tagged = value(
+      await upgraded.tags.add(artifact.artifactId, {
+        facet: "editing",
+        label: "Interview",
+      }),
+    );
+    expect(tagged.effective.map((tag) => tag.key)).toEqual(["interview"]);
+
+    const db = new DatabaseSync(path.join(root, "data", "videobook.db"));
+    try {
+      expect(
+        db
+          .doltStatus()
+          .filter((entry) => entry.table_name.startsWith("artifact_tag")),
+      ).toEqual([]);
+      expect(
+        db
+          .doltLog()
+          .filter((entry) => entry.message.startsWith("Add asset tag tables")),
+      ).toHaveLength(1);
+    } finally {
+      db.close();
+    }
     upgraded.close();
   });
 
