@@ -1,6 +1,7 @@
 import type { DatabaseSync, MergeResult } from "@dolthub/doltlite";
 
 import { EngineFault } from "./store.js";
+import { assertTagMergeCompatible } from "./tag-merge.js";
 
 /**
  * Merge policy per constraint class (ve-mim.6; see docs/engine-layout.md
@@ -289,6 +290,7 @@ export function mergeWithPolicy(
   branch: string,
 ): MergePolicyOutcome {
   assertSameSchemaVersion(db, "HEAD", branch);
+  assertTagMergeCompatible(db, "HEAD", branch);
   let result: MergeResult;
   try {
     result = db.doltMerge(branch);

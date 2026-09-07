@@ -14,8 +14,8 @@ import { EngineFault } from "../src/store.js";
 // edits on both sides, and the dedicated merge-back integration flow.
 //
 // URL and snapshot bootstrap use real catalogs and object stores. Merge-back
-// keeps the projection flow because native merge rejects ignored runtime
-// tables; its fetch, policy, object upload, and push are exercised here.
+// retains the projection flow's policies; its fetch, object upload, and
+// push are exercised here alongside native merge's separate tests.
 
 const roots: string[] = [];
 
@@ -194,6 +194,34 @@ async function openUpstream(fixture: ForkFixture): Promise<Engine> {
 }
 
 describe("fork bootstrap", () => {
+  it("rejects competing automatic snapshots during merge-back even when metadata agrees", async () => {
+    const fixture = await setupForkedCatalogs();
+    for (const [open, label] of [[openUpstream, "Beach"], [openFork, "City"]] as const) {
+      const engine = await open(fixture);
+      try {
+        const sourceHash = value(await engine.files.manifest(fixture.baseArtifactId)).files[0]!.objectHash;
+        value(await engine.tags.import(fixture.baseArtifactId, {
+          version: 1, artifactId: fixture.baseArtifactId, manual: [], dismissed: [],
+          automatic: { sourceHash, generator: "tagger", extractorVersion: "1", analyzedAt: 100,
+            tags: [{ facet: "places", label }] },
+        }));
+        value(await engine.storage.backup());
+      } finally { engine.close(); }
+    }
+    const error = await expectFault(() => mergeBack({
+      upstreamDbPath: path.join(fixture.upstreamData, "videobook.db"),
+      upstreamRemote: { name: "origin", url: fixture.upstreamUrl },
+      forkRemote: { name: "fork", url: fixture.forkUrl },
+      upstreamObjects: fixture.upstreamObjects, forkObjects: fixture.forkObjects,
+      objectPrefix: fixture.prefix,
+    }));
+    expect(error.code).toBe("MERGE_CONFLICT");
+    const upstream = await openUpstream(fixture);
+    try {
+      expect(value(upstream.tags.read(fixture.baseArtifactId)).effective.map((tag) => tag.label)).toEqual(["Beach"]);
+    } finally { upstream.close(); }
+  });
+
   it("clones a catalog snapshot and reads upstream objects lazily", async () => {
     const fixture = await setupForkedCatalogs();
     const fork = await openFork(fixture);

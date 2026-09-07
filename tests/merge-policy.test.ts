@@ -660,6 +660,49 @@ describe("asset tag merges", () => {
     "artifact_tag_snapshots",
   ];
 
+  it("refuses to combine different automatic sets with identical snapshot metadata", async () => {
+    const db = await mergeDb(TAG_TABLES);
+    const artifactId = uuidv7();
+    try {
+      db.exec("INSERT INTO engine_schema VALUES(1, 25, 0)");
+      db.prepare("INSERT INTO artifacts(artifact_id, kind, label, created_at) VALUES(?, 'video', 'clip', 0)").run(artifactId);
+      commitTables(db, TAG_TABLES, "base");
+      for (const [branch, label] of [["auto-a", "beach"], ["auto-b", "city"]]) {
+        fork(db, branch!, TAG_TABLES, () => {
+          db.prepare("INSERT INTO artifact_tag_snapshots VALUES(?, ?, 'tagger', NULL, '1', 1, 1, 100)").run(artifactId, "a".repeat(64));
+          db.prepare("INSERT INTO artifact_tags VALUES(?, 'automatic', 'places', ?, ?, NULL, 100)").run(artifactId, label, label);
+        });
+      }
+      mergeWithPolicy(db, "auto-a");
+      const head = db.doltLog({ limit: 1 })[0]?.commit_hash;
+      expect(expectFault(() => mergeWithPolicy(db, "auto-b")).code).toBe("MERGE_CONFLICT");
+      expect(db.doltLog({ limit: 1 })[0]?.commit_hash).toBe(head);
+      expect(db.prepare("SELECT label FROM artifact_tags").all()).toEqual([{ label: "beach" }]);
+    } finally { db.close(); }
+  });
+
+  it.each(["manual", "dismissal"] as const)("refuses a merge exceeding the %s tag limit before changing HEAD", async (kind) => {
+    const db = await mergeDb(TAG_TABLES);
+    const artifactId = uuidv7();
+    try {
+      db.exec("INSERT INTO engine_schema VALUES(1, 25, 0)");
+      db.prepare("INSERT INTO artifacts(artifact_id, kind, label, created_at) VALUES(?, 'video', 'clip', 0)").run(artifactId);
+      const insert = kind === "manual"
+        ? db.prepare("INSERT INTO artifact_tags VALUES(?, 'manual', 'editing', ?, ?, NULL, 0)")
+        : db.prepare("INSERT INTO artifact_tag_dismissals VALUES(?, 'editing', ?, ?, 0)");
+      const limit = kind === "manual" ? 100 : 500;
+      for (let index = 0; index < limit - 1; index++) insert.run(artifactId, `tag ${index}`, `tag ${index}`);
+      commitTables(db, TAG_TABLES, "base");
+      for (const branch of ["limit-a", "limit-b"]) {
+        fork(db, branch, TAG_TABLES, () => insert.run(artifactId, branch, branch));
+      }
+      mergeWithPolicy(db, "limit-a");
+      const head = db.doltLog({ limit: 1 })[0]?.commit_hash;
+      expect(expectFault(() => mergeWithPolicy(db, "limit-b")).code).toBe("MERGE_VIOLATION");
+      expect(db.doltLog({ limit: 1 })[0]?.commit_hash).toBe(head);
+    } finally { db.close(); }
+  });
+
   it("keeps unrelated manual additions from both forks", async () => {
     const db = await mergeDb(TAG_TABLES);
     const left = uuidv7();

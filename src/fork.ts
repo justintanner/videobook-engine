@@ -19,6 +19,7 @@ import {
 } from "./merge-policy.js";
 import { SEMANTIC_TABLES } from "./schema.js";
 import { canonicalJson, EngineFault } from "./store.js";
+import { assertTagMergeCompatible } from "./tag-merge.js";
 
 /**
  * Fork bootstrap and merge-back integration (ve-mim.7; see
@@ -41,10 +42,9 @@ import { canonicalJson, EngineFault } from "./store.js";
  * in a temp directory, never on the user's open live catalog.
  *
  * DoltLite 0.50.6 fixes per-table staging and full-catalog URL cloning.
- * Previously corrupted commits remain unchanged. Native merging still
- * refuses catalogs containing ignored runtime tables (ve-wsu), including
- * a two-table reproduction with no visible semantic changes. mergeBack
- * therefore keeps its projection merge, deterministic singleton policy,
+ * Previously corrupted commits remain unchanged. The pinned native fork
+ * also fixes merging with ignored runtime tables. mergeBack keeps its
+ * separately verified projection merge, deterministic singleton policy,
  * forget-wins object handling, and forward integration commit carrying a
  * merged-revision trailer.
  */
@@ -364,10 +364,8 @@ async function mergeBackIn(
  * commits the result as one forward integration commit. The policy wrapper
  * is identical to `mergeWithPolicy` (same-schema precondition, constraint
  * verification, deterministic singleton-flag reconcile); only the merge
- * mechanism
- * differs — a projection-level three-way merge instead of `dolt_merge`,
- * which ve-wsu makes unusable on full engine catalogs (see the module
- * comment). Returns null when the fork's net changes are already present
+ * mechanism differs — a projection-level three-way merge instead of
+ * `dolt_merge`. Returns null when the fork's net changes are already present
  * on main, in which case nothing is written or committed.
  */
 function integrate(
@@ -386,6 +384,7 @@ function integrate(
   reconciled: { transcripts: number; sequences: number };
 } | null {
   assertSameSchemaVersion(db, "HEAD", forkRef);
+  assertTagMergeCompatible(db, "HEAD", forkRef, context.baseRevision);
   const merge = mergeRefs(db, "HEAD", forkRef, context.baseRevision);
   if (!merge) {
     // The fork's net changes are already present on main (for example a

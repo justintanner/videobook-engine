@@ -208,6 +208,12 @@ tags; a modified or generated derivative inherits only manual intent, with
 Re-importing unchanged, valid evidence is a no-op and leaves
 `skippedAutomatic` false.
 
+Merges treat an automatic snapshot and its tag rows as one unit. Competing
+answers for the same artifact conflict even when their metadata agrees;
+the engine never combines two automatic sets into an invented analysis.
+Merges also reject combined manual or dismissal sets that exceed the
+per-artifact limits, before changing the accepted catalog.
+
 Query cost is fixed, not proportional to catalog size: `query` is three
 statements (page, total, page tags), `candidates` one, and `facets` two
 (counts, then preferred labels). `tests/tag-queries.test.ts` measures those
