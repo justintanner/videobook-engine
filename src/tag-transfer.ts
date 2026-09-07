@@ -27,8 +27,10 @@ import type {
 import { ok } from "./engine-types.js";
 import { EngineContext, resultOf, syncResultOf } from "./context.js";
 import { EngineFault } from "./store.js";
+import { normalizeAutomaticTags } from "./tag-validation.js";
 import {
   automaticTagsMatch,
+  compareTags,
   snapshotMatches,
   storedSnapshot,
 } from "./tag-rows.js";
@@ -36,7 +38,6 @@ import type { NormalizedTag, TagFacet } from "./tag-values.js";
 import {
   MANUAL_TAGS_PER_ARTIFACT_MAX,
   TAG_DISMISSALS_PER_ARTIFACT_MAX,
-  normalizeTagIdentity,
   normalizeTagList,
   tagIdentity,
 } from "./tag-values.js";
@@ -189,6 +190,7 @@ function readAtRevision(
       createdAt: tag.createdAt,
     });
   }
+  effective.sort(compareTags);
   return {
     artifactId,
     effective,
@@ -291,7 +293,7 @@ async function importTags(
   artifactReference: string,
   snapshot: AssetTagSnapshotExport,
 ): Promise<Result<TagImportResult, EngineError>> {
-  return resultOf(async () => {
+  return resultOf(() => context.store.semanticOperation((commit) => {
     const artifact = context.artifactRow(artifactReference);
     const artifactId = artifact.artifact_id;
     if (snapshot?.version !== TAG_SNAPSHOT_VERSION) {
@@ -300,9 +302,7 @@ async function importTags(
       );
     }
     const manual = localTags(context, normalizeTagList(snapshot.manual ?? []));
-    const dismissed = (snapshot.dismissed ?? []).map((entry) =>
-      normalizeTagIdentity(entry),
-    );
+    const dismissed = normalizeTagList(snapshot.dismissed ?? []);
     const candidate = importableAutomatic(context, artifactId, snapshot);
     // Importing the same evidence a second time is not a new analysis.
     const current = storedSnapshot(context.store.db, artifactId);
@@ -343,7 +343,7 @@ async function importTags(
       importedDismissals: newDismissed.length,
       importedAutomatic: automatic ? automatic.tags.length : 0,
       skippedAutomatic:
-        snapshot.automatic !== undefined && automatic === undefined,
+        snapshot.automatic !== undefined && candidate === undefined,
     };
     if (
       newManual.length === 0 &&
@@ -353,7 +353,7 @@ async function importTags(
       return ok({ ...result, state: tagState(artifactId) });
     }
     const generation = current?.generation ?? 0;
-    const mutation = await context.store.semantic(
+    const mutation = commit(
       {
         operation: "import_artifact_tags",
         tables: [
@@ -445,7 +445,7 @@ async function importTags(
       },
     );
     return ok({ ...result, state: tagState(artifactId) }, mutation.revision);
-  });
+  }));
 }
 
 interface ImportableAutomatic {
@@ -469,19 +469,20 @@ function importableAutomatic(
 ): ImportableAutomatic | undefined {
   const automatic = snapshot.automatic;
   if (!automatic) return undefined;
+  const normalized = normalizeAutomaticTags(automatic);
+  if (!Number.isSafeInteger(automatic.analyzedAt) || automatic.analyzedAt < 0) {
+    throw new Error("Automatic tag analyzedAt must be a nonnegative integer timestamp");
+  }
   const present = context.store.db
     .prepare(
       "SELECT 1 AS present FROM artifact_files WHERE artifact_id=? AND object_hash=?",
     )
-    .get(artifactId, automatic.sourceHash);
+    .get(artifactId, normalized.sourceHash);
   if (!present) return undefined;
   return {
-    sourceHash: automatic.sourceHash,
-    generator: automatic.generator,
-    ...(automatic.model ? { model: automatic.model } : {}),
-    extractorVersion: automatic.extractorVersion,
+    ...normalized,
     analyzedAt: automatic.analyzedAt,
-    tags: localTags(context, normalizeTagList(automatic.tags ?? [])),
+    tags: localTags(context, normalized.tags),
   };
 }
 

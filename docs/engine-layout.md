@@ -167,6 +167,13 @@ points per label, 100 manual tags per artifact, 12 automatic tags per
 snapshot, 500 dismissals per artifact. Exceeding one is refused with
 `RESOURCE_EXHAUSTED` rather than silently dropping user intent.
 
+Automatic analysis uses the `people`, `places`, and `editing` facets;
+`custom` is reserved for manual tags. Writes check generation fences,
+capacity, and no-op decisions inside the same serialized SQL transaction
+as their mutation. Imports apply the same automatic metadata and size
+validation, and count duplicate dismissals only once. The browser-safe
+`videobook-engine/tag-values` subpath exposes normalization and limits.
+
 `engine.tags.query` filters artifacts on that same effective set: `all`
 (every identity), `any` (at least one), and `kinds`, with keyset paging and
 a total that counts every match rather than the current page.
@@ -198,6 +205,8 @@ evidence transfers only when the destination artifact carries the exact
 analyzed hash. A hash-identical duplicate therefore inherits automatic
 tags; a modified or generated derivative inherits only manual intent, with
 `skippedAutomatic` saying so.
+Re-importing unchanged, valid evidence is a no-op and leaves
+`skippedAutomatic` false.
 
 Query cost is fixed, not proportional to catalog size: `query` is three
 statements (page, total, page tags), `candidates` one, and `facets` two

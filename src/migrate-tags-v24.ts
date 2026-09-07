@@ -7,8 +7,10 @@ import { TAG_SCHEMA_SQL } from "./schema.js";
 // existing books start with empty tag state, and importing whatever tags a
 // consumer already keeps in its own sidecars is the consumer's job.
 //
-// Creating the tables is idempotent, so an interrupted upgrade simply runs
-// again on the next open. The version stamp is deliberately conditional: a
+// The store runs this step in a SQL transaction with a durable commit
+// outbox, including its empty-table write set. An interrupted upgrade can
+// therefore roll back or finish its Dolt commit on the next open. The
+// version stamp is deliberately conditional: a
 // schema-22 or -23 catalog is only complete once its notebook-grid
 // re-encoding has also run, and that step stamps the current version
 // itself. Stamping here would let a crash between the two steps leave a

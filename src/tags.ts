@@ -30,15 +30,15 @@ import { ok } from "./engine-types.js";
 import { EngineContext, resultOf, syncResultOf } from "./context.js";
 import { EngineFault } from "./store.js";
 import { createTagQueriesApi } from "./tag-queries.js";
-import { automaticTagsMatch, snapshotMatches } from "./tag-rows.js";
+import { automaticTagsMatch, compareTags, snapshotMatches } from "./tag-rows.js";
 import { createTagTransferApi } from "./tag-transfer.js";
+import { normalizeAutomaticTags } from "./tag-validation.js";
 import type {
   NormalizedTag,
   TagIdentityInput,
   TagInput,
 } from "./tag-values.js";
 import {
-  AUTOMATIC_TAGS_PER_SNAPSHOT_MAX,
   MANUAL_TAGS_PER_ARTIFACT_MAX,
   TAG_DISMISSALS_PER_ARTIFACT_MAX,
   normalizeTagIdentity,
@@ -50,8 +50,6 @@ import {
 export const TAG_READ_BATCH_MAX = 500;
 
 const READ_CHUNK = 200;
-
-const SOURCE_HASH_PATTERN = /^[0-9a-f]{64}$/u;
 
 interface TagRow {
   artifact_id: string;
@@ -287,12 +285,6 @@ function assembleState(
   };
 }
 
-function compareTags(left: AssetTag, right: AssetTag): number {
-  if (left.facet !== right.facet) return left.facet < right.facet ? -1 : 1;
-  if (left.key === right.key) return 0;
-  return left.key < right.key ? -1 : 1;
-}
-
 function assetTag(row: TagRow): AssetTag {
   return {
     facet: row.facet,
@@ -379,8 +371,9 @@ function chunkedRows<T>(
   sql: (placeholders: string) => string,
 ): T[] {
   const rows: T[] = [];
-  for (let index = 0; index < artifactIds.length; index += READ_CHUNK) {
-    const chunk = artifactIds.slice(index, index + READ_CHUNK);
+  const uniqueIds = [...new Set(artifactIds)];
+  for (let index = 0; index < uniqueIds.length; index += READ_CHUNK) {
+    const chunk = uniqueIds.slice(index, index + READ_CHUNK);
     if (chunk.length === 0) continue;
     const placeholders = chunk.map(() => "?").join(", ");
     rows.push(
@@ -399,7 +392,7 @@ async function addManualTags(
   artifactReference: string,
   inputs: readonly TagInput[],
 ): Promise<Result<ArtifactTagState, EngineError>> {
-  return resultOf(async () => {
+  return resultOf(() => context.store.semanticOperation((commit) => {
     const artifact = context.artifactRow(artifactReference);
     const artifactId = artifact.artifact_id;
     const tags = normalizeTagList(inputs);
@@ -430,7 +423,7 @@ async function addManualTags(
       return row.label !== tag.label || (row.entity_id ?? undefined) !== tag.entityId;
     });
     if (changed.length === 0) return ok(tagState(context, artifactId));
-    const mutation = await context.store.semantic(
+    const mutation = commit(
       {
         operation: "add_artifact_tags",
         tables: ["artifact_tags", "artifact_tag_dismissals"],
@@ -467,7 +460,7 @@ async function addManualTags(
       },
     );
     return ok(tagState(context, artifactId), mutation.revision);
-  });
+  }));
 }
 
 async function removeTag(
@@ -475,7 +468,7 @@ async function removeTag(
   artifactReference: string,
   input: TagIdentityInput,
 ): Promise<Result<ArtifactTagState, EngineError>> {
-  return resultOf(async () => {
+  return resultOf(() => context.store.semanticOperation((commit) => {
     const artifact = context.artifactRow(artifactReference);
     const artifactId = artifact.artifact_id;
     const identity = normalizeTagIdentity(input);
@@ -497,7 +490,7 @@ async function removeTag(
     // suppression reads the same way it did when it was removed.
     const label = manual?.label ?? automaticLabel(context, artifactId, identity) ??
       identity.label;
-    const mutation = await context.store.semantic(
+    const mutation = commit(
       {
         operation: "remove_artifact_tag",
         tables: ["artifact_tags", "artifact_tag_dismissals"],
@@ -528,7 +521,7 @@ async function removeTag(
       },
     );
     return ok(tagState(context, artifactId), mutation.revision);
-  });
+  }));
 }
 
 async function restoreTag(
@@ -536,7 +529,7 @@ async function restoreTag(
   artifactReference: string,
   input: TagIdentityInput,
 ): Promise<Result<ArtifactTagState, EngineError>> {
-  return resultOf(async () => {
+  return resultOf(() => context.store.semanticOperation((commit) => {
     const artifact = context.artifactRow(artifactReference);
     const artifactId = artifact.artifact_id;
     const identity = normalizeTagIdentity(input);
@@ -547,7 +540,7 @@ async function restoreTag(
       )
       .get(artifactId, identity.facet, identity.key);
     if (!present) return ok(tagState(context, artifactId));
-    const mutation = await context.store.semantic(
+    const mutation = commit(
       {
         operation: "restore_artifact_tag",
         tables: ["artifact_tag_dismissals"],
@@ -565,41 +558,20 @@ async function restoreTag(
       },
     );
     return ok(tagState(context, artifactId), mutation.revision);
-  });
+  }));
 }
 
 async function replaceAutomaticTags(
   context: EngineContext,
   input: ReplaceAutomaticTagsArgs,
 ): Promise<Result<ArtifactTagState, EngineError>> {
-  return resultOf(async () => {
+  return resultOf(() => context.store.semanticOperation((commit) => {
     const artifact = context.artifactRow(input.artifactId);
     const artifactId = artifact.artifact_id;
-    const sourceHash = input.sourceHash.trim().toLowerCase();
-    if (!SOURCE_HASH_PATTERN.test(sourceHash)) {
-      throw new Error(
-        "Automatic tag sourceHash must be a hex sha256 content hash",
-      );
-    }
-    const generator = requiredText(input.generator, "Automatic tag generator");
-    const extractorVersion = requiredText(
-      input.extractorVersion,
-      "Automatic tag extractorVersion",
-    );
-    const model = input.model?.trim();
-    const tags = normalizeTagList(input.tags);
-    if (tags.length > AUTOMATIC_TAGS_PER_SNAPSHOT_MAX) {
-      throw new EngineFault({
-        code: "RESOURCE_EXHAUSTED",
-        message:
-          `An automatic snapshot carries at most ${AUTOMATIC_TAGS_PER_SNAPSHOT_MAX} tags; ` +
-          `received ${tags.length}`,
-        details: {
-          artifactId,
-          requested: tags.length,
-          limit: AUTOMATIC_TAGS_PER_SNAPSHOT_MAX,
-        },
-      });
+    const { sourceHash, generator, extractorVersion, model, tags } = normalizeAutomaticTags(input);
+    if (input.expectedGeneration !== undefined &&
+        (!Number.isSafeInteger(input.expectedGeneration) || input.expectedGeneration < 0)) {
+      throw new Error("Automatic tag expectedGeneration must be a nonnegative integer");
     }
     for (const tag of tags) requireEntity(context, tag);
     const current = snapshotRow(context, artifactId);
@@ -634,7 +606,7 @@ async function replaceAutomaticTags(
       // the fence.
       return ok(tagState(context, artifactId));
     }
-    const mutation = await context.store.semantic(
+    const mutation = commit(
       {
         operation: "replace_automatic_artifact_tags",
         tables: ["artifact_tags", "artifact_tag_snapshots"],
@@ -698,7 +670,7 @@ async function replaceAutomaticTags(
       },
     );
     return ok(tagState(context, artifactId), mutation.revision);
-  });
+  }));
 }
 
 // --------------------------------------------------------------- helpers
@@ -802,10 +774,4 @@ function writeSetKey(
   tag: { facet: AssetTag["facet"]; key: string },
 ): string {
   return `artifact-tag:${artifactId}:${tagIdentity(tag.facet, tag.key)}`;
-}
-
-function requiredText(value: string, label: string): string {
-  const normalized = value?.trim() ?? "";
-  if (!normalized) throw new Error(`${label} is required`);
-  return normalized;
 }

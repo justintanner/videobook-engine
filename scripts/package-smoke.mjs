@@ -5,11 +5,15 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
+import { build } from "esbuild";
 
 const run = promisify(execFile);
 const repository = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const nativeDependency = JSON.parse(await readFile(join(repository, "package.json"), "utf8"))
-  .dependencies["@dolthub/doltlite"];
+const manifest = JSON.parse(await readFile(join(repository, "package.json"), "utf8"));
+const lock = JSON.parse(await readFile(join(repository, "package-lock.json"), "utf8"));
+assert.equal(lock.version, manifest.version, "Lockfile and package versions must agree");
+assert.equal(lock.packages[""].version, manifest.version, "Lockfile root version must agree");
+const nativeDependency = manifest.dependencies["@dolthub/doltlite"];
 const root = await mkdtemp(join(tmpdir(), "videobook-package-smoke-"));
 const npm = process.platform === "win32" ? "npm.cmd" : "npm";
 const installEnv = { ...process.env, npm_config_userconfig: join(root, "npmrc") };
@@ -41,6 +45,19 @@ try {
   await run(npm, ["install", "--no-audit", "--no-fund", target], {
     cwd: root, env: installEnv, maxBuffer: 16 * 1024 * 1024,
   });
+  // Resolve the public subpath from the clean installation with browser
+  // rules. This fails if the export is absent or pulls in native/Node APIs.
+  const browser = await build({
+    stdin: {
+      contents: 'export { normalizeTagLabel, tagCanonicalKey } from "videobook-engine/tag-values";',
+      resolveDir: root,
+    },
+    bundle: true, platform: "browser", format: "esm", write: false,
+  });
+  const values = await import(`data:text/javascript;base64,${Buffer.from(browser.outputFiles[0].contents).toString("base64")}`);
+  assert.equal(values.normalizeTagLabel("  Ｂeach   Sunset  "), "Beach Sunset");
+  assert.equal(values.tagCanonicalKey("CAFÉ"), "café");
+  process.stdout.write("Packaged browser tag normalization export passed\n");
   const readme = await readFile(join(root, "node_modules/videobook-engine/README.md"), "utf8");
   const example = readme.match(/## Quick start\s+```ts\n([\s\S]*?)\n```/)?.[1];
   assert.ok(example, "Installed README must contain an executable quick start");

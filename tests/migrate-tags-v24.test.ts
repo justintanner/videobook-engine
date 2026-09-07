@@ -196,4 +196,69 @@ describe("schema 24 asset tag migration", () => {
     });
     db.close();
   });
+
+  const boundaries = [
+    "after-semantic-mutation", "before-sql-commit", "after-sql-commit",
+    "after-table-stage", "after-dolt-commit",
+  ] as const;
+  const interruptions = [
+    ...[22, 23, 24].flatMap((version) => boundaries.map((boundary) => ({ version, boundary, operation: 1 }))),
+    ...[22, 23].flatMap((version) => boundaries.map((boundary) => ({ version, boundary, operation: 2 }))),
+  ];
+  it.each(interruptions)("recovers schema $version operation $operation interrupted at $boundary", async ({ version, boundary, operation }) => {
+    const root = await tempRoot();
+    const engine = createEngine({ rootDir: root, initialBookName: "interrupted" });
+    await engine.ready;
+    const artifact = value(await engine.artifacts.create({ kind: "video" }));
+    const notebook = value(await engine.notebooks.create("Grid"));
+    const source = engine.notebooks.createCell({
+      type: "prompt", slot: { row: 0, column: 0 }, prompt: "blend @b1 into @a2",
+    });
+    const target = engine.notebooks.createCell({ type: "image", slot: { row: 0, column: 1 } });
+    const edge = engine.notebooks.createEdge({ source: source.id, target: target.id, targetInput: "media" });
+    value(await engine.notebooks.write({ ...notebook, cells: [source, target], edges: [edge] }));
+    engine.close();
+    downgrade(root, version);
+
+    const operations = new Set<string>();
+    expect(() => createEngine({
+      rootDir: root,
+      semanticCommitBoundary(current, operationId) {
+        operations.add(operationId);
+        if (operations.size === operation && current === boundary) throw new Error("migration interruption");
+      },
+    })).toThrow("migration interruption");
+
+    const recovered = createEngine({ rootDir: root });
+    let head: string;
+    try {
+      await recovered.ready;
+      head = recovered.head;
+      expect(value(recovered.tags.readAtRevision(artifact.artifactId, head)).effective).toEqual([]);
+      expect(value(recovered.notebooks.read(notebook.id)).edges).toEqual([edge]);
+      if (version === 23) {
+        expect(value(recovered.notebooks.read(notebook.id)).cells[0]?.prompt).toBe("blend @a2 into @b1");
+      }
+      const probe = new DatabaseSync(path.join(root, "data", "videobook.db"));
+      try {
+        expect(probe.prepare("SELECT version FROM dolt_at_engine_schema('HEAD') WHERE singleton=1").get()).toMatchObject({ version: SCHEMA_VERSION });
+        for (const table of ASSET_TAG_TABLES) {
+          expect(probe.prepare(`SELECT COUNT(*) AS n FROM dolt_at_${table}('HEAD')`).get()).toEqual({ n: 0 });
+        }
+        expect(probe.prepare("SELECT COUNT(*) AS n FROM runtime_commit_outbox").get()).toEqual({ n: 0 });
+        expect(probe.doltLog().filter((entry) => entry.message.startsWith("Add asset tag tables"))).toHaveLength(1);
+      } finally {
+        probe.close();
+      }
+    } finally {
+      recovered.close();
+    }
+    const reopened = createEngine({ rootDir: root });
+    try {
+      await reopened.ready;
+      expect(reopened.head).toBe(head);
+    } finally {
+      reopened.close();
+    }
+  });
 });

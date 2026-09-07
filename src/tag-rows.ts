@@ -5,7 +5,16 @@
 
 import type { DatabaseSync } from "@dolthub/doltlite";
 
-import type { NormalizedTag, TagFacet } from "./tag-values.js";
+import { tagIdentity, type NormalizedTag, type TagFacet } from "./tag-values.js";
+
+/** Match SQLite's BINARY ordering, including astral Unicode code points. */
+export function compareTags(
+  left: { facet: TagFacet; key: string },
+  right: { facet: TagFacet; key: string },
+): number {
+  if (left.facet !== right.facet) return left.facet < right.facet ? -1 : 1;
+  return Buffer.compare(Buffer.from(left.key), Buffer.from(right.key));
+}
 
 interface StoredTagRow {
   facet: TagFacet;
@@ -54,13 +63,9 @@ export function automaticTagsMatch(
     )
     .all(artifactId) as unknown as StoredTagRow[];
   if (rows.length !== tags.length) return false;
-  const sorted = [...tags].sort((left, right) =>
-    left.facet === right.facet
-      ? left.key.localeCompare(right.key)
-      : left.facet.localeCompare(right.facet),
-  );
-  return sorted.every((tag, index) => {
-    const row = rows[index];
+  const byIdentity = new Map(rows.map((row) => [tagIdentity(row.facet, row.tag_key), row]));
+  return tags.every((tag) => {
+    const row = byIdentity.get(tagIdentity(tag.facet, tag.key));
     return (
       row !== undefined &&
       row.facet === tag.facet &&

@@ -20,6 +20,10 @@
       "import": "./dist/edit-policy.js",
       "types": "./dist/edit-policy.d.ts"
     },
+    "./tag-values": {
+      "import": "./dist/tag-values.js",
+      "types": "./dist/tag-values.d.ts"
+    },
     "./notebook-grid": {
       "import": "./dist/notebook-grid.js",
       "types": "./dist/notebook-grid.d.ts"

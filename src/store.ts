@@ -135,10 +135,17 @@ export class DoltStore {
     this.db = new DatabaseSync(this.databasePath);
     // GC before configureConnection/initialize prepare any statement so
     // workingDiffProbes never holds a pre-GC StatementSync.
-    if (existed) this.maybeGcOnOpen();
-    this.configureConnection();
-    this.initialize(existed, input.initialBook);
-    if (input.catalogBackup) this.configureRemote(input.catalogBackup);
+    try {
+      if (existed) this.maybeGcOnOpen();
+      this.configureConnection();
+      this.initialize(existed, input.initialBook);
+      if (input.catalogBackup) this.configureRemote(input.catalogBackup);
+    } catch (error) {
+      // Initialization can fail after a durable SQL commit but before its
+      // Dolt commit. Release the connection so a subsequent open can recover.
+      this.db.close();
+      throw error;
+    }
   }
 
   get head(): string {
@@ -169,47 +176,84 @@ export class DoltStore {
     input: OperationInput,
     mutate: (operationId: string, now: number) => T,
   ): Promise<SemanticMutation<T>> {
-    return this.serial(async () => {
-      if (this.pendingSemanticCommit) this.recoverOutbox();
-      this.pendingSemanticCommit = true;
-      const operationId = uuidv7();
-      const now = Date.now();
-      this.begin();
-      let value: T;
-      try {
-        value = mutate(operationId, now);
-        this.semanticCommitBoundary?.("after-semantic-mutation", operationId);
-        this.db
-          .prepare(
-            `INSERT INTO runtime_commit_outbox(
-              operation_id, tables_json, message, created_at
-            ) VALUES (?, ?, ?, ?)`,
-          )
-          .run(
-            operationId,
-            // The declared write set commits atomically with the mutation,
-            // so recovery after a crash stages exactly the same tables.
-            canonicalJson({
-              tables: uniqueSemanticTables(input.tables),
-              ...(input.allowEmpty ? { allowEmpty: true } : {}),
-            }),
-            commitMessage(input, operationId),
-            now,
-          );
-        this.semanticCommitBoundary?.("before-sql-commit", operationId);
-        this.commitSql();
-        this.semanticChangeCount += 1;
-      } catch (error) {
-        this.rollback();
-        throw error;
-      }
+    return this.semanticOperation((commit) => commit(input, mutate));
+  }
 
-      this.semanticCommitBoundary?.("after-sql-commit", operationId);
-      const revision = this.commitOutbox(operationId);
-      this.pendingSemanticCommit = false;
-      this.writeCount += 1;
-      return { value, revision, operationId };
-    });
+  /** Serialize validation and no-op decisions with the write they authorize. */
+  semanticOperation<T>(
+    work: (commit: <V>(
+      input: OperationInput,
+      mutate: (operationId: string, now: number) => V,
+    ) => SemanticMutation<V>) => T,
+  ): Promise<T> {
+    return this.serial(async () => this.semanticNow(work));
+  }
+
+  private semanticNow<T>(
+    work: (commit: <V>(
+      input: OperationInput,
+      mutate: (operationId: string, now: number) => V,
+    ) => SemanticMutation<V>) => T,
+    stageAll = false,
+  ): T {
+    if (this.pendingSemanticCommit) this.recoverOutbox();
+    // Acquire the SQLite writer lock before reading fences or capacities,
+    // so another connection cannot invalidate the decision before mutation.
+    this.begin();
+    try {
+      const value = work((input, mutate) => this.commitSemantic(input, mutate, stageAll));
+      // A no-op still owns a read/write transaction, but needs no Dolt commit.
+      if (this.db.inTransaction) this.commitSql();
+      return value;
+    } catch (error) {
+      this.rollback();
+      throw error;
+    }
+  }
+
+  private commitSemantic<T>(
+    input: OperationInput,
+    mutate: (operationId: string, now: number) => T,
+    stageAll: boolean,
+  ): SemanticMutation<T> {
+    this.pendingSemanticCommit = true;
+    const operationId = uuidv7();
+    const now = Date.now();
+    let value: T;
+    try {
+      value = mutate(operationId, now);
+      this.semanticCommitBoundary?.("after-semantic-mutation", operationId);
+      this.db
+        .prepare(
+          `INSERT INTO runtime_commit_outbox(
+            operation_id, tables_json, message, created_at
+          ) VALUES (?, ?, ?, ?)`,
+        )
+        .run(
+          operationId,
+          // The declared write set commits atomically with the mutation,
+          // so recovery after a crash stages exactly the same tables.
+          canonicalJson({
+            tables: uniqueSemanticTables(input.tables),
+            ...(stageAll ? { stageAll: true } : {}),
+            ...(input.allowEmpty ? { allowEmpty: true } : {}),
+          }),
+          commitMessage(input, operationId),
+          now,
+        );
+      this.semanticCommitBoundary?.("before-sql-commit", operationId);
+      this.commitSql();
+      this.semanticChangeCount += 1;
+    } catch (error) {
+      this.rollback();
+      throw error;
+    }
+
+    this.semanticCommitBoundary?.("after-sql-commit", operationId);
+    const revision = this.commitOutbox(operationId);
+    this.pendingSemanticCommit = false;
+    this.writeCount += 1;
+    return { value, revision, operationId };
   }
 
   runtime<T>(mutate: (now: number) => T): T {
@@ -386,7 +430,28 @@ export class DoltStore {
             `${SCHEMA_VERSION}`,
         });
       }
+      if (row.version < 22 || row.version > SCHEMA_VERSION) {
+        throw new EngineFault({
+          code: "SCHEMA_INCOMPATIBLE",
+          message: `Database schema ${row.version} is not supported by engine schema ${SCHEMA_VERSION}`,
+        });
+      }
+      if (this.db.doltActiveBranch() !== "main") {
+        throw new EngineFault({
+          code: "SCHEMA_INCOMPATIBLE",
+          message: "Videobook only supports the main branch",
+        });
+      }
+      // An interrupted migration may already have stamped the current
+      // version. Recover its declared structural write set before deciding
+      // which migrations remain, just as for ordinary semantic writes.
+      this.ensureIgnorePatterns();
+      this.db.exec(RUNTIME_SCHEMA_SQL);
+      this.assertRuntimeUnstaged();
+      this.recoverOutbox();
+      row = this.schemaRow();
       if (row.version >= 22 && row.version < SCHEMA_VERSION) {
+        this.verifyCleanSemanticWorktree();
         // Structural upgrade first: every supported source version gains
         // the asset-tag tables before any notebook-grid re-encoding
         // stamps the current schema version.
@@ -462,40 +527,38 @@ export class DoltStore {
   }
 
   private migrateAssetTags(fromVersion: number): void {
-    this.invalidateCompaction();
-    const migration = applyAssetTagMigration(this.db);
-    // A catalog that already carries the tables (a downgraded fixture, or
-    // an upgrade resumed after a crash) has nothing left to record.
-    if (!migration.created && !migration.stamped) return;
-    this.assertOnlyVersionedStaged(this.db.doltStatus());
-    // Newly created empty tables carry no row diff, so the write set is
-    // declared explicitly rather than derived from the working diff.
-    this.stageTables([...ASSET_TAG_TABLES, "engine_schema"]);
-    this.sqlCommit(
-      `Add asset tag tables from schema ${fromVersion} to ${SCHEMA_VERSION}`,
-    );
+    if (fromVersion !== 24 && ASSET_TAG_TABLES.every((table) => this.tableExists(table))) return;
+    this.semanticNow((commit) => commit({
+      operation: `Add asset tag tables from schema ${fromVersion} to ${SCHEMA_VERSION}`,
+      tables: [...ASSET_TAG_TABLES, "engine_schema"],
+    }, () => applyAssetTagMigration(this.db)), true);
   }
 
   private migrateNotebookGrid(
     apply: (db: DatabaseSync) => unknown,
     fromVersion: number,
   ): void {
-    this.invalidateCompaction();
-    apply(this.db);
-    const status = this.db.doltStatus();
-    this.assertOnlyVersionedStaged(status);
-    const dirty = uniqueSemanticTables(
-      status
-        .map((entry) => entry.table_name)
-        .filter(isSemanticTable)
-        .filter((table) => this.hasWorkingDiff(table)),
-    );
-    this.stageTables(
-      dirty.length > 0 ? dirty : ["cells", "engine_schema"],
-    );
-    this.sqlCommit(
-      `Migrate notebook grid from schema ${fromVersion} to ${SCHEMA_VERSION}`,
-    );
+    // Schema 22 rebuilds cells. SQLite only honors foreign_keys changes
+    // outside a transaction; disabling it inside the rebuild would silently
+    // cascade-delete notebook edges when cells is dropped.
+    if (fromVersion === 22) this.db.exec("PRAGMA foreign_keys=OFF");
+    try {
+      this.semanticNow((commit) => commit({
+        operation: `Migrate notebook grid from schema ${fromVersion} to ${SCHEMA_VERSION}`,
+        tables: SEMANTIC_TABLES,
+      }, () => {
+        const result = apply(this.db);
+        if (fromVersion === 22 && this.db.prepare("PRAGMA foreign_key_check").get()) {
+          throw new EngineFault({
+            code: "STORAGE_ERROR",
+            message: "Notebook grid migration would leave invalid foreign keys",
+          });
+        }
+        return result;
+      }));
+    } finally {
+      if (fromVersion === 22) this.db.exec("PRAGMA foreign_keys=ON");
+    }
   }
 
   private ensureIgnorePatterns(): void {
@@ -618,7 +681,7 @@ export class DoltStore {
     if (!row) return this.head;
     const declared = parseOutboxTables(row.tables_json);
     const dirty = declared.tables.filter((table) => this.hasWorkingDiff(table));
-    if (recovering && declared.allowEmpty && dirty.length === 0) {
+    if (recovering && (declared.allowEmpty || declared.stageAll) && dirty.length === 0) {
       const committed = this.db.doltLog().find((entry) =>
         parseCommitMessage(entry.message)?.operationId === operationId);
       if (committed) {
@@ -626,7 +689,7 @@ export class DoltStore {
         return committed.commit_hash;
       }
     }
-    if (dirty.length === 0 && !declared.allowEmpty) {
+    if (dirty.length === 0 && !declared.allowEmpty && !declared.stageAll) {
       // Either the mutation only touched ignored runtime tables (bookkeeping
       // mints no commit), or this is recovery after a crash that followed the
       // dolt commit. Either way only the outbox row is left to clear.
@@ -640,7 +703,9 @@ export class DoltStore {
     // covers the post-staging assertion too.
     const status = this.db.doltStatus();
     this.assertOnlyVersionedStaged(status);
-    this.stageTables(dirty, operationId);
+    // A structural migration must also stage newly created empty tables:
+    // their schema has changed even though no row diff exists yet.
+    this.stageTables(declared.stageAll ? declared.tables : dirty, operationId);
     if (
       status.some(
         (entry) => entry.table_name === "dolt_ignore" && entry.staged === 0,
@@ -1055,6 +1120,7 @@ function isSemanticTable(table: string): table is SemanticTable {
 interface OutboxTables {
   tables: SemanticTable[];
   allowEmpty: boolean;
+  stageAll: boolean;
 }
 
 /**
@@ -1069,9 +1135,10 @@ function parseOutboxTables(text: string): OutboxTables {
     return {
       tables: [...SEMANTIC_TABLES],
       allowEmpty: parsed.includes(OUTBOX_ALLOW_EMPTY_FLAG),
+      stageAll: false,
     };
   }
-  const record = parsed as { tables?: unknown; allowEmpty?: unknown };
+  const record = parsed as { tables?: unknown; allowEmpty?: unknown; stageAll?: unknown };
   return {
     tables: Array.isArray(record.tables)
       ? record.tables.filter(
@@ -1080,6 +1147,7 @@ function parseOutboxTables(text: string): OutboxTables {
         )
       : [...SEMANTIC_TABLES],
     allowEmpty: record.allowEmpty === true,
+    stageAll: record.stageAll === true,
   };
 }
 

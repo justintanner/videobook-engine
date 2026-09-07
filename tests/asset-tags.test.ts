@@ -359,7 +359,7 @@ describe("engine.tags automatic snapshots", () => {
           tags: Array.from(
             { length: AUTOMATIC_TAGS_PER_SNAPSHOT_MAX + 1 },
             (_unused, index) => ({
-              facet: "custom" as const,
+              facet: "editing" as const,
               label: `auto ${index}`,
             }),
           ),

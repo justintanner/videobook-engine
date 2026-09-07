@@ -1,5 +1,5 @@
 diff --git a/src/database.cpp b/src/database.cpp
-index 1537104..f0b9701 100644
+index 1537104..43ad106 100644
 --- a/src/database.cpp
 +++ b/src/database.cpp
 @@ -246,6 +246,18 @@ Napi::Value Database::DoltCheckout(const Napi::CallbackInfo& info) {
@@ -21,30 +21,26 @@ index 1537104..f0b9701 100644
  Napi::Value Database::DoltMerge(const Napi::CallbackInfo& info) {
    Napi::Env env = info.Env();
    if (!db_) { Napi::Error::New(env, "Database is closed").ThrowAsJavaScriptException(); return env.Undefined(); }
-@@ -254,15 +266,27 @@ Napi::Value Database::DoltMerge(const Napi::CallbackInfo& info) {
+@@ -254,15 +266,23 @@ Napi::Value Database::DoltMerge(const Napi::CallbackInfo& info) {
      return env.Undefined();
    }
    std::string branch = info[0].As<Napi::String>().Utf8Value();
 -  // dolt_merge is a scalar function returning the merge commit hash (or NULL on conflict).
 -  ExecScalar(env, "SELECT dolt_merge(?)", {branch});
-+  // dolt_merge is a scalar function returning the resulting commit hash for a
-+  // fast-forward or a three-way merge, and the text "Already up to date" when
-+  // the incoming branch is an ancestor of HEAD (or the same commit).
-+  std::string outcome = ExecScalar(env, "SELECT dolt_merge(?)", {branch});
++  // Resolve once, then merge that immutable commit. Re-reading the mutable
++  // branch after a merge can misclassify the result or throw if a peer has
++  // advanced/deleted the branch. The captured hash is the actual merge input,
++  // not an inference about unlocked state before or after the operation.
++  std::string target = ExecScalar(env, "SELECT dolt_hashof(?)", {branch});
    if (env.IsExceptionPending()) return env.Undefined();
 -  // Derive fast_forward and conflicts from post-merge state.
-+  // A fast-forward is the case where HEAD ends up on exactly the incoming
-+  // branch head; a three-way merge lands on a new commit that is not the
-+  // branch head, and an up-to-date merge returns no hash at all. Both values
-+  // are read after the merge, so the outcome is never inferred from unlocked
-+  // pre-merge state. A peer that advances the branch between the merge and
-+  // this read makes the answer conservative (0), never falsely positive.
-+  int fastForward = 0;
-+  if (IsCommitHash(outcome)) {
-+    std::string branchHead = ExecScalar(env, "SELECT dolt_hashof(?)", {branch});
-+    if (env.IsExceptionPending()) return env.Undefined();
-+    if (!branchHead.empty() && branchHead == outcome) fastForward = 1;
-+  }
++  std::string outcome = ExecScalar(env,
++    "SELECT dolt_merge(?, '-m', 'Merge branch ''' || ? || ''' into ' || active_branch())",
++    {target, branch});
++  if (env.IsExceptionPending()) return env.Undefined();
++  // Fast-forward returns the chosen input commit; a three-way merge returns
++  // a new commit, and an up-to-date merge returns a status string.
++  int fastForward = IsCommitHash(outcome) && outcome == target ? 1 : 0;
    std::string nConflicts = ExecScalar(env, "SELECT COUNT(*) FROM dolt_conflicts", {});
 -  std::string logLen = ExecScalar(env,
 -    "SELECT COUNT(*) FROM dolt_log LIMIT 2", {});
@@ -56,10 +52,10 @@ index 1537104..f0b9701 100644
      (double)std::stoi(nConflicts.empty() ? "0" : nConflicts)));
    return result;
 diff --git a/test/dolt.test.ts b/test/dolt.test.ts
-index 76f11d5..2dd5fee 100644
+index 76f11d5..44962eb 100644
 --- a/test/dolt.test.ts
 +++ b/test/dolt.test.ts
-@@ -217,6 +217,55 @@ describe("doltMerge()", () => {
+@@ -217,6 +217,90 @@ describe("doltMerge()", () => {
      expect(cfVal).toBe(0)
    })
  
@@ -110,6 +106,41 @@ index 76f11d5..2dd5fee 100644
 +    expect(ffVal).toBe(0)
 +    const after = db.prepare("SELECT dolt_hashof('HEAD') AS h").get() as any
 +    expect(after.h).toBe(before.h)
++  })
++
++  test("fast-forwards to an incoming commit that is itself a merge", () => {
++    const base = (db.prepare("SELECT dolt_hashof('HEAD') AS h").get() as any).h
++    db.doltBranch("side")
++    db.doltCheckout("side")
++    db.exec("INSERT INTO items VALUES (11, 'side')")
++    db.doltCommit("side commit")
++    db.doltCheckout("main")
++    db.exec("INSERT INTO items VALUES (12, 'main')")
++    db.doltCommit("main commit")
++    db.doltMerge("side")
++    const merged = (db.prepare("SELECT dolt_hashof('HEAD') AS h").get() as any).h
++    db.doltBranch("behind", base)
++    db.doltCheckout("behind")
++    expect(db.doltMerge("main").fast_forward).toBe(1)
++    expect((db.prepare("SELECT dolt_hashof('HEAD') AS h").get() as any).h).toBe(merged)
++  })
++
++  test("keeps the caller's branch label in the three-way commit message", () => {
++    db.doltBranch("editor's-take")
++    db.doltCheckout("editor's-take")
++    db.exec("INSERT INTO items VALUES (13, 'take')")
++    db.doltCommit("take commit")
++    db.doltCheckout("main")
++    db.exec("INSERT INTO items VALUES (14, 'main')")
++    db.doltCommit("main commit")
++    expect(db.doltMerge("editor's-take").fast_forward).toBe(0)
++    expect(db.doltLog({ limit: 1 })[0]?.message).toBe("Merge branch 'editor's-take' into main")
++  })
++
++  test("rejects an unknown merge source without changing HEAD", () => {
++    const head = (db.prepare("SELECT dolt_hashof('HEAD') AS h").get() as any).h
++    expect(() => db.doltMerge("does-not-exist")).toThrow()
++    expect((db.prepare("SELECT dolt_hashof('HEAD') AS h").get() as any).h).toBe(head)
 +  })
 +
    test("merged data is visible on main after merge", () => {

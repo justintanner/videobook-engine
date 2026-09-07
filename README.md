@@ -169,6 +169,9 @@ is addressed by `object_hash` in the CAS.
 - `engine.storage` — object publication and catalog backup
 - `engine.similarity` — optional local media and text similarity
 
+Browser clients can import tag normalization and limits from
+`videobook-engine/tag-values` without loading the engine's native dependencies.
+
 All APIs operate in the engine's one book. No method accepts or returns a
 project ID.
 

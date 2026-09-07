@@ -96,6 +96,7 @@ interface EffectiveRow {
   tag_key: string;
   label: string;
   origin: "manual" | "automatic";
+  entity_id: string | null;
   created_at: number;
 }
 
@@ -296,7 +297,7 @@ function effectiveTagsFor(
     .prepare(
       `WITH effective AS (${EFFECTIVE_TAGS_SQL})
        SELECT e.artifact_id, e.facet, e.tag_key, e.label, e.origin,
-              t.created_at
+              t.created_at, t.entity_id
        FROM effective e
        JOIN artifact_tags t
          ON t.artifact_id = e.artifact_id
@@ -322,6 +323,7 @@ function effectiveTagsFor(
       key: row.tag_key,
       label: row.label,
       origin: row.origin,
+      ...(row.entity_id ? { entityId: row.entity_id } : {}),
       createdAt: row.created_at,
     });
     tags.set(row.artifact_id, existing);
@@ -421,7 +423,8 @@ function preferredLabels(
   const params = rows.flatMap((row) => [row.facet, row.tag_key]);
   const labelRows = context.store.db
     .prepare(
-      `SELECT facet, tag_key, origin, label FROM artifact_tags
+      `WITH effective AS (${EFFECTIVE_TAGS_SQL})
+       SELECT facet, tag_key, origin, label FROM effective
        WHERE ${predicate}
        ORDER BY facet, tag_key, origin DESC, label`,
     )
