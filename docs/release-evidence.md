@@ -9,10 +9,41 @@ This is an assessment of the requirements in
 Beads contains the work assignments and current status; this report records
 the evidence and its limits at these revisions.
 
+## Published 5.4.0 minor, September 7
+
+[`videobook-engine@5.4.0`](https://www.npmjs.com/package/videobook-engine/v/5.4.0)
+is published as npm `latest` from reviewed source
+`855f694b7c8b9a4acadfda2cf3b7be838806ef42`, tagged `v5.4.0`.
+[Node 22/24 CI](https://github.com/justintanner/videobook-engine/actions/runs/34120942719)
+passes for that exact source. The registry archive is byte-identical to the
+reviewed package, SHA256
+`038182cf9ba7b421461eb17a3b3f4721c8ad293a28e1eee95cbbdeecd0f0a50c`.
+The engine suite passes 438 tests with 12 optional skips, alongside typecheck,
+lint, build, examples and the exact clean-package checks.
+
+A clean install of the published version passes tag operations and reopen,
+the browser export, remote checksum enforcement, cached CLIP/CLAP inference,
+the full native catalog/sequence probe, media decode and one Sharp resolution.
+After transient GitHub/npm network failures, retrying the exact clean-install
+audit request checks all 108 packages and returns no advisories.
+
+This release adds durable manual tags, automatic tag snapshots, dismissals,
+queries and history, with schema 25 upgrades and the browser-safe
+`videobook-engine/tag-values` export. Review corrections cover serialized
+mutation validation, crash recovery during migrations, notebook-edge
+preservation, consistent read projections, validated imports, and atomic
+automatic snapshots and tag limits across branch merges.
+
+The installed native dependency remains the verified
+`0.50.6-videobook.1` fork. The hard-reset sequence and wrapper merge-result
+corrections are recorded source patches for a later native package build.
+Consumer adoption is tracked separately in `vb-3m2n.1`; the frozen judged
+quality corpus remains a separate requirement for MVP acceptance.
+
 ## Published 5.3.3 patch, September 7
 
 [`videobook-engine@5.3.3`](https://www.npmjs.com/package/videobook-engine/v/5.3.3)
-is published as npm `latest` from `039a4c21be706e4f12140a6b14b32e21eb573cdc`,
+was published as npm `latest` from `039a4c21be706e4f12140a6b14b32e21eb573cdc`,
 tagged `v5.3.3`. [Node 22/24 CI](https://github.com/justintanner/videobook-engine/actions/runs/34050088772)
 passes. The downloaded registry archive is byte-identical to the tested build,
 SHA256 `92a19b1ef6d5860b82774bd2175f6113569f66a49cc5d30e96e7710ec851f441`.
