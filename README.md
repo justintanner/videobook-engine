@@ -158,6 +158,9 @@ is addressed by `object_hash` in the CAS.
   model and its transactional edit operations
 - `engine.entities` and `engine.notebooks` — normalized characters, prompts,
   scenes, and notebook graph documents
+- `engine.tags` — asset tags: manual assignments, durable dismissals,
+  fenced automatic snapshots, filtering, facet counts, autocomplete, and
+  snapshot transfer between artifacts or engines
 - `engine.prompts` and `engine.messages` — semantic prompt and message history
 - `engine.history` — revision listings, per-artifact history, and forward
   restores derived from the Dolt commit log

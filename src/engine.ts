@@ -33,6 +33,7 @@ import { createSimilarityApi } from "./similarity.js";
 import { createStreamsApi } from "./streams.js";
 import { createTranscriptsApi } from "./transcripts.js";
 import { createSequencesApi } from "./sequences.js";
+import { createTagsApi } from "./tags.js";
 import { createEditsApi } from "./edits.js";
 import { clearTemporalSearchCache, createTemporalSearchApi } from "./temporal-search.js";
 
@@ -42,6 +43,7 @@ export class Engine {
   readonly files;
   readonly workspaces;
   readonly metadata;
+  readonly tags;
   readonly streams;
   readonly transcripts;
   readonly sequences;
@@ -71,6 +73,7 @@ export class Engine {
     this.files = createFilesApi(this.context);
     this.workspaces = createWorkspacesApi(this.context);
     this.metadata = createMetadataApi(this.context);
+    this.tags = createTagsApi(this.context);
     this.streams = createStreamsApi(this.context);
     this.transcripts = createTranscriptsApi(this.context);
     this.sequences = createSequencesApi(this.context);

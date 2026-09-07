@@ -125,7 +125,7 @@ describe("fixed notebook grid schema 24", () => {
       "inputs_json",
       "output_artifact_id",
     ]);
-    expect(SCHEMA_VERSION).toBe(24);
+    expect(SCHEMA_VERSION).toBe(25);
     expect(NOTEBOOK_GRID_ROW_COUNT).toBe(64);
     expect(NOTEBOOK_GRID_COLUMN_COUNT).toBe(8);
     expect(NOTEBOOK_GRID_CAPACITY).toBe(512);
@@ -622,7 +622,7 @@ describe("fixed notebook grid schema 24", () => {
       database.close();
 
       expect(() => createEngine({ rootDir: root })).toThrow(
-        `Database schema ${version} is not supported by engine schema 24`,
+        `Database schema ${version} is not supported by engine schema 25`,
       );
     },
   );
@@ -815,7 +815,7 @@ describe("fixed notebook grid schema 24", () => {
     database.close();
 
     expect(() => createEngine({ rootDir: root })).toThrow(
-      "Database schema 10 is not supported by engine schema 24",
+      "Database schema 10 is not supported by engine schema 25",
     );
   });
 });

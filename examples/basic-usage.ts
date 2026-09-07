@@ -38,6 +38,23 @@ try {
     if (!manifest.ok) throw new Error(manifest.error.message);
     console.log(`Stored files: ${manifest.value.files.map((file) => file.name).join(", ")}`);
 
+    const manual = await engine.tags.add(script.artifactId, {
+      facet: "editing",
+      label: "Opening",
+    });
+    if (!manual.ok) throw new Error(manual.error.message);
+    const tags = engine.tags.read(script.artifactId);
+    if (!tags.ok) throw new Error(tags.error.message);
+    console.log(
+      `Tags: ${tags.value.effective.map((tag) => `${tag.facet}:${tag.label}`).join(", ")}`,
+    );
+
+    const tagged = engine.tags.query({
+      all: [{ facet: "editing", label: "opening" }],
+    });
+    if (!tagged.ok) throw new Error(tagged.error.message);
+    console.log(`Artifacts carrying that tag: ${tagged.value.total}`);
+
     const sequence = engine.sequences.getPrimary();
     console.log(
       `Primary sequence: ${sequence.name} (${sequence.width}x${sequence.height}, ${sequence.tracks.length} tracks)`,

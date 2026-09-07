@@ -44,6 +44,9 @@ export const SEMANTIC_TABLES = [
   "book_metadata",
   "artifact_metadata",
   "entities",
+  "artifact_tags",
+  "artifact_tag_dismissals",
+  "artifact_tag_snapshots",
   "notebooks",
   "notebook_fields",
   "cells",
@@ -130,6 +133,61 @@ const CELLS_TABLE_SQL = `
   CREATE TABLE IF NOT EXISTS cells (
     ${CELLS_TABLE_DEFINITION}
   );`;
+
+// Asset tags (schema 25). Semantic identity is (facet, canonical key), so
+// the same word in two facets stays distinct. Manual and automatic rows
+// live in one table keyed by origin: an automatic snapshot replaces only
+// the automatic rows and can never disturb manual ownership. Dismissals
+// are a separate durable record of user intent that outlives any snapshot.
+//
+// `artifact_tag_snapshots.source_hash` is a content fingerprint, not a
+// live object reference: it is deliberately not an `objects` foreign key
+// and not a first-class `object_hash` column, so tags neither pin bytes
+// against GC nor block forgetting.
+export const TAG_SCHEMA_SQL = `
+  CREATE TABLE IF NOT EXISTS artifact_tags (
+    artifact_id TEXT NOT NULL
+      REFERENCES artifacts(artifact_id) ON DELETE CASCADE,
+    origin TEXT NOT NULL CHECK (origin IN ('manual','automatic')),
+    facet TEXT NOT NULL CHECK (
+      facet IN ('people','places','editing','custom')
+    ),
+    tag_key TEXT NOT NULL,
+    label TEXT NOT NULL,
+    entity_id TEXT
+      REFERENCES entities(entity_id) ON DELETE RESTRICT,
+    created_at INTEGER NOT NULL,
+    PRIMARY KEY(artifact_id, origin, facet, tag_key)
+  );
+  CREATE INDEX IF NOT EXISTS artifact_tags_identity
+    ON artifact_tags(facet, tag_key, artifact_id);
+  CREATE INDEX IF NOT EXISTS artifact_tags_entity
+    ON artifact_tags(entity_id);
+  CREATE TABLE IF NOT EXISTS artifact_tag_dismissals (
+    artifact_id TEXT NOT NULL
+      REFERENCES artifacts(artifact_id) ON DELETE CASCADE,
+    facet TEXT NOT NULL CHECK (
+      facet IN ('people','places','editing','custom')
+    ),
+    tag_key TEXT NOT NULL,
+    label TEXT NOT NULL,
+    dismissed_at INTEGER NOT NULL,
+    PRIMARY KEY(artifact_id, facet, tag_key)
+  );
+  CREATE INDEX IF NOT EXISTS artifact_tag_dismissals_identity
+    ON artifact_tag_dismissals(facet, tag_key, artifact_id);
+  CREATE TABLE IF NOT EXISTS artifact_tag_snapshots (
+    artifact_id TEXT PRIMARY KEY
+      REFERENCES artifacts(artifact_id) ON DELETE CASCADE,
+    source_hash TEXT NOT NULL,
+    generator TEXT NOT NULL,
+    model TEXT,
+    extractor_version TEXT NOT NULL,
+    tag_count INTEGER NOT NULL CHECK (tag_count >= 0),
+    generation INTEGER NOT NULL CHECK (generation > 0),
+    analyzed_at INTEGER NOT NULL
+  );
+`;
 
 export const SEMANTIC_SCHEMA_SQL = `
   CREATE TABLE IF NOT EXISTS engine_schema (
@@ -619,6 +677,8 @@ export const SEMANTIC_SCHEMA_SQL = `
     FOREIGN KEY(notebook_id, cell_id)
       REFERENCES cells(notebook_id, cell_id) ON DELETE CASCADE
   );
+
+  ${TAG_SCHEMA_SQL}
 
   CREATE INDEX IF NOT EXISTS artifacts_created
     ON artifacts(created_at, artifact_id);

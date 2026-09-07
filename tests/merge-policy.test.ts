@@ -649,3 +649,131 @@ describe("engine-level merge policy behavior", () => {
     reopened.close();
   });
 });
+
+describe("asset tag merges", () => {
+  const TAG_TABLES = [
+    "engine_schema",
+    "artifacts",
+    "entities",
+    "artifact_tags",
+    "artifact_tag_dismissals",
+    "artifact_tag_snapshots",
+  ];
+
+  it("keeps unrelated manual additions from both forks", async () => {
+    const db = await mergeDb(TAG_TABLES);
+    const left = uuidv7();
+    const right = uuidv7();
+    try {
+      db.exec("INSERT INTO engine_schema VALUES(1, 25, 0)");
+      const insertArtifact = db.prepare(
+        "INSERT INTO artifacts(artifact_id, kind, label, created_at) VALUES(?, 'video', ?, 0)",
+      );
+      insertArtifact.run(left, "left");
+      insertArtifact.run(right, "right");
+      commitTables(db, TAG_TABLES, "base");
+      const tag = db.prepare(
+        `INSERT INTO artifact_tags(
+           artifact_id, origin, facet, tag_key, label, entity_id, created_at
+         ) VALUES (?, 'manual', ?, ?, ?, NULL, 0)`,
+      );
+      fork(db, "tags-a", TAG_TABLES, () =>
+        tag.run(left, "editing", "hero", "Hero"),
+      );
+      fork(db, "tags-b", TAG_TABLES, () =>
+        tag.run(right, "places", "beach", "Beach"),
+      );
+      mergeWithPolicy(db, "tags-a");
+      mergeWithPolicy(db, "tags-b");
+      expect(
+        db
+          .prepare(
+            "SELECT artifact_id, facet, tag_key FROM artifact_tags ORDER BY facet",
+          )
+          .all(),
+      ).toEqual([
+        { artifact_id: left, facet: "editing", tag_key: "hero" },
+        { artifact_id: right, facet: "places", tag_key: "beach" },
+      ]);
+      verifyConstraintHealth(db);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("surfaces a genuine conflict when both forks relabel one identity", async () => {
+    const db = await mergeDb(TAG_TABLES);
+    const artifactId = uuidv7();
+    try {
+      db.exec("INSERT INTO engine_schema VALUES(1, 25, 0)");
+      db.prepare(
+        "INSERT INTO artifacts(artifact_id, kind, label, created_at) VALUES(?, 'video', 'base', 0)",
+      ).run(artifactId);
+      db.prepare(
+        `INSERT INTO artifact_tags(
+           artifact_id, origin, facet, tag_key, label, entity_id, created_at
+         ) VALUES (?, 'manual', 'editing', 'hero', 'Hero', NULL, 0)`,
+      ).run(artifactId);
+      commitTables(db, TAG_TABLES, "base");
+      const relabel = db.prepare(
+        "UPDATE artifact_tags SET label=? WHERE artifact_id=? AND tag_key='hero'",
+      );
+      fork(db, "label-a", TAG_TABLES, () =>
+        relabel.run("HERO", artifactId),
+      );
+      fork(db, "label-b", TAG_TABLES, () =>
+        relabel.run("hero shot", artifactId),
+      );
+      mergeWithPolicy(db, "label-a");
+      const accepted = db.doltLog({ limit: 1 })[0]!.hash;
+      expect(expectFault(() => mergeWithPolicy(db, "label-b")).code).toBe(
+        "MERGE_CONFLICT",
+      );
+      expect(db.doltLog({ limit: 1 })[0]!.hash).toBe(accepted);
+      expect(
+        db
+          .prepare("SELECT label FROM artifact_tags WHERE artifact_id=?")
+          .get(artifactId),
+      ).toEqual({ label: "HERO" });
+      verifyConstraintHealth(db);
+    } finally {
+      db.close();
+    }
+  });
+
+  it("refuses a merge that would dangle a tag entity reference", async () => {
+    const db = await mergeDb(TAG_TABLES);
+    const artifactId = uuidv7();
+    const entityId = uuidv7();
+    try {
+      db.exec("INSERT INTO engine_schema VALUES(1, 25, 0)");
+      db.prepare(
+        "INSERT INTO artifacts(artifact_id, kind, label, created_at) VALUES(?, 'video', 'base', 0)",
+      ).run(artifactId);
+      db.prepare(
+        "INSERT INTO entities(entity_id, type, name, created_at) VALUES(?, 'character', 'Ada', 0)",
+      ).run(entityId);
+      commitTables(db, TAG_TABLES, "base");
+      fork(db, "tag-entity", TAG_TABLES, () =>
+        db
+          .prepare(
+            `INSERT INTO artifact_tags(
+               artifact_id, origin, facet, tag_key, label, entity_id, created_at
+             ) VALUES (?, 'manual', 'people', 'ada', 'Ada', ?, 0)`,
+          )
+          .run(artifactId, entityId),
+      );
+      fork(db, "drop-entity", TAG_TABLES, () =>
+        db.prepare("DELETE FROM entities WHERE entity_id=?").run(entityId),
+      );
+      mergeWithPolicy(db, "drop-entity");
+      expect(expectFault(() => mergeWithPolicy(db, "tag-entity")).code).toBe(
+        "MERGE_VIOLATION",
+      );
+      expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+      verifyConstraintHealth(db);
+    } finally {
+      db.close();
+    }
+  });
+});

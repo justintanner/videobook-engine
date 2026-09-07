@@ -378,15 +378,31 @@ async function deleteEntity(
       notebook_id: string;
       cell_id: string;
     }>;
-    if (cells.length > 0) {
+    const taggedArtifacts = context.store.db
+      .prepare(
+        `SELECT artifact_id, facet, tag_key FROM artifact_tags
+         WHERE entity_id=? ORDER BY artifact_id, facet, tag_key`,
+      )
+      .all(entityId) as unknown as Array<{
+      artifact_id: string;
+      facet: string;
+      tag_key: string;
+    }>;
+    if (cells.length > 0 || taggedArtifacts.length > 0) {
       throw new EngineFault({
         code: "IN_USE",
         message: `Entity is still referenced: ${entityId}`,
         details: {
-          references: cells.map((cell) => ({
-            kind: "cell.output_entity",
-            id: `${cell.notebook_id}/${cell.cell_id}`,
-          })),
+          references: [
+            ...cells.map((cell) => ({
+              kind: "cell.output_entity",
+              id: `${cell.notebook_id}/${cell.cell_id}`,
+            })),
+            ...taggedArtifacts.map((tag) => ({
+              kind: "artifact_tag.entity",
+              id: `${tag.artifact_id}/${tag.facet}:${tag.tag_key}`,
+            })),
+          ],
         },
       });
     }

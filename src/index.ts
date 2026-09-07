@@ -60,6 +60,33 @@ export {
   readV4BookIdentity,
 } from "./migration.js";
 
+export type { NormalizedTag } from "./tag-values.js";
+export {
+  AUTOMATIC_TAGS_PER_SNAPSHOT_MAX,
+  MANUAL_TAGS_PER_ARTIFACT_MAX,
+  TAG_DISMISSALS_PER_ARTIFACT_MAX,
+  TAG_FACETS,
+  TAG_LABEL_MAX_CODE_POINTS,
+  assertTagFacet,
+  isTagFacet,
+  normalizeTag,
+  normalizeTagIdentity,
+  normalizeTagLabel,
+  normalizeTagList,
+  normalizeTagPrefix,
+  tagCanonicalKey,
+  tagIdentity,
+} from "./tag-values.js";
+export { TAG_READ_BATCH_MAX } from "./tags.js";
+export { TAG_SNAPSHOT_VERSION } from "./tag-transfer.js";
+export {
+  TAG_CANDIDATE_MAX,
+  TAG_FACET_LIMIT_DEFAULT,
+  TAG_FACET_LIMIT_MAX,
+  TAG_QUERY_LIMIT_DEFAULT,
+  TAG_QUERY_LIMIT_MAX,
+} from "./tag-queries.js";
+
 export type { MvpContractFixtures } from "./mvp-contract-fixtures.js";
 export {
   MVP_CONTRACT_FIXTURES,

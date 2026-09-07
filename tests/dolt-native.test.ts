@@ -218,9 +218,9 @@ describe("single-book Dolt engine", () => {
     suppliedAgain.close();
   });
 
-  it("creates the exact normalized v24 semantic and runtime schema", async () => {
+  it("creates the exact normalized v25 semantic and runtime schema", async () => {
     const { engine, dataDir } = await setup();
-    expect(SCHEMA_VERSION).toBe(24);
+    expect(SCHEMA_VERSION).toBe(25);
     engine.close();
 
     const db = new DatabaseSync(path.join(dataDir, "videobook.db"));
@@ -238,7 +238,7 @@ describe("single-book Dolt engine", () => {
     expect(tables).toEqual(
       [...SEMANTIC_TABLES, ...RUNTIME_TABLES].sort(),
     );
-    expect(tables).toHaveLength(56);
+    expect(tables).toHaveLength(59);
 
     const columns = (table: string) =>
       (
@@ -319,11 +319,37 @@ describe("single-book Dolt engine", () => {
       "created_at",
       "updated_at",
     ]);
+    expect(columns("artifact_tags")).toEqual([
+      "artifact_id",
+      "origin",
+      "facet",
+      "tag_key",
+      "label",
+      "entity_id",
+      "created_at",
+    ]);
+    expect(columns("artifact_tag_dismissals")).toEqual([
+      "artifact_id",
+      "facet",
+      "tag_key",
+      "label",
+      "dismissed_at",
+    ]);
+    expect(columns("artifact_tag_snapshots")).toEqual([
+      "artifact_id",
+      "source_hash",
+      "generator",
+      "model",
+      "extractor_version",
+      "tag_count",
+      "generation",
+      "analyzed_at",
+    ]);
     expect(
       (db
         .prepare("SELECT version FROM engine_schema WHERE singleton=1")
         .get() as { version: number }).version,
-    ).toBe(24);
+    ).toBe(25);
     expect(
       db
         .prepare(

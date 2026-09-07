@@ -1,4 +1,17 @@
 import type { SemanticTable } from "./schema.js";
+import type {
+  TagFacet,
+  TagIdentityInput,
+  TagInput,
+  TagOrigin,
+} from "./tag-values.js";
+
+export type {
+  TagFacet,
+  TagIdentityInput,
+  TagInput,
+  TagOrigin,
+} from "./tag-values.js";
 
 export type ArtifactKind =
   | "video"
@@ -914,4 +927,155 @@ export interface VersionCheckResult {
   currentVersion: number;
   supportedVersion: number;
   reason?: string;
+}
+
+/**
+ * One tag assignment. Identity is the pair (facet, key); `label` is the
+ * display form and `origin` records who owns the assignment.
+ */
+export interface AssetTag {
+  facet: TagFacet;
+  key: string;
+  label: string;
+  origin: TagOrigin;
+  /** A confirmed entity reference, when the caller supplied one. */
+  entityId?: string;
+  createdAt: number;
+}
+
+export interface AutomaticAssetTag extends AssetTag {
+  /** The user removed this identity, so re-analysis cannot surface it. */
+  dismissed: boolean;
+  /** The analyzed content is no longer one of the artifact's files. */
+  stale: boolean;
+}
+
+export interface DismissedTag {
+  facet: TagFacet;
+  key: string;
+  label: string;
+  dismissedAt: number;
+}
+
+/**
+ * The last successful automatic analysis. A row with `tagCount` 0 is a
+ * successful empty result; no snapshot at all means no successful
+ * analysis has been recorded.
+ */
+export interface AutomaticTagSnapshot {
+  artifactId: string;
+  sourceHash: string;
+  generator: string;
+  model?: string;
+  /** Analyzer identity including the editorial tag-policy version. */
+  extractorVersion: string;
+  tagCount: number;
+  /** Per-artifact fence; every accepted replacement advances it by one. */
+  generation: number;
+  analyzedAt: number;
+  stale: boolean;
+}
+
+export interface ArtifactTagState {
+  artifactId: string;
+  /** Manual tags plus live, undismissed automatic tags, deduplicated. */
+  effective: AssetTag[];
+  manual: AssetTag[];
+  automatic: AutomaticAssetTag[];
+  dismissed: DismissedTag[];
+  snapshot?: AutomaticTagSnapshot;
+}
+
+export interface ReplaceAutomaticTagsArgs {
+  artifactId: string;
+  /** Hex sha256 of the content the analyzer actually read. */
+  sourceHash: string;
+  generator: string;
+  model?: string;
+  extractorVersion: string;
+  tags: readonly TagInput[];
+  /**
+   * Optimistic fence. When present it must equal the stored generation
+   * (0 when no snapshot exists) or the write is refused as stale.
+   */
+  expectedGeneration?: number;
+}
+
+export type ArtifactTagIdentity = TagIdentityInput;
+
+export interface TagFilter {
+  /** Artifact must effectively carry every identity listed. */
+  all?: readonly TagIdentityInput[];
+  /** Artifact must effectively carry at least one identity listed. */
+  any?: readonly TagIdentityInput[];
+  kinds?: readonly ArtifactKind[];
+}
+
+export interface TagQueryOptions {
+  limit?: number;
+  /** Opaque keyset cursor from a previous page's `nextCursor`. */
+  cursor?: string;
+}
+
+export interface TaggedArtifact {
+  artifact: Artifact;
+  /** Effective tags, deduplicated with manual ownership preferred. */
+  tags: AssetTag[];
+}
+
+export interface TagQueryPage {
+  artifacts: TaggedArtifact[];
+  /** Artifacts matching the filter, not just this page. */
+  total: number;
+  nextCursor?: string;
+}
+
+export interface TagFacetCount {
+  facet: TagFacet;
+  key: string;
+  label: string;
+  /** Distinct matching artifacts, never assignment rows. */
+  artifacts: number;
+}
+
+export interface TagSuggestQuery {
+  prefix?: string;
+  facet?: TagFacet;
+  kinds?: readonly ArtifactKind[];
+  limit?: number;
+}
+
+export interface AssetTagSnapshotEntry {
+  facet: TagFacet;
+  label: string;
+  entityId?: string;
+}
+
+/**
+ * A portable copy of one artifact's tag state. `automatic` is present only
+ * when the source's automatic evidence was still valid when it was
+ * exported.
+ */
+export interface AssetTagSnapshotExport {
+  version: number;
+  artifactId: string;
+  manual: AssetTagSnapshotEntry[];
+  dismissed: Array<{ facet: TagFacet; label: string }>;
+  automatic?: {
+    sourceHash: string;
+    generator: string;
+    model?: string;
+    extractorVersion: string;
+    analyzedAt: number;
+    tags: AssetTagSnapshotEntry[];
+  };
+}
+
+export interface TagImportResult {
+  state: ArtifactTagState;
+  importedManual: number;
+  importedDismissals: number;
+  importedAutomatic: number;
+  /** The snapshot carried automatic evidence the destination cannot hold. */
+  skippedAutomatic: boolean;
 }

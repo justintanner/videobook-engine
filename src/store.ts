@@ -22,6 +22,10 @@ import { DEFAULT_CATALOG_GC_BYTES_THRESHOLD } from "./engine-types.js";
 import { forgetCatalogCompaction, isCatalogCompacted, rememberCatalogCompaction } from "./catalog-gc-state.js";
 import { initialOrderKeys } from "./order-keys.js";
 import { applyV22NotebookGridMigration } from "./migrate-grid-v22.js";
+import {
+  ASSET_TAG_TABLES,
+  applyAssetTagMigration,
+} from "./migrate-tags-v24.js";
 import { applyV23NotebookGridMigration } from "./migrate-grid-v23.js";
 import {
   RUNTIME_SCHEMA_SQL,
@@ -382,6 +386,13 @@ export class DoltStore {
             `${SCHEMA_VERSION}`,
         });
       }
+      if (row.version >= 22 && row.version < SCHEMA_VERSION) {
+        // Structural upgrade first: every supported source version gains
+        // the asset-tag tables before any notebook-grid re-encoding
+        // stamps the current schema version.
+        this.migrateAssetTags(row.version);
+        row = this.schemaRow();
+      }
       if (row.version === 22) {
         this.migrateNotebookGrid(applyV22NotebookGridMigration, 22);
         row = { version: SCHEMA_VERSION };
@@ -435,6 +446,34 @@ export class DoltStore {
     this.assertRuntimeUnstaged();
     this.recoverOutbox();
     this.verifyCleanSemanticWorktree();
+  }
+
+  private schemaRow(): SchemaRow {
+    const row = this.db
+      .prepare("SELECT version FROM engine_schema WHERE singleton = 1")
+      .get() as unknown as SchemaRow | undefined;
+    if (!row) {
+      throw new EngineFault({
+        code: "SCHEMA_INCOMPATIBLE",
+        message: "Database lost its engine_schema version row",
+      });
+    }
+    return row;
+  }
+
+  private migrateAssetTags(fromVersion: number): void {
+    this.invalidateCompaction();
+    const migration = applyAssetTagMigration(this.db);
+    // A catalog that already carries the tables (a downgraded fixture, or
+    // an upgrade resumed after a crash) has nothing left to record.
+    if (!migration.created && !migration.stamped) return;
+    this.assertOnlyVersionedStaged(this.db.doltStatus());
+    // Newly created empty tables carry no row diff, so the write set is
+    // declared explicitly rather than derived from the working diff.
+    this.stageTables([...ASSET_TAG_TABLES, "engine_schema"]);
+    this.sqlCommit(
+      `Add asset tag tables from schema ${fromVersion} to ${SCHEMA_VERSION}`,
+    );
   }
 
   private migrateNotebookGrid(

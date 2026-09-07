@@ -105,7 +105,7 @@ Notation used below:
 - `→` names the referenced column.
 - Defaults and checks are shown inline.
 
-There are 34 allowlisted semantic tables.
+There are 36 allowlisted semantic tables.
 
 ### Catalog, artifacts, and content
 
@@ -135,6 +135,74 @@ There are 34 allowlisted semantic tables.
 | `edges` | `notebook_id TEXT`<br>`edge_id TEXT`<br>`source_cell_id TEXT`<br>`target_cell_id TEXT`<br>`target_input TEXT` | `(notebook_id, edge_id) PK`; notebook `FK → notebooks ON DELETE CASCADE`; composite source and target FKs reference cells in the same notebook and cascade on cell deletion. |
 | `runs` | `run_id TEXT`<br>`notebook_id TEXT`<br>`status TEXT`<br>`started_at INTEGER`<br>`completed_at INTEGER`<br>`cell_order_json TEXT`<br>`outputs_json TEXT`<br>`error TEXT?` | `run_id PK`; notebook `FK → notebooks ON DELETE CASCADE`; `status CHECK IN (completed, failed, aborted)`. Terminal, versioned notebook execution records. |
 | `generations` | `generation_id TEXT`<br>`notebook_id TEXT`<br>`cell_id TEXT`<br>`output_cell_id TEXT?`<br>`run_id TEXT?`<br>`status TEXT`<br>`tool TEXT`<br>`provider TEXT?`<br>`model TEXT?`<br>`prompt TEXT?`<br>`resolved_prompt TEXT?`<br>`provider_artifact_id TEXT?`<br>`output_artifact_id TEXT?`<br>`error TEXT?`<br>`created_at INTEGER`<br>`updated_at INTEGER` | `generation_id PK`; composite cell FK with cascade; `status CHECK IN (dispatched, awaiting_provider, completed, failed)`. One row per generation attempt; every transition is its own attributed semantic commit, so `dolt_history_generations` is the per-attempt timeline. |
+
+### Asset tags
+
+Flat, book-local tags on artifacts. Semantic identity is the pair
+(`facet`, `tag_key`) — never the display label alone — so the same word in
+two facets stays two assignments. Manual and automatic assignments share
+one table keyed by `origin`: replacing an automatic snapshot deletes and
+reinserts only the `automatic` rows, so it can never add, drop or relabel
+a manual row. Dismissals are a separate durable record of user intent that
+outlives any snapshot, which is what stops re-analysis from resurrecting a
+tag the user removed.
+
+| Table | Columns | Keys, constraints, and purpose |
+| --- | --- | --- |
+| `artifact_tags` | `artifact_id TEXT`<br>`origin TEXT`<br>`facet TEXT`<br>`tag_key TEXT`<br>`label TEXT`<br>`entity_id TEXT?`<br>`created_at INTEGER` | `(artifact_id, origin, facet, tag_key) PK`; `artifact_id FK → artifacts.artifact_id ON DELETE CASCADE`; `entity_id FK → entities.entity_id ON DELETE RESTRICT`; `origin CHECK IN (manual, automatic)`; `facet CHECK IN (people, places, editing, custom)`. `tag_key` is the NFKC-normalized, whitespace-collapsed, lowercased key; `label` is the display form. A tag may carry an already-confirmed entity reference, and holding one keeps that entity alive (`engine.entities.delete` returns `IN_USE`). |
+| `artifact_tag_dismissals` | `artifact_id TEXT`<br>`facet TEXT`<br>`tag_key TEXT`<br>`label TEXT`<br>`dismissed_at INTEGER` | `(artifact_id, facet, tag_key) PK`; `artifact_id FK → artifacts.artifact_id ON DELETE CASCADE`. One row per suppressed identity. Suppression is applied when tags are read, so the automatic row keeps the provenance that explains it while staying invisible. Adding the identity manually deletes the row; `engine.tags.restore` deletes it without claiming ownership. |
+| `artifact_tag_snapshots` | `artifact_id TEXT`<br>`source_hash TEXT`<br>`generator TEXT`<br>`model TEXT?`<br>`extractor_version TEXT`<br>`tag_count INTEGER`<br>`generation INTEGER`<br>`analyzed_at INTEGER` | `artifact_id PK`; `artifact_id FK → artifacts.artifact_id ON DELETE CASCADE`; `tag_count CHECK >= 0`; `generation CHECK > 0`. The last successful automatic analysis. A row with `tag_count` 0 is a successful empty result; no row at all means no successful analysis. `extractor_version` includes the editorial tag-policy version so a policy change can drive selective refresh. `generation` is the per-artifact fence: a caller may pass `expectedGeneration` and a mismatch is refused with `STALE_REVISION`. |
+
+`source_hash` is a content fingerprint, deliberately **not** an `objects`
+foreign key and not a first-class `object_hash` column: tags neither pin
+bytes against GC nor block forgetting. An automatic snapshot is stale once
+that hash is no longer one of the artifact's `artifact_files` rows, and
+stale automatic tags drop out of the effective set instead of describing
+content that is gone.
+
+Effective tags are every manual assignment plus every automatic assignment
+that is neither dismissed nor stale, deduplicated on identity with the
+manual label and ownership preferred. Documented limits: 64 Unicode code
+points per label, 100 manual tags per artifact, 12 automatic tags per
+snapshot, 500 dismissals per artifact. Exceeding one is refused with
+`RESOURCE_EXHAUSTED` rather than silently dropping user intent.
+
+`engine.tags.query` filters artifacts on that same effective set: `all`
+(every identity), `any` (at least one), and `kinds`, with keyset paging and
+a total that counts every match rather than the current page.
+`engine.tags.candidates` returns the unpaged matching IDs so the
+application can compose a tag filter with temporal or semantic search
+before either applies a limit. `engine.tags.facets` counts distinct
+matching artifacts per identity, and `engine.tags.suggest` completes known
+keys by prefix and facet; both prefer the manual display label. The
+effective-tag rule is written once as SQL in `src/tag-queries.ts` and once
+in TypeScript in `src/tags.ts`, and `tests/tag-queries.test.ts` asserts the
+two agree.
+
+Tag rows are ordinary semantic rows, so history needs no special case:
+`history.restore` reloads them from their `dolt_at_*` projections like
+every other table, and an explicit restore may therefore rewind manual
+edits that routine re-analysis never can. Restoring a revision recorded
+under an older schema stays refused by the existing version guard.
+`engine.tags.readAtRevision` reports the state a revision recorded; a
+revision written before schema 25 has no tag state at all and yields an
+empty snapshot rather than an error.
+
+`engine.tags.export` produces a portable snapshot — manual tags,
+dismissals, and automatic evidence only while it is still valid — and
+`engine.tags.import` applies one to another artifact, in the same catalog
+or a different engine. Import never trusts the source: labels are
+re-normalized into destination-local identities, an entity reference
+survives only when that entity exists in the destination, and automatic
+evidence transfers only when the destination artifact carries the exact
+analyzed hash. A hash-identical duplicate therefore inherits automatic
+tags; a modified or generated derivative inherits only manual intent, with
+`skippedAutomatic` saying so.
+
+Query cost is fixed, not proportional to catalog size: `query` is three
+statements (page, total, page tags), `candidates` one, and `facets` two
+(counts, then preferred labels). `tests/tag-queries.test.ts` measures those
+counts against a catalog ten times larger and asserts they do not move.
 
 ### Sequence timeline and media editing state
 
@@ -361,6 +429,9 @@ schema additionally defines every index below.
 | `prompt_entries_lookup` | `prompt_entries(surface, created_at, prompt_id)` |
 | `messages_created` | `messages(created_at, message_id)` |
 | `generations_cell` | `generations(notebook_id, cell_id, created_at)` |
+| `artifact_tags_identity` | `artifact_tags(facet, tag_key, artifact_id)` |
+| `artifact_tags_entity` | `artifact_tags(entity_id)` |
+| `artifact_tag_dismissals_identity` | `artifact_tag_dismissals(facet, tag_key, artifact_id)` |
 
 ## Local-only runtime schema
 
@@ -728,6 +799,8 @@ must reproduce a render.
 | Content-addressed object layout, remote keys, deletion | [`src/cas.ts`](../src/cas.ts) |
 | Object publication, deletion, GC, and catalog backup | [`src/storage.ts`](../src/storage.ts) |
 | Artifact mappings and workspace materialization | [`src/files.ts`](../src/files.ts) |
+| Asset tag state, precedence, and snapshots | [`src/tags.ts`](../src/tags.ts), [`src/tag-values.ts`](../src/tag-values.ts) |
+| Asset tag schema upgrade (24 to 25) | [`src/migrate-tags-v24.ts`](../src/migrate-tags-v24.ts) |
 | Sequence reads/structure and transactional edits | [`src/sequences.ts`](../src/sequences.ts), [`src/edits.ts`](../src/edits.ts) |
 | Public manifest, job, status, and similarity types | [`src/engine-types.ts`](../src/engine-types.ts) |
 | Entity/notebook graph types | [`src/notebook/types.ts`](../src/notebook/types.ts) |

@@ -65,6 +65,39 @@ try {
   reopened.temporalSearch.providers.register(provider, { inference: true });
   assert.equal(reopened.temporalSearch.providers.unregister(provider.manifestId), true);
 } finally { reopened.close(); }
+const tagged = createEngine({ rootDir: ".asset-tags", initialBookName: "tags" });
+try {
+  await tagged.ready;
+  const clip = await tagged.artifacts.create({ kind: "video", label: "clip" });
+  assert.equal(clip.ok, true);
+  assert.equal((await tagged.files.write(clip.value.artifactId, "original.mp4", "clip bytes")).ok, true);
+  const clipManifest = await tagged.files.manifest(clip.value.artifactId);
+  const sourceHash = clipManifest.value.files[0].objectHash;
+  assert.equal((await tagged.tags.add(clip.value.artifactId, { facet: "editing", label: "Hero" })).ok, true);
+  assert.equal((await tagged.tags.automatic.replace({
+    artifactId: clip.value.artifactId, sourceHash,
+    generator: "package-smoke", extractorVersion: "smoke/policy-1",
+    tags: [{ facet: "places", label: "Beach" }, { facet: "people", label: "Ada" }],
+  })).ok, true);
+  assert.deepEqual(tagged.tags.read(clip.value.artifactId).value.effective.map((tag) => tag.key),
+    ["hero", "ada", "beach"]);
+  assert.equal((await tagged.tags.remove(clip.value.artifactId, { facet: "people", label: "Ada" })).ok, true);
+  assert.deepEqual(tagged.tags.query({ all: [{ facet: "places", label: "beach" }] }).value.artifacts
+    .map((entry) => entry.artifact.label), ["clip"]);
+  assert.equal(tagged.tags.query({ all: [{ facet: "people", label: "ada" }] }).value.total, 0);
+  assert.equal(tagged.tags.suggest({ prefix: "be" }).value[0].key, "beach");
+} finally { tagged.close(); }
+const reopenedTags = createEngine({ rootDir: ".asset-tags" });
+try {
+  await reopenedTags.ready;
+  const [clip] = reopenedTags.artifacts.list();
+  const state = reopenedTags.tags.read(clip.artifactId).value;
+  assert.deepEqual(state.effective.map((tag) => tag.label), ["Hero", "Beach"]);
+  assert.equal(state.snapshot.generation, 1);
+  assert.equal(state.snapshot.stale, false);
+  assert.deepEqual(state.dismissed.map((tag) => tag.key), ["ada"]);
+} finally { reopenedTags.close(); }
+console.log("Packaged asset tag add, read, filter, suggest, and reopen passed");
 const dispatchedOptions = [];
 const scopedProvider = {
   networkAccess: { modelDownloads: false, inference: false }, embeddingSpace: "package-scoped-inputs", dimensions: 3,
