@@ -1,0 +1,117 @@
+diff --git a/src/database.cpp b/src/database.cpp
+index 1537104..f0b9701 100644
+--- a/src/database.cpp
++++ b/src/database.cpp
+@@ -246,6 +246,18 @@ Napi::Value Database::DoltCheckout(const Napi::CallbackInfo& info) {
+   return env.Undefined();
+ }
+ 
++// Commit hashes are 40 lowercase hex characters; every other dolt_merge
++// result (for example "Already up to date") is a status string.
++static bool IsCommitHash(const std::string& value) {
++  if (value.size() != 40) return false;
++  for (char c : value) {
++    const bool digit = c >= '0' && c <= '9';
++    const bool lower = c >= 'a' && c <= 'f';
++    if (!digit && !lower) return false;
++  }
++  return true;
++}
++
+ Napi::Value Database::DoltMerge(const Napi::CallbackInfo& info) {
+   Napi::Env env = info.Env();
+   if (!db_) { Napi::Error::New(env, "Database is closed").ThrowAsJavaScriptException(); return env.Undefined(); }
+@@ -254,15 +266,27 @@ Napi::Value Database::DoltMerge(const Napi::CallbackInfo& info) {
+     return env.Undefined();
+   }
+   std::string branch = info[0].As<Napi::String>().Utf8Value();
+-  // dolt_merge is a scalar function returning the merge commit hash (or NULL on conflict).
+-  ExecScalar(env, "SELECT dolt_merge(?)", {branch});
++  // dolt_merge is a scalar function returning the resulting commit hash for a
++  // fast-forward or a three-way merge, and the text "Already up to date" when
++  // the incoming branch is an ancestor of HEAD (or the same commit).
++  std::string outcome = ExecScalar(env, "SELECT dolt_merge(?)", {branch});
+   if (env.IsExceptionPending()) return env.Undefined();
+-  // Derive fast_forward and conflicts from post-merge state.
++  // A fast-forward is the case where HEAD ends up on exactly the incoming
++  // branch head; a three-way merge lands on a new commit that is not the
++  // branch head, and an up-to-date merge returns no hash at all. Both values
++  // are read after the merge, so the outcome is never inferred from unlocked
++  // pre-merge state. A peer that advances the branch between the merge and
++  // this read makes the answer conservative (0), never falsely positive.
++  int fastForward = 0;
++  if (IsCommitHash(outcome)) {
++    std::string branchHead = ExecScalar(env, "SELECT dolt_hashof(?)", {branch});
++    if (env.IsExceptionPending()) return env.Undefined();
++    if (!branchHead.empty() && branchHead == outcome) fastForward = 1;
++  }
+   std::string nConflicts = ExecScalar(env, "SELECT COUNT(*) FROM dolt_conflicts", {});
+-  std::string logLen = ExecScalar(env,
+-    "SELECT COUNT(*) FROM dolt_log LIMIT 2", {});
++  if (env.IsExceptionPending()) return env.Undefined();
+   auto result = Napi::Object::New(env);
+-  result.Set("fast_forward", Napi::Number::New(env, 0));
++  result.Set("fast_forward", Napi::Number::New(env, fastForward));
+   result.Set("conflicts",    Napi::Number::New(env,
+     (double)std::stoi(nConflicts.empty() ? "0" : nConflicts)));
+   return result;
+diff --git a/test/dolt.test.ts b/test/dolt.test.ts
+index 76f11d5..2dd5fee 100644
+--- a/test/dolt.test.ts
++++ b/test/dolt.test.ts
+@@ -217,6 +217,55 @@ describe("doltMerge()", () => {
+     expect(cfVal).toBe(0)
+   })
+ 
++  test("reports a real fast-forward as fast_forward 1", () => {
++    db.doltBranch("ff-branch")
++    db.doltCheckout("ff-branch")
++    db.exec("INSERT INTO items VALUES (7, 'from ff-branch')")
++    db.doltCommit("ff commit")
++    db.doltCheckout("main")
++    const result = db.doltMerge("ff-branch")
++    const ffVal = result.fast_forward
++    const cfVal = result.conflicts
++    expect(ffVal).toBe(1)
++    expect(cfVal).toBe(0)
++    // HEAD advanced to exactly the incoming branch head.
++    const head = db.prepare("SELECT dolt_hashof('HEAD') AS h").get() as any
++    const branch = db.prepare("SELECT dolt_hashof('ff-branch') AS h").get() as any
++    expect(head.h).toBe(branch.h)
++  })
++
++  test("reports a three-way merge as fast_forward 0", () => {
++    db.doltBranch("three-way")
++    db.doltCheckout("three-way")
++    db.exec("INSERT INTO items VALUES (8, 'from branch')")
++    db.doltCommit("branch commit")
++    db.doltCheckout("main")
++    db.exec("INSERT INTO items VALUES (9, 'from main')")
++    db.doltCommit("main commit")
++    const result = db.doltMerge("three-way")
++    const ffVal = result.fast_forward
++    const cfVal = result.conflicts
++    expect(ffVal).toBe(0)
++    expect(cfVal).toBe(0)
++    // The merge landed on a new commit, not on the branch head.
++    const head = db.prepare("SELECT dolt_hashof('HEAD') AS h").get() as any
++    const branch = db.prepare("SELECT dolt_hashof('three-way') AS h").get() as any
++    expect(head.h).not.toBe(branch.h)
++    expect((db.prepare("SELECT COUNT(*) AS n FROM items").get() as any).n).toBe(2)
++  })
++
++  test("reports an up-to-date merge as fast_forward 0", () => {
++    db.doltBranch("stale")
++    db.exec("INSERT INTO items VALUES (10, 'ahead')")
++    db.doltCommit("ahead of stale")
++    const before = db.prepare("SELECT dolt_hashof('HEAD') AS h").get() as any
++    const result = db.doltMerge("stale")
++    const ffVal = result.fast_forward
++    expect(ffVal).toBe(0)
++    const after = db.prepare("SELECT dolt_hashof('HEAD') AS h").get() as any
++    expect(after.h).toBe(before.h)
++  })
++
+   test("merged data is visible on main after merge", () => {
+     db.doltBranch("data-branch")
+     db.doltCheckout("data-branch")

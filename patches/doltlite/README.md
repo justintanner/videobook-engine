@@ -1,5 +1,10 @@
 # Ignored runtime tables in native merges
 
+> This directory also carries a second, unrelated native fix:
+> [ignored AUTOINCREMENT sequence state across a hard reset](hard-reset-ignored-sequence.md)
+> (`ve-nia`). The Node wrapper's merge-result fix lives in
+> [`../doltlite-node`](../doltlite-node/README.md) (`ve-xkv`).
+
 The [source patch](ignored-runtime-merge.patch) fixes a native DoltLite merge
 failure when an otherwise clean working catalog contains ignored local tables.
 It also keeps their rows and indexes local through merge, abort, reopen, and
