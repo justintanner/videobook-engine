@@ -323,6 +323,38 @@ describe("progressive temporal multimodal search", () => {
     } finally { engine.close(); }
   });
 
+  it("selects tagged artifacts before the global hundred-hit cutoff", async () => {
+    const engine = await setup();
+    try {
+      let selected = "";
+      for (let index = 0; index < 102; index += 1) {
+        const item = await still(engine, `candidate-${index}`);
+        commit(engine, item.artifact, item.objectHash, "visual", [{
+          artifactId: item.artifact.artifactId, objectHash: item.objectHash,
+          sourcePath: "original.jpg", kind: "frame", segmentationVersion: "1",
+          texts: [{ kind: "description", text: "candidate" }], fingerprints: [],
+          embeddings: [{ modality: "visual", embeddingSpace: manifest.embeddingSpace,
+            vector: [1, index / 100, 0], sourceHash: item.objectHash }],
+        }]);
+        selected = item.artifact.artifactId;
+      }
+      value(await engine.tags.add(selected, { facet: "editing", label: "close-up" }));
+      value(engine.temporalSearch.activate(manifest.manifestId, "generation-1"));
+      const reference = { kind: "image" as const, embeddingSpace: manifest.embeddingSpace, vector: [1, 0, 0] };
+      const global = value(await engine.temporalSearch.queryPrepared({ limit: 100 }, reference));
+      expect(global.hits).toHaveLength(100);
+      expect(global.hits.some((hit) => hit.artifactId === selected)).toBe(false);
+      const sourceArtifactIds = engine.artifacts.list().filter((artifact) =>
+        value(engine.tags.read(artifact.artifactId)).effective.some((tag) => tag.key === "close-up"))
+        .map((artifact) => artifact.artifactId);
+      expect(value(await engine.temporalSearch.queryPrepared({ sourceArtifactIds, limit: 100 }, reference))
+        .hits.map((hit) => hit.artifactId)).toEqual([selected]);
+      expect(value(await engine.temporalSearch.queryPrepared({ sourceArtifactIds: [] }, reference)).hits).toEqual([]);
+      expect(value(await engine.temporalSearch.query({ text: "candidate", modalities: ["metadata"], sourceArtifactIds }))
+        .hits.map((hit) => hit.artifactId)).toEqual([selected]);
+    } finally { engine.close(); }
+  });
+
   it("exposes durable next cursors through generation plans", async () => {
     const engine = await setup();
     const source = await media(engine, "video", "cursor-source");
