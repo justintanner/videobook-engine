@@ -169,6 +169,31 @@ describe("forgettable objects", () => {
     expect(tombstone?.forgotten_at).not.toBeNull();
   });
 
+  it("re-imports forgotten bytes when a caller writes them again", async () => {
+    const { engine, dataDir } = await setup();
+    const first = value(
+      await engine.artifacts.create({ kind: "video", label: "imported" }),
+    );
+    const written = await writeOriginal(engine, first.artifactId, "same-bytes");
+    value(await engine.artifacts.delete(first.artifactId));
+    value(await engine.storage.deleteObject(written.hash));
+    expect(await localObjectExists(dataDir, written.hash)).toBe(false);
+
+    // Supplying the bytes again is the resurrection path: the write clears the
+    // tombstone, so the import that follows a forget is not refused forever.
+    const second = value(
+      await engine.artifacts.create({ kind: "video", label: "reimported" }),
+    );
+    const rewritten = await writeOriginal(engine, second.artifactId, "same-bytes");
+    expect(rewritten.hash).toBe(written.hash);
+    expect(await localObjectExists(dataDir, written.hash)).toBe(true);
+    expect(
+      value(await engine.files.read(second.artifactId, "original.mp4")).toString(),
+    ).toBe("same-bytes");
+    engine.close();
+    expect(tombstoneRow(dataDir, written.hash)?.forgotten_at).toBeNull();
+  });
+
   it("refuses to delete a referenced object unless forced", async () => {
     const { engine, dataDir } = await setup();
     const artifact = value(

@@ -108,7 +108,6 @@ async function writeFile(
       context.ensureArtifactWorkspace(artifact.artifact_id),
       ...relativePath.split("/"),
     );
-    await context.objects.materialize(object.hash, destination);
     const mutation = await context.store.semantic(
       {
         operation: "write_file",
@@ -138,6 +137,10 @@ async function writeFile(
         markWorkspaceReady(context, artifact.artifact_id, now);
       },
     );
+    // Materializing after the commit, not before it: writing bytes the caller
+    // just supplied must resurrect a forgotten object, and `linkObject` clears
+    // the tombstone that `materialize` would otherwise refuse to read through.
+    await context.objects.materialize(object.hash, destination);
     return ok(destination, mutation.revision);
   });
 }
@@ -156,7 +159,6 @@ async function writeFromPath(
       context.ensureArtifactWorkspace(artifact.artifact_id),
       ...relativePath.split("/"),
     );
-    await context.objects.materialize(object.hash, destination);
     const mutation = await context.store.semantic(
       {
         operation: "write_file",
@@ -186,6 +188,8 @@ async function writeFromPath(
         markWorkspaceReady(context, artifact.artifact_id, now);
       },
     );
+    // See writeFile: the tombstone clears with the commit, not before it.
+    await context.objects.materialize(object.hash, destination);
     return ok(destination, mutation.revision);
   });
 }
