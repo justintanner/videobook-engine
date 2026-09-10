@@ -22,6 +22,8 @@ installer dependencies. This includes this patched ZIP implementation, so a
 plain consumer install uses it before the ONNX postinstall script runs. The
 engine's development override alone does not propagate to consumers; bundling
 only `adm-zip` also lets a hoisted ONNX package resolve another, vulnerable copy.
+The override uses the explicit vendor path because npm 10 fails to resolve a
+`$adm-zip` reference while installing the bundle in a consumer project.
 
 Bundling retains official runtime binaries for every supported platform without
 rebuilding them. The engine archive is about 102 MB (97 MiB), below the

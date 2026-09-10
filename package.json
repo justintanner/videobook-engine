@@ -95,7 +95,7 @@
     "sharp": "$sharp",
     "onnxruntime-node": "$onnxruntime-node",
     "smol-toml": "^1.8.0",
-    "adm-zip": "$adm-zip"
+    "adm-zip": "file:vendor/adm-zip"
   },
   "allowScripts": {
     "@dolthub/doltlite@0.50.9": true,
