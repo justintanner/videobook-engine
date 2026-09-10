@@ -26,7 +26,10 @@ try {
     const packed = await run(npm, ["pack", "--json", "--pack-destination", root], {
       cwd: repository, maxBuffer: 16 * 1024 * 1024,
     });
-    const [{ filename }] = JSON.parse(packed.stdout);
+    const [{ filename, size }] = JSON.parse(packed.stdout);
+    assert.ok(size < 100 * 1024 * 1024,
+      "Engine archive must fit the consumer's GitHub vendoring limit of 100 MiB");
+    process.stdout.write(`Engine archive: ${(size / 1024 / 1024).toFixed(1)} MiB\n`);
     target = join(root, filename);
   }
   await writeFile(join(root, "package.json"), JSON.stringify({
@@ -45,6 +48,11 @@ try {
   await run(npm, ["install", "--no-audit", "--no-fund", target], {
     cwd: root, env: installEnv, maxBuffer: 16 * 1024 * 1024,
   });
+  const zipProbe = await run(process.execPath, [
+    join(repository, "scripts/adm-zip-package-probe.mjs"),
+    join(root, "node_modules/videobook-engine"),
+  ], { cwd: root, maxBuffer: 16 * 1024 * 1024 });
+  process.stdout.write(zipProbe.stdout);
   // Resolve the public subpath from the clean installation with browser
   // rules. This fails if the export is absent or pulls in native/Node APIs.
   const browser = await build({
@@ -268,6 +276,7 @@ console.log("Packaged README quick start and catalog reopen passed");
   });
   assert.equal(JSON.parse(audit.stdout).metadata.vulnerabilities.total, 0,
     "Installed runtime dependencies must pass npm audit");
+  process.stdout.write("Installed runtime dependency audit: zero vulnerabilities\n");
 } finally {
   await rm(root, { recursive: true, force: true, maxRetries: 3 });
 }

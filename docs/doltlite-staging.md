@@ -58,14 +58,17 @@ lazy object reads, writes and reopen; `tests/merge-policy.test.ts` covers the
 engine's merge policies and complete catalog. The dependency change requires
 no engine schema migration or file-format conversion.
 
-September 10 engine validation: 441 tests pass with 12 optional skips;
-typecheck, lint, and build pass. Clean-package browser/API/tag/reopen/native
-and media checks pass. The final clean-package audit still fails on the
-pre-existing `adm-zip` advisory: the development vendor override from
-`8d6a26c` does not propagate to consumers. This already failed in
+September 10 engine validation: 442 tests pass with 12 optional skips;
+typecheck, lint, and build pass. Clean-package browser/API/tag/reopen/native,
+media, and cached CLIP/CLAP inference checks pass with model downloads disabled.
+The pre-existing `adm-zip` packaging defect visible in
 [baseline CI](https://github.com/justintanner/videobook-engine/actions/runs/34435585747)
-before the DoltLite change and is tracked separately as `ve-4vv`. The audit
-gate remains enabled; no new engine npm release is part of this source change.
+came from a development vendor override that did not propagate to consumers. The `ve-4vv`
+repair bundles official ONNX Runtime with its patched ZIP dependency;
+installed ZIP security regressions and the unchanged audit now pass. See the
+[ZIP distribution notes](https://github.com/justintanner/videobook-engine/blob/main/vendor/adm-zip/VENDOR.md)
+for the archive-size tradeoff. No new engine npm release is part of this source
+change.
 
 ## Remaining native and wrapper fixes
 

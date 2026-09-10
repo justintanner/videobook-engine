@@ -46,6 +46,9 @@
     "docs",
     "fixtures"
   ],
+  "bundleDependencies": [
+    "onnxruntime-node"
+  ],
   "scripts": {
     "test:package": "node scripts/package-smoke.mjs",
     "benchmark:api": "tsx benchmarks/run-api-benchmark.ts",
@@ -53,7 +56,7 @@
     "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
     "build": "npm run clean && tsc && node scripts/build-transformers.mjs",
     "prepare": "npm run build",
-    "prepack": "npm run build",
+    "prepack": "npm run build && node scripts/prepare-onnx-bundle.mjs",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.benchmarks.json",
     "lint": "knip",
     "pretest": "node scripts/patch-transformers.mjs",

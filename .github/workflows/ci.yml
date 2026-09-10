@@ -8,6 +8,10 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      # These checks use CPU inference; the npm package already includes its
+      # CPU binaries. Optional CUDA downloads do not belong in this CI run.
+      ONNXRUNTIME_NODE_INSTALL: skip
     strategy:
       matrix:
         node-version: [22, 24]

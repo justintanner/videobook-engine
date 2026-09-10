@@ -7,5 +7,5 @@
   ],
   "project": ["src/**/*.ts"],
   "ignore": [],
-  "ignoreDependencies": ["node-gyp", "onnxruntime-node", "adm-zip"]
+  "ignoreDependencies": ["node-gyp", "adm-zip"]
 }

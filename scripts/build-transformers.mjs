@@ -33,7 +33,7 @@ for (const output of Object.values(result.metafile.outputs)) {
 const notices = join(repository, "dist/third-party");
 await mkdir(notices, { recursive: true });
 const versions = {};
-for (const name of ["@huggingface/transformers", "@huggingface/jinja", "@huggingface/tokenizers", "onnxruntime-common"]) {
+for (const name of ["@huggingface/transformers", "@huggingface/jinja", "@huggingface/tokenizers", "onnxruntime-common", "onnxruntime-node"]) {
   const packageRoot = join(repository, "node_modules", name);
   const manifest = JSON.parse(await readFile(join(packageRoot, "package.json"), "utf8"));
   versions[name] = {
@@ -42,12 +42,12 @@ for (const name of ["@huggingface/transformers", "@huggingface/jinja", "@hugging
     ...(name === "@huggingface/transformers" ? {
       enginePatches: ["model-discovery-options-v1", "verified-model-files-v1"],
     } : {}),
-    ...(name === "onnxruntime-common" ? {
+    ...(name.startsWith("onnxruntime-") ? {
       licenseSource: "https://github.com/microsoft/onnxruntime/blob/v1.29.0/LICENSE",
     } : {}),
   };
   const destination = join(notices, `${name.replaceAll("/", "-")}.LICENSE`);
-  const license = name === "onnxruntime-common"
+  const license = name.startsWith("onnxruntime-")
     ? join(repository, "scripts/licenses/onnxruntime-common.LICENSE")
     : join(packageRoot, "LICENSE");
   await copyFile(license, destination);

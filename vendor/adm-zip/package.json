@@ -23,7 +23,8 @@
     "zipEntry.js",
     "zipFile.js",
     "types.d.ts",
-    "LICENSE"
+    "LICENSE",
+    "VENDOR.md"
   ],
   "main": "adm-zip.js",
   "types": "types.d.ts",
