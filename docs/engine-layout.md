@@ -309,10 +309,10 @@ Its committed rows are:
 Merges run through `mergeWithPolicy` (`src/merge-policy.ts`), which encodes
 one rule per constraint class. doltlite verifies the merged working set
 against UNIQUE, CHECK, and foreign-key constraints and rolls a violating
-merge back atomically ("working set with constraint violations"); there is
-no `dolt_verify_constraints()` in doltlite, so the merge itself plus
-post-merge scans (`PRAGMA foreign_key_check`, duplicate-singleton scans)
-are the constraint-verification primitives.
+merge back atomically ("working set with constraint violations"). The engine
+uses the merge itself plus post-merge scans (`PRAGMA foreign_key_check`, duplicate-singleton scans)
+as its constraint-verification primitives. Official 0.50.9 also exposes
+`dolt_verify_constraints()`, which this policy does not call.
 
 - **Precondition: same schema version.** Both sides must carry the same
   `engine_schema.version`; a mismatch is refused with
@@ -355,9 +355,9 @@ are the constraint-verification primitives.
   (`resolveObjectsRow` in `src/fork.ts`).
 
 DoltLite 0.50.6 fixes incremental staging and full-catalog URL cloning.
-The pinned `0.50.6-videobook.1` fork also fixes native merges with ignored
-runtime tables. Clean-package verification exercises the complete catalog,
-indexes, runtime rows, and job ID state; see
+The pinned official `0.50.9` package also includes the upstream fix for native
+merges with ignored runtime tables. Clean-package verification exercises the
+complete catalog, indexes, runtime rows, and job ID state; see
 [docs/doltlite-staging.md](doltlite-staging.md). The dedicated merge-back flow
 keeps its projection merge and application conflict policies.
 

@@ -68,7 +68,7 @@
     "node": ">=22"
   },
   "dependencies": {
-    "@dolthub/doltlite": "https://github.com/justintanner/doltlite/releases/download/videobook-node-v0.50.6-videobook.1/dolthub-doltlite-0.50.6-videobook.1.tgz",
+    "@dolthub/doltlite": "0.50.9",
     "node-gyp": "12.1.0",
     "sharp": "0.35.4",
     "usearch": "2.26.0",
@@ -95,7 +95,7 @@
     "adm-zip": "$adm-zip"
   },
   "allowScripts": {
-    "https://github.com/justintanner/doltlite/releases/download/videobook-node-v0.50.6-videobook.1/dolthub-doltlite-0.50.6-videobook.1.tgz": true,
+    "@dolthub/doltlite@0.50.9": true,
     "esbuild@0.28.1": true,
     "fsevents@2.3.3": true,
     "protobufjs@7.6.5": true,

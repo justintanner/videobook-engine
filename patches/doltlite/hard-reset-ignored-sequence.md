@@ -74,9 +74,13 @@ plus the Node addon compiled against the regenerated amalgamation):
 
 ## Adoption
 
-Shipping this fix means rebuilding and republishing the fork package, which is
-a release action and needs explicit authorization. Nothing in the engine
-depends on it: `src/` never calls `dolt_reset`, and the supported
+Rechecked September 10, 2026: official `@dolthub/doltlite@0.50.9` still drops
+the ignored sequence, and the next insert fails with
+`prepare: database disk image is malformed`. The engine now uses that official
+package; this source patch is retained for upstream adoption and is not applied
+during installation. The former fork did not carry it either.
+
+Nothing in the engine depends on it: `src/` never calls `dolt_reset`, and the supported
 merge/rollback/reopen paths carry their own deleted-ID checks, which pass on
 the published binary today.
 

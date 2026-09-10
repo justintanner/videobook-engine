@@ -7,9 +7,8 @@ engine mirrors that field in `mergeWithPolicy`, so its advisory `fastForward`
 was always `false`.
 
 This is a wrapper bug, independent of the native
-[ignored-runtime merge fix](../doltlite/README.md). The temporary fork package
-`0.50.6-videobook.1` deliberately ships the published wrapper source unchanged,
-so it carries this bug too.
+[ignored-runtime merge fix](../doltlite/README.md). Both the former fork package
+`0.50.6-videobook.1` and the currently installed official `0.50.9` carry it.
 
 ## Provenance
 
@@ -83,10 +82,13 @@ aside so the local build loaded:
 
 ## Adoption
 
-This is a recorded source patch; the installed fork has not been rebuilt.
-The next native package must carry this corrected patch and the recorded
-hard-reset fix, with the existing platform and installation checks. Until then the
-engine's `fastForward` result stays `false` for every merge. Nothing in the
+Rechecked September 10, 2026: the official `0.50.9` wrapper differs from the
+0.50.6 wrapper only in package version metadata. A real fast-forward on the
+installed official binary still returns `fast_forward: 0`. The engine now uses
+the official package; this source patch remains for upstream adoption and is
+not applied during installation.
+
+The engine's `fastForward` result stays `false` for every merge. Nothing in the
 engine branches on it — merge correctness comes from
 `verifyConstraintHealth` and the post-merge ancestry checks — so the field is
 advisory only.

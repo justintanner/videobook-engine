@@ -12,10 +12,9 @@ import { assertTagMergeCompatible } from "./tag-merge.js";
  * - `dolt_merge()` verifies the merged working set against UNIQUE, CHECK,
  *   and foreign-key constraints and, on any violation, rolls the whole
  *   merge back with "Committing this transaction resulted in a working set
- *   with constraint violations, transaction rolled back." There is no
- *   `dolt_verify_constraints()` in doltlite; the merge itself is the
- *   constraint verification, and `PRAGMA foreign_key_check` plus targeted
- *   scans are the post-merge verification primitives.
+ *   with constraint violations, transaction rolled back." The policy uses
+ *   the merge itself for constraint verification. `PRAGMA foreign_key_check`
+ *   and targeted scans are the post-merge verification primitives.
  *   `dolt_constraint_violations[_<table>]` views exist but stay empty
  *   because violating merges never commit.
  * - Same-row modifications on both sides refuse the merge with a conflict

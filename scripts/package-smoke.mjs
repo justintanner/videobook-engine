@@ -32,7 +32,7 @@ try {
   await writeFile(join(root, "package.json"), JSON.stringify({
     name: "videobook-package-smoke", private: true, type: "module",
     allowScripts: {
-      [nativeDependency.startsWith("https://") ? nativeDependency : "@dolthub/doltlite"]: true,
+      "@dolthub/doltlite": true,
       "onnxruntime-node": true,
       "protobufjs": true,
       "sharp": true,
@@ -251,8 +251,12 @@ console.log("Packaged README quick start and catalog reopen passed");
   });
   const nativeReport = JSON.parse(nativeProbe.stdout);
   assert.equal(nativeReport.passed, true);
-  assert.equal(nativeReport.nativeVersion, "b3981dc9ed");
-  process.stdout.write("Installed native fork: full catalog merges, runtime rows, indexes, and job IDs passed\n");
+  const nativeManifest = JSON.parse(await readFile(
+    join(root, "node_modules/@dolthub/doltlite/package.json"), "utf8",
+  ));
+  assert.equal(nativeManifest.version, nativeDependency,
+    "Clean installation must use the pinned DoltLite package");
+  process.stdout.write(`Installed DoltLite ${nativeManifest.version}: full catalog merges, runtime rows, indexes, and job IDs passed\n`);
   const resolutions = await run(npm, ["ls", "sharp", "--all", "--parseable"], {
     cwd: root, env: installEnv,
   });
