@@ -9,7 +9,7 @@ import { prepareOnnxBundle } from "../scripts/prepare-onnx-bundle.mjs";
 
 const run = promisify(execFile);
 
-it("installs all runtime platforms without GPU downloads or the unused macOS duplicate", async () => {
+it("installs platform runtimes without excluded files when npm metadata is cached", async () => {
   const root = await mkdtemp(join(tmpdir(), "videobook-onnx-packaging-"));
   const packageRoot = join(root, "node_modules/onnxruntime-node");
   const platformFiles = [
@@ -47,6 +47,17 @@ it("installs all runtime platforms without GPU downloads or the unused macOS dup
       await writeFile(join(packageRoot, file), file.endsWith(".dylib")
         ? "identical macOS runtime bytes" : `fixture bytes for ${file}`);
     }
+    // npm's hidden lockfile can bypass package.json reads after npm ci or
+    // install --package-lock-only. It does not retain the files exclusions.
+    await writeFile(join(root, "node_modules/.package-lock.json"), JSON.stringify({
+      name: "onnx-packaging-fixture", version: "1.0.0", lockfileVersion: 3, requires: true,
+      packages: {
+        "node_modules/onnxruntime-node": {
+          version: "1.29.0", inBundle: true,
+          resolved: "https://registry.npmjs.org/onnxruntime-node/-/onnxruntime-node-1.29.0.tgz",
+        },
+      },
+    }));
     await prepareOnnxBundle(packageRoot);
     const npm = process.platform === "win32" ? "npm.cmd" : "npm";
     const env = { ...process.env };

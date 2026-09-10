@@ -36,6 +36,10 @@ it ships as an ordinary file with unchanged bytes. Those CUDA providers are
 installed separately by the unchanged upstream installer when requested. The
 CPU CI jobs skip those optional downloads.
 
+The helper also invalidates npm's generated `node_modules/.package-lock.json`
+cache after changing the file list. Otherwise npm can reuse stale dependency
+metadata and silently include the excluded files. The project lockfile stays intact.
+
 `npm run test:package` resolves ZIP from the installed ONNX installer and checks
 normal file overwrites plus directory and file symlink attacks against sync,
 async, and single-entry extraction. It also runs the normal engine/native/media

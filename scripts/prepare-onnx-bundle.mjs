@@ -1,4 +1,4 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { join, posix, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -34,6 +34,10 @@ export async function prepareOnnxBundle(packageRoot) {
   const excluded = [...new Set([...downloads, duplicate])].sort();
   manifest.files = ["**", ...excluded.map((file) => `!${file}`)];
   await writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
+  // npm's hidden snapshot omits files metadata and can remain valid when a
+  // package.json edit leaves its parent directory's mtime unchanged. Make
+  // the packer read our updated manifest instead of that generated cache.
+  await rm(join(packageRoot, "../.package-lock.json"), { force: true });
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
