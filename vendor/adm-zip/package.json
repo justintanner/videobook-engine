@@ -1,0 +1,37 @@
+{
+  "name": "adm-zip",
+  "version": "0.6.1",
+  "description": "Vendored adm-zip 0.6.0 plus cthackers/adm-zip#576 (CVE-2026-76845 / GHSA-vwc7-r8mq-g2x9 symlink extraction guard). Replace with the official npm release once it exists.",
+  "keywords": [
+    "zip",
+    "methods",
+    "archive",
+    "unzip"
+  ],
+  "homepage": "https://github.com/cthackers/adm-zip",
+  "author": "Nasca Iacob <adm-zip@pm.me> (https://github.com/cthackers)",
+  "bugs": {
+    "email": "adm-zip@pm.me",
+    "url": "https://github.com/cthackers/adm-zip/issues"
+  },
+  "license": "MIT",
+  "files": [
+    "adm-zip.js",
+    "headers",
+    "methods",
+    "util",
+    "zipEntry.js",
+    "zipFile.js",
+    "types.d.ts",
+    "LICENSE"
+  ],
+  "main": "adm-zip.js",
+  "types": "types.d.ts",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/cthackers/adm-zip.git"
+  },
+  "engines": {
+    "node": ">=14.0"
+  }
+}
