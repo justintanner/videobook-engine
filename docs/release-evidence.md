@@ -9,10 +9,42 @@ This is an assessment of the requirements in
 Beads contains the work assignments and current status; this report records
 the evidence and its limits at these revisions.
 
+## Published 5.4.2 patch, September 10
+
+[`videobook-engine@5.4.2`](https://www.npmjs.com/package/videobook-engine/v/5.4.2)
+is published as npm `latest` from source
+`5c8ca51bd456d0b8bf93b892cf6339c5460b42f1`, tagged `v5.4.2`.
+[Node 22/24 CI](https://github.com/justintanner/videobook-engine/actions/runs/34441752761)
+passes for that source, including 442 tests with 12 optional skips, typecheck,
+build and clean-package checks. Lint also passes locally.
+
+The registry archive is byte-identical to the tested package: 101,703,089 bytes
+(97.0 MiB), SHA256
+`598eebb483f1d209a38170972934b47bf00e936c1eed938368ea9c6bbe47c76b`.
+Clean registry installs pass with npm 10.9.8 and npm 11.16.0, including the actual
+ONNX installer's ZIP extraction and symlink regressions, browser tag exports,
+tag operations and reopen, remote checksums, full native catalog/runtime/index/
+sequence probes, media decoding, one Sharp resolution and zero audit findings.
+The npm 11 install also passes cached CLIP/CLAP image/audio/text inference with
+model downloads disabled.
+
+This patch replaces the custom DoltLite dependency with official `0.50.9`,
+bundles official ONNX Runtime with the patched ZIP installer dependency so the
+security fix reaches consumers, and restores forgotten objects when their bytes
+are written again. Packaging excludes optional CUDA downloads and an unused
+duplicate macOS library while preserving required native bytes. The prepack
+helper invalidates npm's hidden dependency snapshot so these exclusions also
+work immediately after an install. See [dependency verification](doltlite-staging.md).
+
+The existing hard-reset sequence and wrapper fast-forward reporting limitations
+remain recorded source patches. Consumer adoption is separate from publication;
+upstream ZIP vendor/bundle removal is tracked in `ve-a54`. This release does not
+change the outstanding frozen-corpus requirement for MVP acceptance.
+
 ## Published 5.4.0 minor, September 7
 
 [`videobook-engine@5.4.0`](https://www.npmjs.com/package/videobook-engine/v/5.4.0)
-is published as npm `latest` from reviewed source
+was published as npm `latest` from reviewed source
 `855f694b7c8b9a4acadfda2cf3b7be838806ef42`, tagged `v5.4.0`.
 [Node 22/24 CI](https://github.com/justintanner/videobook-engine/actions/runs/34120942719)
 passes for that exact source. The registry archive is byte-identical to the

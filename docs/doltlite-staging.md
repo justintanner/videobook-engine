@@ -67,8 +67,8 @@ came from a development vendor override that did not propagate to consumers. The
 repair bundles official ONNX Runtime with its patched ZIP dependency;
 installed ZIP security regressions and the unchanged audit now pass. See the
 [ZIP distribution notes](https://github.com/justintanner/videobook-engine/blob/main/vendor/adm-zip/VENDOR.md)
-for the archive-size tradeoff. No new engine npm release is part of this source
-change.
+for the archive-size tradeoff. These changes are published in engine `5.4.2`;
+see the [verified release evidence](release-evidence.md#published-542-patch-september-10).
 
 ## Remaining native and wrapper fixes
 
