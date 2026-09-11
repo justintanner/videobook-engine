@@ -557,6 +557,11 @@ describe("engine-level merge policy behavior", () => {
       }),
     );
 
+    const beforeReferences = engine.head;
+    const references = value(engine.artifacts.deletionReferences(artifact.artifactId));
+    expect(engine.head).toBe(beforeReferences);
+    expect(value(engine.artifacts.deletionReferences(artifact.artifactId, { deleteOwnedMedia: true }))).toEqual([]);
+    expect(engine.head).toBe(beforeReferences);
     const refused = await engine.artifacts.delete(artifact.artifactId);
     expect(refused).toMatchObject({ ok: false, error: { code: "IN_USE" } });
     if (refused.ok) throw new Error("expected IN_USE");
@@ -564,6 +569,7 @@ describe("engine-level merge policy behavior", () => {
       { kind: "stream", id: stream.streamId },
       { kind: "transcript", id: transcript.transcriptId },
     ]);
+    expect(references).toEqual(refused.error.details?.references);
     const sourceRevision = engine.head;
     const cueId = uuidv7();
     const word = transcript.segments[0]!.words[0]!;
@@ -585,6 +591,9 @@ describe("engine-level merge policy behavior", () => {
       value(await engine.edits.commit(intent, preview.previewHash));
     };
     await setCue(true);
+    expect(value(engine.artifacts.deletionReferences(artifact.artifactId, { deleteOwnedMedia: true }))).toEqual([
+      { kind: "captionCue", id: cueId },
+    ]);
     expect(await engine.artifacts.delete(artifact.artifactId, { deleteOwnedMedia: true })).toMatchObject({
       ok: false, error: { code: "IN_USE", details: { references: [{ kind: "captionCue", id: cueId }] } },
     });
@@ -594,11 +603,17 @@ describe("engine-level merge policy behavior", () => {
       id: uuidv7(), kind: "stream", targetId: stream.streamId, snapshot: {}, ordinal: 0,
     }] });
     value(await engine.notebooks.write({ ...notebook, cells: [cell], edges: [] }));
+    const beforeBlockedDelete = engine.head;
+    expect(value(engine.artifacts.deletionReferences(artifact.artifactId, { deleteOwnedMedia: true }))).toEqual([
+      { kind: "cell.reference", id: `${notebook.id}/${cell.id}/${cell.references![0]!.id}` },
+    ]);
+    expect(engine.head).toBe(beforeBlockedDelete);
     expect(await engine.artifacts.delete(artifact.artifactId, { deleteOwnedMedia: true })).toMatchObject({
       ok: false, error: { code: "IN_USE", details: { references: [{ kind: "cell.reference" }] } },
     });
     value(await engine.notebooks.delete(notebook.id));
     value(await engine.artifacts.delete(artifact.artifactId, { deleteOwnedMedia: true }));
+    expect(engine.artifacts.deletionReferences(artifact.artifactId)).toMatchObject({ ok: false, error: { code: "NOT_FOUND" } });
     const counts = engine.catalogIntegrity().tableRowCounts;
     for (const table of ["artifacts", "artifact_files", "artifact_streams", "transcripts", "transcript_segments", "transcript_words"]) {
       expect(counts[table], table).toBe(0);

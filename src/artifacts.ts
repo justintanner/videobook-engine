@@ -3,6 +3,7 @@ import { rm } from "node:fs/promises";
 import type {
   Artifact,
   ArtifactKind,
+  ArtifactReference,
   CreateArtifactInput,
   DeleteArtifactOptions,
   EngineError,
@@ -40,6 +41,14 @@ export function createArtifactsApi(context: EngineContext) {
       listArtifacts(context, options),
     get: (artifactId: string): Result<Artifact, EngineError> =>
       syncResultOf(() => context.artifact(context.artifactRowById(artifactId))),
+    deletionReferences: (
+      artifactId: string,
+      options: DeleteArtifactOptions = {},
+    ): Result<ArtifactReference[], EngineError> =>
+      syncResultOf(() => {
+        const artifact = context.artifactRowById(artifactId);
+        return artifactReferences(context, artifact.artifact_id, options.deleteOwnedMedia === true);
+      }),
     rename: (
       input: RenameArtifactInput | string,
       label?: string,
@@ -329,12 +338,12 @@ function artifactReferences(
   context: EngineContext,
   artifactId: string,
   deleteOwnedMedia: boolean,
-): Array<{ kind: string; id: string }> {
+): ArtifactReference[] {
   // Covers every RESTRICT foreign key targeting artifacts so a refused
   // delete surfaces as IN_USE rather than a raw FK error mapped to
   // IO_ERROR. CASCADE-owned rows (artifact_files, artifact_metadata,
   // audio_waveforms) are deleted with the artifact and are not listed.
-  const references: Array<{ kind: string; id: string }> = [];
+  const references: ArtifactReference[] = [];
   const cells = context.store.db
     .prepare(
       `SELECT notebook_id, cell_id FROM cells

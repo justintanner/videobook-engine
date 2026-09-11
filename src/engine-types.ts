@@ -420,6 +420,11 @@ export interface DeleteArtifactOptions {
   deleteOwnedMedia?: boolean;
 }
 
+export interface ArtifactReference {
+  kind: string;
+  id: string;
+}
+
 export interface RenameArtifactInput {
   artifact: string;
   /** New free-text display label. */
