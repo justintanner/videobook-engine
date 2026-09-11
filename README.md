@@ -215,7 +215,10 @@ await engine.history.restore(revisions[0]!.hash);
 ```
 
 `restoreArtifact` keeps the artifact UUID stable and restores its files,
-metadata, and waveform as a new forward revision. `restore` mechanically
+metadata, and waveform as a new forward revision. Retained file records are
+updated in place so immutable streams and transcripts keep their references.
+If a stream references a file absent from the target revision, the restore
+returns `IN_USE` without changing the artifact. `restore` mechanically
 reloads every semantic table from its `dolt_at_*` projection at the target
 revision — book metadata, artifacts and files, entities, notebooks, sequences,
 prompts, messages, and the rest — so the restored state is exactly the state

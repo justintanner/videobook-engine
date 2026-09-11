@@ -288,16 +288,13 @@ async function restoreArtifact(
               kind=excluded.kind`,
           )
           .run(target.artifact_id, target.label, target.kind, target.created_at);
-        context.store.db
-          .prepare("DELETE FROM artifact_files WHERE artifact_id=?")
-          .run(artifactId);
+        restoreFiles(context, artifactId, files);
         context.store.db
           .prepare("DELETE FROM artifact_metadata WHERE artifact_id=?")
           .run(artifactId);
         context.store.db
           .prepare("DELETE FROM audio_waveforms WHERE artifact_id=?")
           .run(artifactId);
-        insertFiles(context, files);
         const insertMetadata = context.store.db.prepare(
           `INSERT INTO artifact_metadata(
             artifact_id, key, value_json
@@ -653,14 +650,39 @@ function filesAt(
     .all(revision, artifactId) as unknown as ArtifactFileSnapshotRow[];
 }
 
-function insertFiles(
+function restoreFiles(
   context: EngineContext,
+  artifactId: string,
   files: ArtifactFileSnapshotRow[],
 ): void {
+  const paths = new Set(files.map((file) => file.path));
+  const currentFiles = context.store.db
+    .prepare("SELECT path FROM artifact_files WHERE artifact_id=?")
+    .all(artifactId) as unknown as Array<{ path: string }>;
+  const removedPaths = currentFiles.filter((file) => !paths.has(file.path));
+  const streamForPath = context.store.db.prepare(
+    "SELECT stream_id FROM artifact_streams WHERE artifact_id=? AND source_path=? LIMIT 1",
+  );
+  for (const file of removedPaths) {
+    if (streamForPath.get(artifactId, file.path)) {
+      throw new EngineFault({
+        code: "IN_USE",
+        message: `Cannot restore artifact while a stream references a file absent from the revision: ${file.path}`,
+        details: { artifactId, path: file.path },
+      });
+    }
+  }
+  const remove = context.store.db.prepare(
+    "DELETE FROM artifact_files WHERE artifact_id=? AND path=?",
+  );
+  for (const file of removedPaths) remove.run(artifactId, file.path);
   const insert = context.store.db.prepare(
     `INSERT INTO artifact_files(
       artifact_id, path, object_hash, created_at
-    ) VALUES (?, ?, ?, ?)`,
+    ) VALUES (?, ?, ?, ?)
+    ON CONFLICT(artifact_id, path) DO UPDATE SET
+      object_hash=excluded.object_hash,
+      created_at=excluded.created_at`,
   );
   for (const row of files) {
     insert.run(row.artifact_id, row.path, row.object_hash, row.created_at);
