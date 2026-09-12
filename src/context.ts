@@ -15,6 +15,7 @@ import type {
 import { err } from "./engine-types.js";
 import { ObjectStore } from "./cas.js";
 import { DoltStore, EngineFault } from "./store.js";
+import { BOOK_SLUG_ERROR, normalizeBookSlug } from "./book-slug.js";
 
 interface BookRow {
   book_id: string;
@@ -69,13 +70,16 @@ export class EngineContext {
     const databasePath = path.join(storage.dataDir, "videobook.db");
     const initialBook = !existsSync(databasePath)
       ? (() => {
-          const name = config.initialBookName?.trim();
-          if (!name) {
+          if (!config.initialBookName?.trim()) {
             throw new EngineFault({
               code: "INVALID_INPUT",
               message:
                 "initialBookName is required when creating a new engine root",
             });
+          }
+          const name = normalizeBookSlug(config.initialBookName);
+          if (!name) {
+            throw new EngineFault({ code: "INVALID_INPUT", message: BOOK_SLUG_ERROR });
           }
           return { bookId: uuidv7(), name };
         })()

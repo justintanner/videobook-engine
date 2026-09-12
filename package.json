@@ -1,9 +1,13 @@
 {
   "name": "videobook-engine",
-  "version": "5.4.4",
+  "version": "5.4.5",
   "description": "Dolt-native local-first storage engine for Videobook",
   "type": "module",
   "exports": {
+    "./book-slug": {
+      "import": "./dist/book-slug.js",
+      "types": "./dist/book-slug.d.ts"
+    },
     ".": {
       "import": "./dist/index.js",
       "types": "./dist/index.d.ts"

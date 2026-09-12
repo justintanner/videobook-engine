@@ -57,7 +57,7 @@ try {
   // rules. This fails if the export is absent or pulls in native/Node APIs.
   const browser = await build({
     stdin: {
-      contents: 'export { normalizeTagLabel, tagCanonicalKey } from "videobook-engine/tag-values";',
+      contents: 'export { normalizeTagLabel, tagCanonicalKey } from "videobook-engine/tag-values"; export { normalizeBookSlug } from "videobook-engine/book-slug";',
       resolveDir: root,
     },
     bundle: true, platform: "browser", format: "esm", write: false,
@@ -65,6 +65,7 @@ try {
   const values = await import(`data:text/javascript;base64,${Buffer.from(browser.outputFiles[0].contents).toString("base64")}`);
   assert.equal(values.normalizeTagLabel("  Ｂeach   Sunset  "), "Beach Sunset");
   assert.equal(values.tagCanonicalKey("CAFÉ"), "café");
+  assert.equal(values.normalizeBookSlug(" My Café Project! "), "my-cafe-project");
   process.stdout.write("Packaged browser tag normalization export passed\n");
   const readme = await readFile(join(root, "node_modules/videobook-engine/README.md"), "utf8");
   const example = readme.match(/## Quick start\s+```ts\n([\s\S]*?)\n```/)?.[1];
@@ -75,7 +76,7 @@ import { existsSync, realpathSync } from "node:fs";
 import { createRequire } from "node:module";
 import { pathToFileURL } from "node:url";
 ${example}
-assert.equal(book.name, "My Story");
+assert.equal(book.name, "my-story");
 assert.equal(script.value.label, "opening draft");
 assert.ok(history.length >= 2, "Artifact creation and file write appear in history");
 assert.ok(existsSync(".videobook/data/videobook.db"));

@@ -189,7 +189,7 @@ describe("single-book Dolt engine", () => {
       initialBookName: "My First Book",
     });
     const first = engine.book.get();
-    expect(first.name).toBe("My First Book");
+    expect(first.name).toBe("my-first-book");
     expect(first.bookId).toMatch(/^[0-9a-f-]{36}$/);
     value(await engine.book.rename("Renamed Book"));
     engine.close();
@@ -204,7 +204,7 @@ describe("single-book Dolt engine", () => {
     const reopened = createEngine({ dataDir, workspaceDir });
     expect(reopened.book.get()).toEqual({
       bookId: first.bookId,
-      name: "Renamed Book",
+      name: "renamed-book",
       createdAt: first.createdAt,
     });
     reopened.close();
@@ -214,8 +214,31 @@ describe("single-book Dolt engine", () => {
       workspaceDir,
       initialBookName: "ignored-on-reopen",
     });
-    expect(suppliedAgain.book.get().name).toBe("Renamed Book");
+    expect(suppliedAgain.book.get().name).toBe("renamed-book");
     suppliedAgain.close();
+  });
+
+  it("rejects empty slugs and treats equivalent renames as no-ops", async () => {
+    const { engine } = await setup("Café___STORY 2!");
+    try {
+      const book = engine.book.get();
+      expect(book.name).toBe("cafe-story-2");
+      const history = engine.history.revisions();
+      expect(value(await engine.book.rename("  CAFÉ story 2  "))).toEqual(book);
+      for (const name of ["", "   ", "---___!!!", "猫🐈"]) {
+        expect(await engine.book.rename(name)).toMatchObject({
+          ok: false, error: { code: "INVALID_INPUT" },
+        });
+        const root = await mkdtemp(path.join(tmpdir(), "videobook-invalid-slug-"));
+        roots.push(root);
+        expect(() => createEngine({ rootDir: root, initialBookName: name })).toThrow();
+        expect(await readdir(root)).toEqual([]);
+      }
+      expect(engine.book.get()).toEqual(book);
+      expect(engine.history.revisions()).toEqual(history);
+    } finally {
+      engine.close();
+    }
   });
 
   it("creates the exact normalized v25 semantic and runtime schema", async () => {

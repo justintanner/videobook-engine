@@ -2,6 +2,7 @@ import type { Book, EngineError, Result } from "./engine-types.js";
 import { ok } from "./engine-types.js";
 import { EngineContext, resultOf } from "./context.js";
 import { EngineFault } from "./store.js";
+import { BOOK_SLUG_ERROR, normalizeBookSlug } from "./book-slug.js";
 
 export function createBookApi(context: EngineContext) {
   return {
@@ -17,11 +18,11 @@ async function renameBook(
 ): Promise<Result<Book, EngineError>> {
   return resultOf(async () => {
     const current = context.bookRow();
-    const name = requestedName.trim();
+    const name = normalizeBookSlug(requestedName);
     if (!name) {
       throw new EngineFault({
         code: "INVALID_INPUT",
-        message: "Book name must be non-empty",
+        message: BOOK_SLUG_ERROR,
       });
     }
     if (current.name === name) return context.book(current);

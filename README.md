@@ -21,7 +21,7 @@ const engine = createEngine({
 });
 
 const book = engine.book.get();
-// { bookId: "…", name: "My Story", createdAt: … }
+// { bookId: "…", name: "my-story", createdAt: … }
 
 const script = await engine.artifacts.create({
   kind: "script",
@@ -43,6 +43,14 @@ engine.close();
 `initialBookName` is required only when `data/videobook.db` does not exist yet. On
 later opens it is optional and never changes the stored book. Rename the book
 explicitly with `await engine.book.rename("new-name")`.
+
+Project names are stored as lowercase ASCII slugs with single hyphens. Creation
+and rename normalize input such as `My Café Project` to `my-cafe-project` and
+reject input with no letters or numbers. The browser-safe
+`videobook-engine/book-slug` export provides `normalizeBookSlug` for forms and
+library uniqueness checks. Existing catalogs retain their names until the
+application converts them with `book.rename`, resolving collisions across books.
+Notebook names and artifact labels remain free text.
 
 `npm run test:package` packs the engine, installs it in a clean temporary
 project, executes this quick start from the installed README, and verifies

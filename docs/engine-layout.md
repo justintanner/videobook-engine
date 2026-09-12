@@ -112,7 +112,7 @@ There are 36 allowlisted semantic tables.
 | Table | Columns | Keys, constraints, and purpose |
 | --- | --- | --- |
 | `engine_schema` | `singleton INTEGER`<br>`version INTEGER`<br>`created_at INTEGER` | `singleton PK CHECK(singleton = 1)`. Records the clean-break catalog version. The recorded version rejects older catalogs rather than migrating them. |
-| `book` | `book_id TEXT`<br>`name TEXT`<br>`created_at INTEGER` | `book_id PK`. Exactly one row per engine root; `name` is free-text display. |
+| `book` | `book_id TEXT`<br>`name TEXT`<br>`created_at INTEGER` | `book_id PK`. Exactly one row per engine root; creation and rename normalize `name` to a lowercase ASCII slug with single hyphens. |
 | `artifacts` | `artifact_id TEXT`<br>`label TEXT?`<br>`kind TEXT`<br>`created_at INTEGER` | `artifact_id PK`; `kind CHECK IN (video, image, audio, script, character, prompt, scene, final)`. `label` is optional, non-unique display text. The artifact id is the stable identity for source media, generated media, documents, and final renders. |
 | `objects` | `object_hash TEXT`<br>`size_bytes INTEGER`<br>`created_at INTEGER`<br>`forgotten_at INTEGER?` | `object_hash PK`; `size_bytes CHECK >= 0`. Versioned metadata for bytes stored outside the database. Rows are append-only: `forgotten_at` marks a tombstone whose bytes were deleted by `deleteObject`/`gc`. |
 | `artifact_files` | `artifact_id TEXT`<br>`path TEXT`<br>`object_hash TEXT`<br>`mtime_ms INTEGER`<br>`created_at INTEGER` | `(artifact_id, path) PK`; `artifact_id FK → artifacts.artifact_id ON DELETE CASCADE`; `object_hash FK → objects.object_hash ON DELETE RESTRICT`. Maps a logical artifact path to immutable content. |
