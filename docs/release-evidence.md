@@ -9,10 +9,40 @@ This is an assessment of the requirements in
 Beads contains the work assignments and current status; this report records
 the evidence and its limits at these revisions.
 
+## Published 5.4.5 patch, September 13
+
+[`videobook-engine@5.4.5`](https://www.npmjs.com/package/videobook-engine/v/5.4.5)
+is published as npm `latest` from source
+`4489fe354c72f1a29a267b3f1c56be1ab21e8ff7`, tagged `v5.4.5`.
+[Node 22/24 CI](https://github.com/justintanner/videobook-engine/actions/runs/34746404387)
+passes for that source, including 451 tests with 12 optional skips, typecheck,
+build and clean-package checks. Lint also passes locally. A bounded retry fixes
+an intermittent temporary catalog cleanup failure in the test fixtures.
+
+The registry archive is byte-identical to the tested package: 101,704,674 bytes
+(97.0 MiB), SHA256
+`319708168dda2ffabb155ba9b5b45b24d1ddc61640e863c4672aa5df2b7212ac`.
+A clean public registry install with npm 11.16.0 passes the ONNX installer's
+normal ZIP extraction and six symlink regressions, browser tag and book-slug
+exports, tag operations and reopen, remote checksums, cached CLIP/CLAP
+image/audio/text inference with model downloads disabled, full native
+catalog/runtime/index/job-ID probes, media decoding, one Sharp resolution and
+zero runtime audit findings.
+
+This release preserves immutable media stream and transcript references during
+artifact history restore, exposes the read-only artifact deletion preflight,
+and normalizes project book names to lowercase slugs through the browser-safe
+`videobook-engine/book-slug` export. The consumer already vendors these exact
+archive bytes from source `038749d`; the released source differs only in the
+test cleanup retry, so no consumer dependency change is needed.
+
+The existing native hard-reset and wrapper reporting limitations, upstream ZIP
+vendor removal, and frozen-corpus MVP acceptance remain separate follow-ups.
+
 ## Published 5.4.2 patch, September 10
 
 [`videobook-engine@5.4.2`](https://www.npmjs.com/package/videobook-engine/v/5.4.2)
-is published as npm `latest` from source
+was published as npm `latest` from source
 `5c8ca51bd456d0b8bf93b892cf6339c5460b42f1`, tagged `v5.4.2`.
 [Node 22/24 CI](https://github.com/justintanner/videobook-engine/actions/runs/34441752761)
 passes for that source, including 442 tests with 12 optional skips, typecheck,
