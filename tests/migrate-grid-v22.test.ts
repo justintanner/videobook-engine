@@ -5,7 +5,6 @@ import * as path from "node:path";
 import { DatabaseSync } from "@dolthub/doltlite";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { SCHEMA_VERSION } from "../src/catalog-metadata.js";
 import { createEngine } from "../src/index.js";
 import {
   applyV22NotebookGridMigration,
@@ -116,7 +115,7 @@ describe("schema 22 notebook grid migration", () => {
     expect(result.rewritten).toBe(1);
     expect(
       db.prepare("SELECT version FROM engine_schema").get(),
-    ).toEqual({ version: SCHEMA_VERSION });
+    ).toEqual({ version: 25 });
     const rows = db
       .prepare(
         "SELECT cell_id, grid_row, grid_column, prompt FROM cells ORDER BY cell_id",

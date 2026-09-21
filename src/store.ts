@@ -1,6 +1,7 @@
 import { mkdirSync, existsSync, statSync } from "node:fs";
 import * as path from "node:path";
 
+import { applyTimelineMigration } from "./migrate-timeline-v25.js";
 import {
   DatabaseSync,
   type DoltDiffRow,
@@ -460,11 +461,31 @@ export class DoltStore {
       }
       if (row.version === 22) {
         this.migrateNotebookGrid(applyV22NotebookGridMigration, 22);
-        row = { version: SCHEMA_VERSION };
+        row = this.schemaRow();
       }
       if (row.version === 23) {
         this.migrateNotebookGrid(applyV23NotebookGridMigration, 23);
-        row = { version: SCHEMA_VERSION };
+        row = this.schemaRow();
+      }
+      if (row.version === 25) {
+        this.db.exec("PRAGMA foreign_keys=OFF");
+        try {
+          this.semanticNow((commit) => commit({
+            operation: "Add notebook timeline cells from schema 25 to 26",
+            tables: ["cells", "engine_schema"],
+          }, () => {
+            applyTimelineMigration(this.db);
+            if (this.db.prepare("PRAGMA foreign_key_check").get()) {
+              throw new EngineFault({
+                code: "STORAGE_ERROR",
+                message: "Timeline migration would leave invalid foreign keys",
+              });
+            }
+          }), true);
+        } finally {
+          this.db.exec("PRAGMA foreign_keys=ON");
+        }
+        row = this.schemaRow();
       }
       if (row.version !== SCHEMA_VERSION) {
         this.db.close();

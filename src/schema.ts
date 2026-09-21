@@ -16,6 +16,7 @@ export const NOTEBOOK_CELL_TYPES = [
   "generate_audio",
   "concat",
   "splice",
+  "timeline",
 ] as const;
 
 export type NotebookCellType = (typeof NOTEBOOK_CELL_TYPES)[number];
@@ -110,7 +111,7 @@ export const CELLS_TABLE_DEFINITION = `
         'audio','image','video','extract_audio','extract_frame','split_video',
         'prompt','character',
         'analyze','analysis','generate_video','generate_image','generate_audio',
-        'concat','splice'
+        'concat','splice','timeline'
       )
     ),
     label TEXT,

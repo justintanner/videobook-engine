@@ -11,6 +11,33 @@ export const NOTEBOOK_GRID_FULL_ERROR = "Notebook grid is full";
 const ROW_LETTER_BASE = 26;
 const ROW_LETTER_CODE = 97;
 
+export function notebookCellOccupiedSlots(
+  cell: { type: string; slot: NotebookGridSlot },
+): NotebookGridSlot[] {
+  return cell.type === "timeline"
+    ? Array.from({ length: NOTEBOOK_GRID_COLUMN_COUNT }, (_, column) => ({
+        row: cell.slot.row,
+        column,
+      }))
+    : [cell.slot];
+}
+
+export function notebookOccupiedSlots(
+  cells: readonly { type: string; slot: NotebookGridSlot }[],
+): NotebookGridSlot[] {
+  return cells.flatMap(notebookCellOccupiedSlots);
+}
+
+export function firstEmptyNotebookGridRow(
+  occupied: Iterable<NotebookGridSlot>,
+): NotebookGridSlot {
+  const rows = new Set([...occupied].map((slot) => slot.row));
+  for (let row = 0; row < NOTEBOOK_GRID_ROW_COUNT; row += 1) {
+    if (!rows.has(row)) return { row, column: 0 };
+  }
+  throw new Error("Notebook has no completely empty row for a timeline");
+}
+
 export function isNotebookGridSlot(
   slot: NotebookGridSlot,
 ): boolean {

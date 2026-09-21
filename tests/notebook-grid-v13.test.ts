@@ -69,7 +69,7 @@ const CELLS_TABLE_DDL = `
         'audio','image','video','extract_audio','extract_frame','split_video',
         'prompt','character',
         'analyze','analysis','generate_video','generate_image','generate_audio',
-        'concat','splice'
+        'concat','splice','timeline'
       )
     ),
     label TEXT,
@@ -89,7 +89,7 @@ const CELLS_TABLE_DDL = `
   );`;
 
 describe("fixed notebook grid schema 24", () => {
-  it("exports the bounded address contract and the fourteen explicit cell types", () => {
+  it("exports the bounded address contract and the fifteen explicit cell types", () => {
     expect(NOTEBOOK_CELL_TYPES).toEqual([
       "audio",
       "image",
@@ -105,6 +105,7 @@ describe("fixed notebook grid schema 24", () => {
       "generate_audio",
       "concat",
       "splice",
+      "timeline",
     ]);
     expect(LEGACY_NOTEBOOK_CELL_TYPE_ALIASES).toEqual({
       extract_frame: "image",
@@ -125,7 +126,7 @@ describe("fixed notebook grid schema 24", () => {
       "inputs_json",
       "output_artifact_id",
     ]);
-    expect(SCHEMA_VERSION).toBe(25);
+    expect(SCHEMA_VERSION).toBe(26);
     expect(NOTEBOOK_GRID_ROW_COUNT).toBe(64);
     expect(NOTEBOOK_GRID_COLUMN_COUNT).toBe(8);
     expect(NOTEBOOK_GRID_CAPACITY).toBe(512);
@@ -324,8 +325,8 @@ describe("fixed notebook grid schema 24", () => {
         type,
         label: `${type} cell`,
         slot: {
-          row: Math.floor(index / NOTEBOOK_GRID_COLUMN_COUNT),
-          column: index % NOTEBOOK_GRID_COLUMN_COUNT,
+          row: type === "timeline" ? 2 : Math.floor(index / NOTEBOOK_GRID_COLUMN_COUNT),
+          column: type === "timeline" ? 0 : index % NOTEBOOK_GRID_COLUMN_COUNT,
         },
         prompt: type === "analyze" ? "Analyze scenes" : undefined,
         provider: type === "analyze" ? "kie" : undefined,
@@ -622,7 +623,7 @@ describe("fixed notebook grid schema 24", () => {
       database.close();
 
       expect(() => createEngine({ rootDir: root })).toThrow(
-        `Database schema ${version} is not supported by engine schema 25`,
+        `Database schema ${version} is not supported by engine schema 26`,
       );
     },
   );
@@ -815,7 +816,7 @@ describe("fixed notebook grid schema 24", () => {
     database.close();
 
     expect(() => createEngine({ rootDir: root })).toThrow(
-      "Database schema 10 is not supported by engine schema 25",
+      "Database schema 10 is not supported by engine schema 26",
     );
   });
 });

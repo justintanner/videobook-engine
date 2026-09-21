@@ -84,7 +84,7 @@ function project(context: EngineContext, intent: EditIntent): Projection {
   const normalized = intent.operations.map((operation, ordinal) =>
     normalizeOperation(intent.commandId, ordinal, operation),
   );
-  const writeSet = editWriteSet(intent.sequenceId, normalized);
+  const writeSet = editWriteSet(intent.sequenceId, normalized, current);
   const conflicts = revisionConflicts(context, intent, writeSet);
   const beforeHash = sequenceHash(current);
   const next = cloneSequence(current);
@@ -95,6 +95,19 @@ function project(context: EngineContext, intent: EditIntent): Projection {
   validateSequenceProjection(context, next);
   const afterHash = sequenceHash(next);
   const affectedRanges = affectedSequenceRanges(intent.sequenceId, normalized);
+  for (const { operation } of normalized) {
+    if (operation.kind !== "remove-clip") continue;
+    const clip = current.clips.find((entry) => entry.clipId === operation.clipId);
+    if (!clip) continue;
+    const end = operation.ripple
+      ? Math.max(...clipsOnTrack(current, clip.trackId).map(clipEnd))
+      : clipEnd(clip);
+    affectedRanges.push({
+      sequenceId: intent.sequenceId,
+      startFrame: clip.timelineStartFrame,
+      durationFrames: end - clip.timelineStartFrame,
+    });
+  }
   const diff = sequenceDiff(current, next);
   const previewHash = hashJson({
     commandId: intent.commandId,
@@ -400,6 +413,19 @@ function applyOperation(
         operation.ripple,
       );
       return;
+    case "remove-clip": {
+      const clip = requiredClip(sequence, operation.clipId);
+      mutableTrack(sequence, clip.trackId);
+      removeClip(sequence, clip.clipId);
+      if (operation.ripple) {
+        for (const following of clipsOnTrack(sequence, clip.trackId)) {
+          if (following.timelineStartFrame >= clipEnd(clip)) {
+            following.timelineStartFrame -= clip.durationFrames;
+          }
+        }
+      }
+      return;
+    }
     case "move-clip":
       applyMove(sequence, operation);
       return;
@@ -1667,6 +1693,7 @@ function requiredEditBatch(
 function editWriteSet(
   sequenceId: string,
   operations: NormalizedEditOperation[],
+  current: Sequence,
 ): string[] {
   const values = new Set<string>([`sequence:${sequenceId}`]);
   for (const item of operations) {
@@ -1676,6 +1703,17 @@ function editWriteSet(
     }
     if (operation.kind === "insert-clip" || operation.kind === "restore-clip") {
       values.add(`track:${operation.placement.trackId}`);
+    } else if (operation.kind === "remove-clip") {
+      const clip = current.clips.find((entry) => entry.clipId === operation.clipId);
+      if (clip) {
+        values.add(`track:${clip.trackId}`);
+        for (const following of current.clips) {
+          if (following.trackId === clip.trackId && operation.ripple
+            && following.timelineStartFrame >= clipEnd(clip)) {
+            values.add(`clip:${following.clipId}`);
+          }
+        }
+      }
     } else if (operation.kind === "remove-range") {
       operation.trackIds.forEach((trackId) => values.add(`track:${trackId}`));
     } else if (operation.kind === "move-clip") {

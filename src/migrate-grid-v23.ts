@@ -1,6 +1,6 @@
 import type { DatabaseSync } from "@dolthub/doltlite";
 
-import { SCHEMA_VERSION } from "./catalog-metadata.js";
+const SCHEMA_VERSION = 25;
 import type { NotebookGridSlot } from "./notebook/types.js";
 import { rewriteCatalogMentions } from "./migrate-grid-text.js";
 import { notebookGridAddress } from "./notebook-grid.js";

@@ -351,6 +351,12 @@ export interface RemoveRangeOperation {
   ripple: boolean;
 }
 
+interface RemoveClipOperation {
+  kind: "remove-clip";
+  clipId: string;
+  ripple: boolean;
+}
+
 export interface MoveClipOperation {
   kind: "move-clip";
   clipId: string;
@@ -439,6 +445,7 @@ export const MVP_EDIT_OPERATION_KINDS = [
 export type EditOperation =
   | InsertClipOperation
   | RemoveRangeOperation
+  | RemoveClipOperation
   | MoveClipOperation
   | TrimClipOperation
   | SplitClipOperation

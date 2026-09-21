@@ -120,7 +120,7 @@ describe("schema 23 notebook grid address migration", () => {
     expect(result.rewritten).toBe(4);
     expect(
       db.prepare("SELECT version FROM engine_schema").get(),
-    ).toEqual({ version: SCHEMA_VERSION });
+    ).toEqual({ version: 25 });
     const rows = db
       .prepare(
         `SELECT cell_id, label, grid_row, grid_column, prompt, inputs_json

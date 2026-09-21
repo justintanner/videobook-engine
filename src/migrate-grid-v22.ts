@@ -1,6 +1,6 @@
 import type { DatabaseSync } from "@dolthub/doltlite";
 
-import { SCHEMA_VERSION } from "./catalog-metadata.js";
+const SCHEMA_VERSION = 25;
 import type { NotebookGridSlot } from "./notebook/types.js";
 import {
   NOTEBOOK_GRID_COLUMN_COUNT,

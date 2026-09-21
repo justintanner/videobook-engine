@@ -25,6 +25,9 @@ import {
 } from "./schema.js";
 import {
   firstEmptyNotebookGridSlots,
+  firstEmptyNotebookGridRow,
+  notebookCellOccupiedSlots,
+  notebookOccupiedSlots,
   isNotebookGridSlot,
   NOTEBOOK_GRID_ADDRESS_RANGE,
 } from "./notebook-grid.js";
@@ -791,17 +794,16 @@ function assertCellSlotFree(
   notebookId: string,
   cell: NotebookCell,
 ): void {
-  const found = context.store.db
-    .prepare(
-      `SELECT cell_id FROM cells
-       WHERE notebook_id=? AND grid_row=? AND grid_column=? AND cell_id<>?`,
-    )
-    .get(notebookId, cell.slot.row, cell.slot.column, cell.id) as unknown as
-    { cell_id: string } | undefined;
-  if (found) {
-    throw new Error(
-      `Cell slot is occupied: ${cell.slot.row}:${cell.slot.column}`,
-    );
+  const requested = new Set(notebookCellOccupiedSlots(cell).map(
+    (slot) => `${slot.row}:${slot.column}`,
+  ));
+  const others = requiredNotebook(context, notebookId).cells.filter(
+    (existing) => existing.id !== cell.id,
+  );
+  if (notebookOccupiedSlots(others).some(
+    (slot) => requested.has(`${slot.row}:${slot.column}`),
+  )) {
+    throw new Error(`Cell slot is occupied: ${cell.slot.row}:${cell.slot.column}`);
   }
 }
 
@@ -810,50 +812,43 @@ function repairCellSlots(
   notebookId: string,
   protectedCellId?: string,
 ): void {
-  const rows = context.store.db
-    .prepare(
-      `SELECT cell_id, grid_row, grid_column FROM cells
-       WHERE notebook_id=?
-       ORDER BY grid_row, grid_column, cell_id`,
-    )
-    .all(notebookId) as unknown as Array<{
+  const rows = context.store.db.prepare(
+    `SELECT cell_id, type, grid_row, grid_column FROM cells
+     WHERE notebook_id=? ORDER BY grid_row, grid_column, cell_id`,
+  ).all(notebookId) as unknown as Array<{
     cell_id: string;
+    type: string;
     grid_row: number;
     grid_column: number;
   }>;
-  const slots = new Map<string, typeof rows>();
-  for (const row of rows) {
-    const key = `${row.grid_row}:${row.grid_column}`;
-    const group = slots.get(key) ?? [];
-    group.push(row);
-    slots.set(key, group);
-  }
-  const occupied: NotebookCell["slot"][] = [];
-  const losers: string[] = [];
-  for (const group of slots.values()) {
-    const winner =
-      protectedCellId && group.some((row) => row.cell_id === protectedCellId)
-        ? protectedCellId
-        : group[0]!.cell_id;
-    const winnerRow = group.find((row) => row.cell_id === winner)!;
-    occupied.push({
-      row: winnerRow.grid_row,
-      column: winnerRow.grid_column,
-    });
-    losers.push(
-      ...group
-        .filter((row) => row.cell_id !== winner)
-        .map((row) => row.cell_id),
-    );
-  }
-  const destinations = firstEmptyNotebookGridSlots(occupied, losers.length);
-  const move = context.store.db.prepare(
-    `UPDATE cells SET grid_row=?, grid_column=?
-     WHERE notebook_id=? AND cell_id=?`,
+  const ranked = [...rows].sort((left, right) =>
+    Number(right.cell_id === protectedCellId) - Number(left.cell_id === protectedCellId)
+    || Number(right.type === "timeline") - Number(left.type === "timeline"),
   );
-  for (const [index, cellId] of losers.entries()) {
-    const slot = destinations[index]!;
-    move.run(slot.row, slot.column, notebookId, cellId);
+  const occupied: NotebookCell["slot"][] = [];
+  const keys = new Set<string>();
+  const displaced: typeof rows = [];
+  for (const row of ranked) {
+    const slots = notebookCellOccupiedSlots({
+      type: row.type,
+      slot: { row: row.grid_row, column: row.grid_column },
+    });
+    if (slots.some((slot) => keys.has(`${slot.row}:${slot.column}`))) {
+      displaced.push(row);
+      continue;
+    }
+    occupied.push(...slots);
+    for (const slot of slots) keys.add(`${slot.row}:${slot.column}`);
+  }
+  const move = context.store.db.prepare(
+    `UPDATE cells SET grid_row=?, grid_column=? WHERE notebook_id=? AND cell_id=?`,
+  );
+  for (const row of displaced) {
+    const slot = row.type === "timeline"
+      ? firstEmptyNotebookGridRow(occupied)
+      : firstEmptyNotebookGridSlots(occupied, 1)[0]!;
+    move.run(slot.row, slot.column, notebookId, row.cell_id);
+    occupied.push(...notebookCellOccupiedSlots({ type: row.type, slot }));
   }
 }
 
@@ -1145,10 +1140,11 @@ function validateNotebook(
   for (const cell of notebook.cells) {
     if (cellIds.has(cell.id)) throw new Error(`Duplicate cell ID: ${cell.id}`);
     cellIds.add(cell.id);
-    const slot = `${cell.slot.row}:${cell.slot.column}`;
-    if (occupiedSlots.has(slot))
-      throw new Error(`Duplicate cell slot: ${slot}`);
-    occupiedSlots.add(slot);
+    for (const occupied of notebookCellOccupiedSlots(cell)) {
+      const slot = `${occupied.row}:${occupied.column}`;
+      if (occupiedSlots.has(slot)) throw new Error(`Duplicate cell slot: ${slot}`);
+      occupiedSlots.add(slot);
+    }
     validateCellFields(context, notebook, cell);
   }
   const edgeIds = new Set<string>();
@@ -1182,6 +1178,16 @@ function validateCellFields(
     throw new Error(
       `Cell slot must be within ${NOTEBOOK_GRID_ADDRESS_RANGE}: ${cell.id}`,
     );
+  }
+  if (cell.type === "timeline") {
+    if (cell.slot.column !== 0) throw new Error("Timeline must start in column 1");
+    if (notebook.cells.some((other) => other.id !== cell.id && other.type === "timeline")) {
+      throw new Error("A notebook can contain only one timeline");
+    }
+    if (cell.outputArtifactId || cell.outputEntityId || cell.tool || cell.operation
+      || notebook.edges.some((edge) => edge.source === cell.id || edge.target === cell.id)) {
+      throw new Error("Timeline is a sequence view and cannot execute or connect to cells");
+    }
   }
   if (cell.outputEntityId) {
     assertUuidV7(cell.outputEntityId, "Cell output entity ID");

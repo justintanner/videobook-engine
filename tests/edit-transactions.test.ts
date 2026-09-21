@@ -637,3 +637,42 @@ describe("edit transactions", () => {
     engine.close();
   }, 30_000);
 });
+
+
+it("removes one overlapping audio clip and ripples only later clips on its own track", async () => {
+  const { engine, stream, sequence } = await setup();
+  const audio = value(await engine.streams.register({
+    artifactId: stream.artifactId,
+    sourcePath: "original.mp4",
+    objectHash: stream.objectHash,
+    streamIndex: 1,
+    kind: "audio",
+    timeBase: stream.timeBase,
+    durationTicks: stream.durationTicks,
+    codec: "aac",
+    audio: { sampleRateHz: 48000, channels: 2, channelLayout: "stereo" },
+  }));
+  const tracks = sequence.tracks.filter((track) => track.kind === "audio");
+  const ids = [uuidv7(), uuidv7(), uuidv7(), uuidv7()];
+  const seed = intent(engine.sequences.getPrimary(), "overlap-audio", [
+    { kind: "insert-clip", clipId: ids[0]!, placement: placement(audio, tracks[0]!.trackId, 0, 30, 0, 1000), mode: "overwrite" },
+    { kind: "insert-clip", clipId: ids[1]!, placement: placement(audio, tracks[0]!.trackId, 30, 90, 0, 3000), mode: "overwrite" },
+    { kind: "move-clip", clipId: ids[1]!, trackId: tracks[0]!.trackId, timelineStartFrame: 10 },
+    { kind: "insert-clip", clipId: ids[2]!, placement: placement(audio, tracks[0]!.trackId, 100, 30, 0, 1000), mode: "overwrite" },
+    { kind: "insert-clip", clipId: ids[3]!, placement: placement(audio, tracks[1]!.trackId, 100, 30, 0, 1000), mode: "overwrite" },
+  ]);
+  value(await engine.edits.commit(seed, value(engine.edits.preview(seed)).previewHash));
+  const before = engine.sequences.getPrimary();
+  const edit = intent(before, "remove-overlapping-audio", [{ kind: "remove-clip", clipId: ids[0]!, ripple: true }]);
+  const preview = value(engine.edits.preview(edit));
+  expect(preview.writeSet).toContain(`track:${tracks[0]!.trackId}`);
+  const result = value(await engine.edits.commit(edit, preview.previewHash)).sequence;
+  expect(result.clips.find((clip) => clip.clipId === ids[0])).toBeUndefined();
+  expect(result.clips.find((clip) => clip.clipId === ids[1])).toEqual(before.clips.find((clip) => clip.clipId === ids[1]));
+  expect(result.clips.find((clip) => clip.clipId === ids[2])?.timelineStartFrame).toBe(70);
+  expect(result.clips.find((clip) => clip.clipId === ids[3])?.timelineStartFrame).toBe(100);
+  value(await engine.sequences.updateTrack(tracks[0]!.trackId, { locked: true }));
+  const locked = intent(engine.sequences.getPrimary(), "locked-removal", [{ kind: "remove-clip", clipId: ids[2]!, ripple: true }]);
+  expect(engine.edits.preview(locked).ok).toBe(false);
+  engine.close();
+});

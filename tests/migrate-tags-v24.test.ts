@@ -231,7 +231,7 @@ describe("schema 24 asset tag migration", () => {
     upgraded.close();
   });
 
-  it("records the upgrade as one commit and leaves a clean worktree", async () => {
+  it("records each upgrade as a commit and leaves a clean worktree", async () => {
     const root = await tempRoot();
     const engine = createEngine({ rootDir: root, initialBookName: "clean" });
     await engine.ready;
@@ -243,7 +243,7 @@ describe("schema 24 asset tag migration", () => {
     const head = upgraded.head;
     const db = new DatabaseSync(path.join(root, "data", "videobook.db"));
     const message = (
-      db.doltLog({ limit: 1 })[0] as unknown as { message: string }
+      db.doltLog({ limit: 2 })[1] as unknown as { message: string }
     ).message;
     expect(message).toContain("Add asset tag tables from schema 24");
     expect(
@@ -308,7 +308,7 @@ describe("schema 24 asset tag migration", () => {
     expect(applyAssetTagMigration(db)).toEqual({
       created: false,
       stamped: true,
-      version: SCHEMA_VERSION,
+      version: 25,
     });
     db.close();
   });

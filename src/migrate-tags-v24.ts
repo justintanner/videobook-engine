@@ -1,6 +1,6 @@
 import type { DatabaseSync } from "@dolthub/doltlite";
 
-import { SCHEMA_VERSION } from "./catalog-metadata.js";
+const SCHEMA_VERSION = 25;
 import { TAG_SCHEMA_SQL } from "./schema.js";
 
 // Schema 25 adds the asset-tag tables. The upgrade is structural only:

@@ -121,6 +121,9 @@ export type {
 export {
   assertNotebookGridSlot,
   firstEmptyNotebookGridSlot,
+  firstEmptyNotebookGridRow,
+  notebookCellOccupiedSlots,
+  notebookOccupiedSlots,
   firstEmptyNotebookGridSlots,
   isNotebookGridSlot,
   nearestOriginNotebookGridSlot,
