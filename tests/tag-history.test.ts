@@ -217,7 +217,7 @@ describe("tag state through history", () => {
     engine.close();
   });
 
-  it("drops tag rows when the artifact is deleted", async () => {
+  it.each([false, true])("commits tag cascades when deleting an artifact with deleteOwnedMedia=%s", async (deleteOwnedMedia) => {
     const { engine, root } = await setup();
     const { artifactId, hash } = await asset(engine, "doomed");
     value(
@@ -231,17 +231,34 @@ describe("tag state through history", () => {
     value(
       await engine.tags.remove(artifactId, { facet: "places", label: "Beach" }),
     );
-    value(await engine.artifacts.delete(artifactId));
+    value(await engine.tags.add(artifactId, { facet: "custom", label: "Keep" }));
+    const taggedRevision = engine.head;
+    const tagState = value(engine.tags.read(artifactId));
+    value(await engine.artifacts.delete(artifactId, { deleteOwnedMedia }));
+    const deletedRevision = engine.head;
 
     const db = new DatabaseSync(path.join(root, "data", "videobook.db"));
     for (const table of ASSET_TAG_TABLES) {
       expect(
         db.prepare(`SELECT COUNT(*) AS total FROM ${table}`).get(),
       ).toEqual({ total: 0 });
+      expect(db.doltDiff("HEAD", "WORKING", table)).toEqual([]);
+      expect(db.prepare(`SELECT COUNT(*) AS total FROM dolt_at_${table}(?)`).get(deletedRevision))
+        .toEqual({ total: 0 });
     }
     db.close();
     expect(failure(engine.tags.read(artifactId)).code).toBe("NOT_FOUND");
     engine.close();
+
+    const reopened = createEngine({ rootDir: root });
+    await reopened.ready;
+    try {
+      expect(reopened.head).toBe(deletedRevision);
+      value(await reopened.history.restore(taggedRevision));
+      expect(value(reopened.tags.read(artifactId))).toEqual(tagState);
+    } finally {
+      reopened.close();
+    }
   });
 });
 

@@ -807,7 +807,8 @@ export class DoltStore {
    */
   private verifyCleanSemanticWorktree(): void {
     const dirty: SemanticTable[] = [];
-    for (const entry of this.db.doltStatus()) {
+    const status = this.db.doltStatus();
+    for (const entry of status) {
       if (entry.staged !== 0 || entry.status === "ignored") continue;
       if (!isSemanticTable(entry.table_name)) continue;
       if (this.hasWorkingDiff(entry.table_name)) {
@@ -815,6 +816,7 @@ export class DoltStore {
       }
     }
     if (dirty.length > 0) {
+      if (this.recoverDeletedArtifactTags(dirty)) return;
       this.db.close();
       throw new EngineFault({
         code: "STORAGE_ERROR",
@@ -824,6 +826,44 @@ export class DoltStore {
         details: { dirtyTables: dirty },
       });
     }
+  }
+
+  private recoverDeletedArtifactTags(tables: SemanticTable[]): boolean {
+    if (!tables.every((table) => (ASSET_TAG_TABLES as readonly string[]).includes(table))) return false;
+    return this.semanticNow((commit) => {
+      const status = this.db.doltStatus();
+      if (status.some((entry) => entry.staged === 1)) return false;
+      const dirty: SemanticTable[] = [];
+      for (const entry of status) {
+        if (entry.status === "ignored" || !isSemanticTable(entry.table_name)) continue;
+        if (!this.hasWorkingDiff(entry.table_name)) continue;
+        if (entry.status !== "modified" || !(ASSET_TAG_TABLES as readonly string[]).includes(entry.table_name)) return false;
+        dirty.push(entry.table_name);
+      }
+      if (dirty.length === 0) return true;
+      const artifactIds = new Set<string>();
+      for (const table of dirty) {
+        const rows = this.db.doltDiff("HEAD", "WORKING", table);
+        if (rows.length === 0) return false;
+        for (const row of rows) {
+          if (row.diff_type !== "removed" || typeof row.from_artifact_id !== "string") return false;
+          artifactIds.add(row.from_artifact_id);
+        }
+      }
+      const current = this.db.prepare("SELECT 1 AS present FROM artifacts WHERE artifact_id=?");
+      const committed = this.db.prepare("SELECT 1 AS present FROM dolt_at_artifacts('HEAD') WHERE artifact_id=?");
+      for (const artifactId of artifactIds) {
+        if (current.get(artifactId) || committed.get(artifactId)) return false;
+      }
+      const ids = [...artifactIds].sort();
+      commit({
+        operation: "recover_deleted_artifact_tags",
+        tables: dirty,
+        details: { artifactIds: ids },
+        writeSet: ids.map((artifactId) => `artifact:${artifactId}`),
+      }, () => undefined);
+      return true;
+    });
   }
 
   /**

@@ -20,6 +20,7 @@ import {
 import { canonicalJson } from "./store.js";
 import { EngineFault } from "./store.js";
 import { newUuidV7 } from "./ids.js";
+import { ASSET_TAG_TABLES } from "./migrate-tags-v24.js";
 
 interface ActiveRuntimeJobRow {
   id: number;
@@ -211,6 +212,7 @@ async function deleteArtifact(
           "artifact_files",
           "artifact_metadata",
           "audio_waveforms",
+          ...ASSET_TAG_TABLES,
           ...(options.deleteOwnedMedia ? ["artifact_streams", "transcripts", "transcript_segments", "transcript_words"] as const : []),
         ],
         artifactId: artifact.artifact_id,
