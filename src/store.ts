@@ -97,6 +97,7 @@ export class DoltStore {
     onOpen: boolean;
     onClose: boolean;
   };
+  private readonly durableWrites: boolean;
   private writeCount = 0;
   private semanticChangeCount = 0;
   private pendingSemanticCommit = false;
@@ -110,6 +111,7 @@ export class DoltStore {
     catalogBackup?: CatalogBackupConfig;
     author?: string;
     catalogGc?: CatalogGcConfig;
+    durableWrites?: boolean;
     semanticCommitBoundary?: (
       boundary: SemanticCommitBoundary,
       operationId: string,
@@ -120,6 +122,7 @@ export class DoltStore {
     this.databasePath = path.join(this.dataDir, "videobook.db");
     this.author = input.author ?? DEFAULT_COMMIT_AUTHOR;
     this.semanticCommitBoundary = input.semanticCommitBoundary;
+    this.durableWrites = input.durableWrites !== false;
     this.catalogGcConfig = {
       bytesThreshold:
         input.catalogGc?.bytesThreshold ?? DEFAULT_CATALOG_GC_BYTES_THRESHOLD,
@@ -354,7 +357,9 @@ export class DoltStore {
 
   private configureConnection(): void {
     this.db.exec("PRAGMA foreign_keys = ON");
-    this.db.exec("PRAGMA synchronous = FULL");
+    this.db.exec(
+      `PRAGMA synchronous = ${this.durableWrites ? "FULL" : "NORMAL"}`,
+    );
     this.db.exec("PRAGMA busy_timeout = 10000");
     try {
       this.db.exec("PRAGMA journal_mode = WAL");

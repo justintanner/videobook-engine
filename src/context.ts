@@ -96,6 +96,7 @@ export class EngineContext {
         : {}),
       ...(config.catalogBackup ? { catalogBackup: config.catalogBackup } : {}),
       ...(config.catalogGc ? { catalogGc: config.catalogGc } : {}),
+      ...(config.durableWrites === false ? { durableWrites: false } : {}),
     });
     this.objects = new ObjectStore(
       this.store.objectsDir,

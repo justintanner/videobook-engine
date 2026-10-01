@@ -123,6 +123,13 @@ interface EngineConfigBase {
   remoteObjects?: ContentStore;
   objectPrefix?: string;
   catalogBackup?: CatalogBackupConfig;
+  /**
+   * Catalog WAL durability. Default true (`PRAGMA synchronous = FULL`). Set
+   * false for disposable roots such as tests and benchmarks to run the
+   * catalog at `synchronous = NORMAL`: commits stay consistent, but a power
+   * loss or kernel panic may roll the catalog back to the last checkpoint.
+   */
+  durableWrites?: boolean;
   /** Commit author identity; defaults to a generic Videobook author. */
   identity?: EngineIdentity;
   runtimeRetentionMs?: number;
