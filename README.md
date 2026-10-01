@@ -40,6 +40,21 @@ const history = engine.history.artifact(script.value.artifactId);
 engine.close();
 ```
 
+### Disposable roots (tests, benchmarks)
+
+```ts
+const engine = createEngine({
+  rootDir: tmpRoot,
+  initialBookName: "test-book",
+  durableWrites: false, // PRAGMA synchronous = NORMAL instead of FULL
+});
+```
+
+Commits stay consistent; only the WAL tail is at risk on power loss, so
+set this only for roots you would delete anyway. Engine creation is
+measurably faster (~210ms → ~180ms per fresh root on arm64).
+```
+
 `initialBookName` is required only when `data/videobook.db` does not exist yet. On
 later opens it is optional and never changes the stored book. Rename the book
 explicitly with `await engine.book.rename("new-name")`.
