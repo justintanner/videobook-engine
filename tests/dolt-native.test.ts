@@ -261,7 +261,7 @@ describe("single-book Dolt engine", () => {
     expect(tables).toEqual(
       [...SEMANTIC_TABLES, ...RUNTIME_TABLES].sort(),
     );
-    expect(tables).toHaveLength(59);
+    expect(tables).toHaveLength(60);
 
     const columns = (table: string) =>
       (

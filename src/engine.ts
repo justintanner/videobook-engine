@@ -22,6 +22,7 @@ import {
   createPromptsApi,
 } from "./communications.js";
 import { createGenerationsApi } from "./generations.js";
+import { createUsageApi } from "./usage.js";
 import { createHistoryApi } from "./history.js";
 import { createRuntimeApi, createLogsApi } from "./runtime-services.js";
 import { createStatusApi } from "./status.js";
@@ -54,6 +55,7 @@ export class Engine {
   readonly prompts;
   readonly messages;
   readonly generations;
+  readonly usage;
   readonly history;
   readonly status;
   readonly storage;
@@ -84,6 +86,7 @@ export class Engine {
     this.prompts = createPromptsApi(this.context);
     this.messages = createMessagesApi(this.context);
     this.generations = createGenerationsApi(this.context);
+    this.usage = createUsageApi(this.context);
     this.history = createHistoryApi(this.context);
     this.status = createStatusApi(this.context);
     this.storage = createStorageApi(this.context);

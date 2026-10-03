@@ -88,6 +88,7 @@ export const RUNTIME_TABLES = [
   "runtime_generation_errors",
   "runtime_settings",
   "runtime_logs",
+  "runtime_usage",
   "runtime_commit_outbox",
   "runtime_index_manifests",
   "runtime_index_generations",
@@ -758,6 +759,28 @@ const RUNTIME_SIMILARITY_SCHEMA_SQL = `
 `;
 
 export const RUNTIME_SCHEMA_SQL = `
+  CREATE TABLE IF NOT EXISTS runtime_usage (
+    id TEXT PRIMARY KEY,
+    provider TEXT NOT NULL,
+    external_id TEXT,
+    activity TEXT NOT NULL,
+    model TEXT NOT NULL,
+    status TEXT NOT NULL,
+    basis TEXT NOT NULL,
+    input_tokens BIGINT,
+    output_tokens BIGINT,
+    cached_tokens BIGINT,
+    token_based INTEGER NOT NULL,
+    cost_nanos BIGINT,
+    body_json TEXT NOT NULL,
+    created_at BIGINT NOT NULL,
+    updated_at BIGINT NOT NULL
+  );
+  CREATE UNIQUE INDEX IF NOT EXISTS runtime_usage_external
+    ON runtime_usage(provider, external_id);
+  CREATE INDEX IF NOT EXISTS runtime_usage_recent
+    ON runtime_usage(created_at, id);
+
   CREATE TABLE IF NOT EXISTS runtime_meta (
     key TEXT PRIMARY KEY,
     value_json TEXT NOT NULL,
