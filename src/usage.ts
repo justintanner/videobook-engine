@@ -138,7 +138,7 @@ export function createUsageApi(context: EngineContext) {
       COALESCE(SUM(cached_tokens), 0) AS cachedTokens,
       SUM(CASE WHEN token_based=1 AND status<>'pending' AND (input_tokens IS NULL OR output_tokens IS NULL) THEN 1 ELSE 0 END) AS missingTokens,
       SUM(CASE WHEN status<>'pending' AND basis='reported' THEN COALESCE(cost_nanos, 0) ELSE 0 END) AS reportedNanos,
-      SUM(CASE WHEN (status='completed' OR input_tokens IS NOT NULL OR output_tokens IS NOT NULL) AND basis='estimated' THEN COALESCE(cost_nanos, 0) ELSE 0 END) AS estimatedNanos,
+      SUM(CASE WHEN status<>'pending' AND (status='completed' OR input_tokens IS NOT NULL OR output_tokens IS NOT NULL) AND basis='estimated' THEN COALESCE(cost_nanos, 0) ELSE 0 END) AS estimatedNanos,
       SUM(CASE WHEN status<>'pending' AND (cost_nanos IS NULL OR (status<>'completed' AND input_tokens IS NULL AND output_tokens IS NULL AND basis='estimated')) THEN 1 ELSE 0 END) AS unpriced,
       SUM(CASE WHEN status='pending' THEN 1 ELSE 0 END) AS pendingCount,
       SUM(CASE WHEN status='pending' THEN COALESCE(cost_nanos, 0) ELSE 0 END) AS pendingNanos
@@ -158,6 +158,12 @@ export function createUsageApi(context: EngineContext) {
     const rows = context.store.db.prepare("SELECT body_json FROM runtime_usage ORDER BY created_at DESC, id DESC LIMIT ?").all(limit) as unknown as StoredRow[];
     return rows.flatMap((row) => { const entry = decode(row); return entry ? [entry] : []; });
   };
+
+  const interrupted = context.store.db.prepare("SELECT body_json FROM runtime_usage WHERE status='pending' AND (external_id IS NULL OR activity='voice')").all() as unknown as StoredRow[];
+  for (const row of interrupted) {
+    const entry = decode(row);
+    if (entry) record({ ...entry, status: "uncertain", basis: "unknown", warnings: ["Provider outcome unavailable after restart"] });
+  }
 
   return { record, read, find, summary, recent };
 }
