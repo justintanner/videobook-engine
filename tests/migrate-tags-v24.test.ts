@@ -243,7 +243,7 @@ describe("schema 24 asset tag migration", () => {
     const head = upgraded.head;
     const db = new DatabaseSync(path.join(root, "data", "videobook.db"));
     const message = (
-      db.doltLog({ limit: 2 })[1] as unknown as { message: string }
+      db.doltLog({ limit: 3 })[2] as unknown as { message: string }
     ).message;
     expect(message).toContain("Add asset tag tables from schema 24");
     expect(

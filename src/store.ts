@@ -2,6 +2,7 @@ import { mkdirSync, existsSync, statSync } from "node:fs";
 import * as path from "node:path";
 
 import { applyTimelineMigration } from "./migrate-timeline-v25.js";
+import { applyGoalCellMigration } from "./migrate-goal-v26.js";
 import {
   DatabaseSync,
   type DoltDiffRow,
@@ -473,23 +474,11 @@ export class DoltStore {
         row = this.schemaRow();
       }
       if (row.version === 25) {
-        this.db.exec("PRAGMA foreign_keys=OFF");
-        try {
-          this.semanticNow((commit) => commit({
-            operation: "Add notebook timeline cells from schema 25 to 26",
-            tables: ["cells", "engine_schema"],
-          }, () => {
-            applyTimelineMigration(this.db);
-            if (this.db.prepare("PRAGMA foreign_key_check").get()) {
-              throw new EngineFault({
-                code: "STORAGE_ERROR",
-                message: "Timeline migration would leave invalid foreign keys",
-              });
-            }
-          }), true);
-        } finally {
-          this.db.exec("PRAGMA foreign_keys=ON");
-        }
+        this.migrateCellTypes(applyTimelineMigration, "timeline", 25);
+        row = this.schemaRow();
+      }
+      if (row.version === 26) {
+        this.migrateCellTypes(applyGoalCellMigration, "goal", 26);
         row = this.schemaRow();
       }
       if (row.version !== SCHEMA_VERSION) {
@@ -558,6 +547,30 @@ export class DoltStore {
       operation: `Add asset tag tables from schema ${fromVersion} to ${SCHEMA_VERSION}`,
       tables: [...ASSET_TAG_TABLES, "engine_schema"],
     }, () => applyAssetTagMigration(this.db)), true);
+  }
+
+  private migrateCellTypes(
+    apply: (db: DatabaseSync) => void,
+    cellType: string,
+    fromVersion: number,
+  ): void {
+    this.db.exec("PRAGMA foreign_keys=OFF");
+    try {
+      this.semanticNow((commit) => commit({
+        operation: `Add notebook ${cellType} cells from schema ${fromVersion} to ${fromVersion + 1}`,
+        tables: ["cells", "engine_schema"],
+      }, () => {
+        apply(this.db);
+        if (this.db.prepare("PRAGMA foreign_key_check").get()) {
+          throw new EngineFault({
+            code: "STORAGE_ERROR",
+            message: `Notebook ${cellType} cell migration would leave invalid foreign keys`,
+          });
+        }
+      }), true);
+    } finally {
+      this.db.exec("PRAGMA foreign_keys=ON");
+    }
   }
 
   private migrateNotebookGrid(

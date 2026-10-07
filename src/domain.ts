@@ -1189,6 +1189,12 @@ function validateCellFields(
       throw new Error("Timeline is a sequence view and cannot execute or connect to cells");
     }
   }
+  if (cell.type === "goal" && (
+    cell.outputArtifactId || cell.outputEntityId || cell.tool || cell.operation
+    || notebook.edges.some((edge) => edge.source === cell.id || edge.target === cell.id)
+  )) {
+    throw new Error("Goal is a saved plan and cannot execute or connect to cells");
+  }
   if (cell.outputEntityId) {
     assertUuidV7(cell.outputEntityId, "Cell output entity ID");
     requiredEntity(context, cell.outputEntityId);

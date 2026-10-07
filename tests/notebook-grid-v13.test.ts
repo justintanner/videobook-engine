@@ -89,7 +89,7 @@ const CELLS_TABLE_DDL = `
   );`;
 
 describe("fixed notebook grid schema 24", () => {
-  it("exports the bounded address contract and the fifteen explicit cell types", () => {
+  it("exports the bounded address contract and the sixteen explicit cell types", () => {
     expect(NOTEBOOK_CELL_TYPES).toEqual([
       "audio",
       "image",
@@ -106,6 +106,7 @@ describe("fixed notebook grid schema 24", () => {
       "concat",
       "splice",
       "timeline",
+      "goal",
     ]);
     expect(LEGACY_NOTEBOOK_CELL_TYPE_ALIASES).toEqual({
       extract_frame: "image",
@@ -126,7 +127,7 @@ describe("fixed notebook grid schema 24", () => {
       "inputs_json",
       "output_artifact_id",
     ]);
-    expect(SCHEMA_VERSION).toBe(26);
+    expect(SCHEMA_VERSION).toBe(27);
     expect(NOTEBOOK_GRID_ROW_COUNT).toBe(64);
     expect(NOTEBOOK_GRID_COLUMN_COUNT).toBe(8);
     expect(NOTEBOOK_GRID_CAPACITY).toBe(512);
@@ -623,7 +624,7 @@ describe("fixed notebook grid schema 24", () => {
       database.close();
 
       expect(() => createEngine({ rootDir: root })).toThrow(
-        `Database schema ${version} is not supported by engine schema 26`,
+        `Database schema ${version} is not supported by engine schema 27`,
       );
     },
   );
@@ -816,7 +817,7 @@ describe("fixed notebook grid schema 24", () => {
     database.close();
 
     expect(() => createEngine({ rootDir: root })).toThrow(
-      "Database schema 10 is not supported by engine schema 26",
+      "Database schema 10 is not supported by engine schema 27",
     );
   });
 });

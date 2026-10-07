@@ -241,9 +241,9 @@ describe("single-book Dolt engine", () => {
     }
   });
 
-  it("creates the exact normalized v26 semantic and runtime schema", async () => {
+  it("creates the exact normalized v27 semantic and runtime schema", async () => {
     const { engine, dataDir } = await setup();
-    expect(SCHEMA_VERSION).toBe(26);
+    expect(SCHEMA_VERSION).toBe(27);
     engine.close();
 
     const db = new DatabaseSync(path.join(dataDir, "videobook.db"));
@@ -372,7 +372,7 @@ describe("single-book Dolt engine", () => {
       (db
         .prepare("SELECT version FROM engine_schema WHERE singleton=1")
         .get() as { version: number }).version,
-    ).toBe(26);
+    ).toBe(27);
     expect(
       db
         .prepare(
