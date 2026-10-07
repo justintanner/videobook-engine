@@ -1191,9 +1191,15 @@ function validateCellFields(
   }
   if (cell.type === "goal" && (
     cell.outputArtifactId || cell.outputEntityId || cell.tool || cell.operation
-    || notebook.edges.some((edge) => edge.source === cell.id || edge.target === cell.id)
+    || notebook.edges.some((edge) => {
+      if (edge.source === cell.id) return true;
+      if (edge.target !== cell.id) return false;
+      const source = notebook.cells.find((candidate) => candidate.id === edge.source);
+      return !/^character(?:_[2-8])?$/.test(edge.targetInput)
+        || (source?.type !== "image" && source?.type !== "generate_image");
+    })
   )) {
-    throw new Error("Goal is a saved plan and cannot execute or connect to cells");
+    throw new Error("Goal is a saved plan and only accepts character image inputs");
   }
   if (cell.outputEntityId) {
     assertUuidV7(cell.outputEntityId, "Cell output entity ID");

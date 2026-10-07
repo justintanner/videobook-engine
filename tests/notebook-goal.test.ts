@@ -30,7 +30,7 @@ const plan = {
   plan: { title: "Rainy commute", shots: [{ title: "Umbrella", prompt: "He rides through the rain.", durationSeconds: 10 }] },
 };
 
-it("saves a plan in an inert goal cell that cannot execute or connect", async () => {
+it("saves a plan in an inert goal cell that rejects execution and unrelated connections", async () => {
   const { engine, root } = await setup();
   const notebook = value(await engine.notebooks.create("Main"));
   const goal = engine.notebooks.createCell({
@@ -59,6 +59,35 @@ it("saves a plan in an inert goal cell that cannot execute or connect", async ()
     { id: image.id, type: "image" },
     { id: goal.id, type: "goal", label: "Rainy commute", prompt: "A rainy commute, three 10s clips", inputs: plan },
   ]);
+  reopened.close();
+});
+
+it("preserves ordered character provenance while rejecting invalid goal inputs atomically", async () => {
+  const { engine, root } = await setup();
+  const notebook = value(await engine.notebooks.create("Main"));
+  const goal = engine.notebooks.createCell({ type: "goal", slot: { row: 1, column: 0 }, inputs: plan });
+  const image = engine.notebooks.createCell({ type: "image", slot: { row: 0, column: 0 } });
+  const generated = engine.notebooks.createCell({ type: "generate_image", slot: { row: 0, column: 1 } });
+  const video = engine.notebooks.createCell({ type: "video", slot: { row: 0, column: 2 } });
+  const edges = [
+    engine.notebooks.createEdge({ source: image.id, target: goal.id, targetInput: "character" }),
+    engine.notebooks.createEdge({ source: generated.id, target: goal.id, targetInput: "character_2" }),
+  ];
+  const document = { ...notebook, cells: [image, generated, video, goal], edges };
+  value(await engine.notebooks.write(document));
+  const head = engine.head;
+  for (const [source, targetInput] of [
+    [video.id, "character_3"], [image.id, "character_1"],
+    [image.id, "character_9"], [image.id, "character_2"],
+  ]) {
+    const edge = engine.notebooks.createEdge({ source: source!, target: goal.id, targetInput: targetInput! });
+    expect((await engine.notebooks.write({ ...document, edges: [...edges, edge] })).ok).toBe(false);
+  }
+  expect(engine.head).toBe(head);
+  engine.close();
+  const reopened = createEngine({ rootDir: root });
+  await reopened.ready;
+  expect(value(reopened.notebooks.read(notebook.id)).edges).toEqual(edges);
   reopened.close();
 });
 
