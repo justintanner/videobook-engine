@@ -1201,6 +1201,18 @@ function validateCellFields(
   )) {
     throw new Error("Goal is a saved plan and only accepts character image inputs");
   }
+  if (cell.type === "post" && (
+    cell.outputEntityId || cell.tool || cell.operation
+    || notebook.edges.some((edge) => {
+      if (edge.source === cell.id) return true;
+      if (edge.target !== cell.id) return false;
+      const source = notebook.cells.find((candidate) => candidate.id === edge.source);
+      return edge.targetInput !== "post" || !source
+        || !["image", "video", "generate_image", "generate_video", "concat", "splice", "split_video"].includes(source.type);
+    })
+  )) {
+    throw new Error("Post is a publication record and only accepts a source media input");
+  }
   if (cell.outputEntityId) {
     assertUuidV7(cell.outputEntityId, "Cell output entity ID");
     requiredEntity(context, cell.outputEntityId);

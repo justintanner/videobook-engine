@@ -102,7 +102,7 @@ it("upgrades an actual schema-26 cells constraint without losing cells, edges or
   engine.close();
   const db = new DatabaseSync(join(root, "data", "videobook.db"));
   db.exec("PRAGMA foreign_keys=OFF");
-  db.exec(`CREATE TABLE cells_old (${CELLS_TABLE_DEFINITION.replace(",'goal'", "")})`);
+  db.exec(`CREATE TABLE cells_old (${CELLS_TABLE_DEFINITION.replace(",'goal'", "").replace(",'post'", "")})`);
   db.exec("INSERT INTO cells_old SELECT * FROM cells");
   db.exec("DROP TABLE cells");
   db.exec("ALTER TABLE cells_old RENAME TO cells");

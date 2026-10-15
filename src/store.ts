@@ -3,6 +3,7 @@ import * as path from "node:path";
 
 import { applyTimelineMigration } from "./migrate-timeline-v25.js";
 import { applyGoalCellMigration } from "./migrate-goal-v26.js";
+import { applyPostCellMigration } from "./migrate-post-v27.js";
 import {
   DatabaseSync,
   type DoltDiffRow,
@@ -479,6 +480,10 @@ export class DoltStore {
       }
       if (row.version === 26) {
         this.migrateCellTypes(applyGoalCellMigration, "goal", 26);
+        row = this.schemaRow();
+      }
+      if (row.version === 27) {
+        this.migrateCellTypes(applyPostCellMigration, "post", 27);
         row = this.schemaRow();
       }
       if (row.version !== SCHEMA_VERSION) {

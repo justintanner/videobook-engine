@@ -89,7 +89,7 @@ const CELLS_TABLE_DDL = `
   );`;
 
 describe("fixed notebook grid schema 24", () => {
-  it("exports the bounded address contract and the sixteen explicit cell types", () => {
+  it("exports the bounded address contract and the seventeen explicit cell types", () => {
     expect(NOTEBOOK_CELL_TYPES).toEqual([
       "audio",
       "image",
@@ -107,6 +107,7 @@ describe("fixed notebook grid schema 24", () => {
       "splice",
       "timeline",
       "goal",
+      "post",
     ]);
     expect(LEGACY_NOTEBOOK_CELL_TYPE_ALIASES).toEqual({
       extract_frame: "image",
@@ -127,7 +128,7 @@ describe("fixed notebook grid schema 24", () => {
       "inputs_json",
       "output_artifact_id",
     ]);
-    expect(SCHEMA_VERSION).toBe(27);
+    expect(SCHEMA_VERSION).toBe(28);
     expect(NOTEBOOK_GRID_ROW_COUNT).toBe(64);
     expect(NOTEBOOK_GRID_COLUMN_COUNT).toBe(8);
     expect(NOTEBOOK_GRID_CAPACITY).toBe(512);
@@ -326,7 +327,7 @@ describe("fixed notebook grid schema 24", () => {
         type,
         label: `${type} cell`,
         slot: {
-          row: type === "timeline" ? 2 : Math.floor(index / NOTEBOOK_GRID_COLUMN_COUNT),
+          row: type === "timeline" ? 3 : Math.floor(index / NOTEBOOK_GRID_COLUMN_COUNT),
           column: type === "timeline" ? 0 : index % NOTEBOOK_GRID_COLUMN_COUNT,
         },
         prompt: type === "analyze" ? "Analyze scenes" : undefined,
@@ -624,7 +625,7 @@ describe("fixed notebook grid schema 24", () => {
       database.close();
 
       expect(() => createEngine({ rootDir: root })).toThrow(
-        `Database schema ${version} is not supported by engine schema 27`,
+        `Database schema ${version} is not supported by engine schema 28`,
       );
     },
   );
@@ -817,7 +818,7 @@ describe("fixed notebook grid schema 24", () => {
     database.close();
 
     expect(() => createEngine({ rootDir: root })).toThrow(
-      "Database schema 10 is not supported by engine schema 27",
+      "Database schema 10 is not supported by engine schema 28",
     );
   });
 });
