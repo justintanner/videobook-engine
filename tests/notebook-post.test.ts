@@ -96,3 +96,19 @@ it("upgrades a schema-27 cell constraint without changing legacy X cells or thei
   expect(value(reopened.notebooks.read(notebook.id)).cells[1]?.type).toBe("post");
   reopened.close();
 });
+
+
+it("retains publication media pinned by runtime receipts after semantic undo", async () => {
+  const { engine } = await setup();
+  const before = engine.head;
+  const artifact = value(await engine.artifacts.create("video", "Publication"));
+  value(await engine.files.write(artifact.artifactId, "clip.mp4", Buffer.from("published bytes")));
+  const revision = engine.head;
+  const file = value(await engine.files.manifest(artifact.artifactId)).files[0]!;
+  value(engine.settings.set("application.post.receipt", { media: { objectHash: file.objectHash } }));
+  value(await engine.history.restore(before));
+  const removed = await engine.storage.deleteObject(file.objectHash);
+  expect(removed.ok).toBe(false);
+  expect(value(await engine.files.readAtRevision(artifact.artifactId, "clip.mp4", revision)).toString()).toBe("published bytes");
+  engine.close();
+});

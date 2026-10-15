@@ -453,6 +453,7 @@ function referencedHashes(context: EngineContext): Set<string> {
  */
 const JSON_ROOT_QUERIES = [
   "SELECT snapshot_json AS payload FROM cell_references",
+  "SELECT value_json AS payload FROM runtime_settings",
   "SELECT location_json AS payload FROM pinned_search_results",
   "SELECT source_range_json AS payload FROM caption_cues",
 ] as const;
@@ -523,6 +524,7 @@ function objectReferences(
     hash,
   );
   const jsonReferenceQueries = [
+    { table: "runtime_settings", query: "SELECT key AS id, value_json AS payload FROM runtime_settings" },
     {
       table: "cell_references",
       query: `SELECT notebook_id || ':' || cell_id || ':' || reference_id AS id,
