@@ -74,6 +74,29 @@ probe remains part of the package gate.
 
 ## Remaining native and wrapper fixes
 
+October 18 recheck (`ve-3e4.2`): both defects still reproduce on the installed
+official `@dolthub/doltlite@0.50.9` Linux x64 package, using Node 22.23.3 and
+24.21.0. Run `npm run build`, then `node scripts/native-followup-probe.mjs`.
+The probe uses disposable databases, reports both results, and exits **1** while
+these upstream defects remain. It does not patch the dependency or belong to the
+passing default test suite.
+
+- Hard reset: the ignored runtime row with ID 1 survives, but `sqlite_sequence`
+  disappears. Its pre-reset high-water mark was 2 (ID 2 had been deleted).
+  Inserting the next row fails with `prepare: database disk image is malformed`;
+  it cannot allocate the required ID above 2.
+- Fast-forward: the resulting HEAD equals the incoming commit and the incoming
+  row is present, but `mergeWithPolicy` reports `fastForward: false`.
+
+These are live dependency regressions carried by published engine 5.4.5 and current
+5.7.0. The engine does not call native hard reset, and `fastForward` is advisory;
+the observed defects do not invalidate the separately passing merge/catalog
+checks. Neither recorded patch is applied at installation. Adopting patched
+native/wrapper bytes requires upstream adoption or an explicitly authorized
+package rebuild. The operator decision is tracked in Beads under `ve-3e4.2`;
+this verification changes no dependency, version, tag, or published artifact.
+
+
 Two recorded fixes are still absent from both official 0.50.9 and the former
 fork. Their defects were reproduced again on the installed official binary:
 
