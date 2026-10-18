@@ -9,6 +9,43 @@ This is an assessment of the requirements in
 Beads contains the work assignments and current status; this report records
 the evidence and its limits at these revisions.
 
+## October 18 acceptance recheck and ZIP packaging cleanup
+
+The current registry package is `videobook-engine@5.7.0`; `npm whoami`
+succeeds as `justintanner`. A fresh Node 24 clean-registry smoke passes ZIP
+security, browser exports, tags/reopen, checksum rejection/retry, README usage,
+DoltLite full-catalog/runtime/index/job-ID probes, single Sharp/media decode,
+and a zero-vulnerability runtime audit. This check does not run the optional
+cached CLIP/CLAP inference tests or supply the missing judged corpus.
+
+Upstream DoltLite PR 2664 is merged as
+`9a3725f2758b7a66daa79e9ebaf18e6bd389e78c`. Upstream run
+[34043486050](https://github.com/dolthub/doltlite/actions/runs/34043486050)
+and fork run
+[34043532585](https://github.com/justintanner/doltlite/actions/runs/34043532585)
+both report success for `b3981dc9ed6b2e39c247b4d598b2691e19dd0b25`.
+These are resolved historical blockers. The M2-specific requirement remains
+withdrawn; the frozen rights-cleared corpus and judged ranges remain required.
+
+Official `adm-zip@0.6.1` now supplies the upstream symlink protection through
+ONNX Runtime's existing dependency range. The lockfile pins the official
+registry archive and integrity. The temporary ZIP vendor, development override,
+ONNX bundle declaration, preparation helper and bundle-only fixture are removed.
+The installed-ONNX ZIP probe remains and also checks legitimate ancestor symlinks
+(such as macOS `/var`); sync, async and single-entry extraction must reject links
+inside the target while allowing normal extraction. The engine archive is now
+2.5 MiB. ONNX continues to use its official runtime package and installer.
+No version bump, tag or publication is part of this source change.
+
+Validation: typecheck and build pass; the full suite passes 480 tests with
+12 optional skips using `TMPDIR=/dev/shm/ve-3e4.1-tests npm test -- --maxWorkers=2`.
+The shared worker disk caused the unchanged large-migration fixture to exceed
+its 60-second timeout; memory-backed fixture data passes all 19 migration tests
+in 31 seconds without changing assertions or time limits. FFmpeg was installed
+as a test prerequisite. The 37 focused model resolver/revision/download-policy
+tests pass on Node 22.23.3 and 24.21.0. Clean-package checks use disk storage.
+The package harness accepts both npm 10/11 array and npm 12 object pack results.
+
 ## Published 5.4.5 patch, September 13
 
 [`videobook-engine@5.4.5`](https://www.npmjs.com/package/videobook-engine/v/5.4.5)

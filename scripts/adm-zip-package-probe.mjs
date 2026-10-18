@@ -10,7 +10,7 @@ const onnxRequire = createRequire(engineRequire.resolve("onnxruntime-node/packag
 const installerRequire = createRequire(onnxRequire.resolve("./script/install-utils.js"));
 const AdmZip = installerRequire("adm-zip");
 const manifest = installerRequire("adm-zip/package.json");
-assert.equal(manifest.version, "0.6.1", "ONNX must use the patched bundled ZIP package");
+assert.equal(manifest.version, "0.6.1", "ONNX must use the patched official ZIP package");
 
 const root = await mkdtemp(join(tmpdir(), "videobook-zip-security-"));
 try {
@@ -20,6 +20,20 @@ try {
     const target = join(root, `normal-${mode}`);
     await mkdir(join(target, "nested"), { recursive: true });
     await writeFile(join(target, "nested/file.txt"), "old contents");
+    if (mode === "all") normal.extractAllTo(target, true);
+    else if (mode === "async") await normal.extractAllToAsync(target, true);
+    else normal.extractEntryTo("nested/file.txt", target, true, true);
+    assert.equal(await readFile(join(target, "nested/file.txt"), "utf8"), "safe extraction");
+  }
+
+  // OS-managed ancestors (for example macOS /var) may legitimately be links.
+  // Only links inside the extraction target should be rejected.
+  const ancestor = join(root, "ancestor");
+  const linkedAncestor = join(root, "linked-ancestor");
+  await mkdir(ancestor);
+  await symlink(ancestor, linkedAncestor, "junction");
+  for (const mode of ["all", "async", "entry"]) {
+    const target = join(linkedAncestor, mode);
     if (mode === "all") normal.extractAllTo(target, true);
     else if (mode === "async") await normal.extractAllToAsync(target, true);
     else normal.extractEntryTo("nested/file.txt", target, true, true);

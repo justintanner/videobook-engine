@@ -64,11 +64,13 @@ media, and cached CLIP/CLAP inference checks pass with model downloads disabled.
 The pre-existing `adm-zip` packaging defect visible in
 [baseline CI](https://github.com/justintanner/videobook-engine/actions/runs/34435585747)
 came from a development vendor override that did not propagate to consumers. The `ve-4vv`
-repair bundles official ONNX Runtime with its patched ZIP dependency;
-installed ZIP security regressions and the unchanged audit now pass. See the
-[ZIP distribution notes](https://github.com/justintanner/videobook-engine/blob/main/vendor/adm-zip/VENDOR.md)
-for the archive-size tradeoff. These changes are published in engine `5.4.2`;
+repair bundled official ONNX Runtime with its patched ZIP dependency;
+installed ZIP security regressions and the unchanged audit passed. That bundle
+increased the archive to about 97 MiB and was published in engine `5.4.2`;
 see the [verified release evidence](release-evidence.md#published-542-patch-september-10).
+The current source uses official adm-zip 0.6.1 through ONNX's installer dependency
+and no longer vendors ZIP or bundles ONNX. The installed-consumer ZIP security
+probe remains part of the package gate.
 
 ## Remaining native and wrapper fixes
 

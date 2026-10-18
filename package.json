@@ -50,9 +50,6 @@
     "docs",
     "fixtures"
   ],
-  "bundleDependencies": [
-    "onnxruntime-node"
-  ],
   "scripts": {
     "test:package": "node scripts/package-smoke.mjs",
     "benchmark:api": "tsx benchmarks/run-api-benchmark.ts",
@@ -60,7 +57,7 @@
     "clean": "node -e \"require('node:fs').rmSync('dist', { recursive: true, force: true })\"",
     "build": "npm run clean && tsc && node scripts/build-transformers.mjs",
     "prepare": "npm run build",
-    "prepack": "npm run build && node scripts/prepare-onnx-bundle.mjs",
+    "prepack": "npm run build",
     "typecheck": "tsc --noEmit && tsc -p tsconfig.benchmarks.json",
     "lint": "knip",
     "pretest": "node scripts/patch-transformers.mjs",
@@ -84,7 +81,6 @@
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
-    "adm-zip": "file:vendor/adm-zip",
     "fast-check": "^4.5.3",
     "knip": "^6.11.0",
     "tsx": "^4.19.0",
@@ -98,8 +94,7 @@
     "postcss": "^8.5.23",
     "sharp": "$sharp",
     "onnxruntime-node": "$onnxruntime-node",
-    "smol-toml": "^1.8.0",
-    "adm-zip": "file:vendor/adm-zip"
+    "smol-toml": "^1.8.0"
   },
   "allowScripts": {
     "@dolthub/doltlite@0.50.9": true,
