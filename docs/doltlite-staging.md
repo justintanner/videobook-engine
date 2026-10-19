@@ -93,8 +93,9 @@ These are live dependency regressions carried by published engine 5.4.5 and curr
 the observed defects do not invalidate the separately passing merge/catalog
 checks. Neither recorded patch is applied at installation. Adopting patched
 native/wrapper bytes requires upstream adoption or an explicitly authorized
-package rebuild. The operator decision is tracked in Beads under `ve-3e4.2`;
-this verification changes no dependency, version, tag, or published artifact.
+package rebuild. On October 19 the operator chose upstream submission under
+`ve-3e4.2`, keeping official 0.50.9 installed. This verification and submission
+change no dependency, version, tag, or published artifact.
 
 
 Two recorded fixes are still absent from both official 0.50.9 and the former
@@ -110,10 +111,33 @@ fork. Their defects were reproduced again on the installed official binary:
   The engine's `fastForward` field remains advisory; no engine control flow
   branches on it. Actual merge ancestry and stored rows are checked directly.
 
-These source patches remain available for upstream work; neither is applied
-at installation. The registry switch removes the fork while preserving shipped
-behavior. Tracking: engine adoption `ve-m3i.1`, broader consumer adoption and
-the remaining fixes `ve-m3i`.
+These source patches remain unapplied at installation. Upstream delivery is
+tracked by `ve-3e4.2`; the earlier official-package adoption `ve-m3i` is complete.
+
+### Upstream submissions (October 19, 2026)
+
+- Native: [DoltLite PR #4083](https://github.com/dolthub/doltlite/pull/4083),
+  ported onto `df5c8a3e227b32ae5703ee9042b50e49a2a155dd`. The preservation scan
+  now also handles views and triggers; the port retains the recorded sequence
+  predicate and five regression cases. The original patch SHA-256 remains
+  `36f71feab3812882a59284368daaa980d7c7c824f68cadf75ee204d4bd3b0e14`.
+  `bash test/doltlite_reset.sh build/doltlite`: 113 pass with the fix;
+  the same base rebuilt without it gives 111 pass and two expected failures
+  (missing sequence and allocation above the deleted ID).
+  The pinned Dolt 2.5.0 reset oracle also passes all 91 checks.
+- Wrapper: [doltlite-node PR #7](https://github.com/dolthub/doltlite-node/pull/7),
+  applying the recorded patch unchanged to
+  `3c1824d5bf24f1b6c2e681d366fc02a395665809`; original SHA-256
+  `ad3964c77fd49e153616cec9fd7271060f490e583ee46feec69996483df67964`.
+  A local test build against the official 0.51.0 release amalgamation passes
+  `bun test test/`: 135 tests across six files. Recompiling the original wrapper
+  source gives 133 pass and two expected fast-forward failures. These isolated
+  upstream test builds do not replace the installed engine dependency.
+
+The installed-package diagnostic was repeated on Node 24.21.0/Linux x64 on
+October 19 and produced the same two failures above. Upstream submission is
+not package adoption: both defects remain in the engine dependency until an
+authorized update incorporates and verifies released fixes.
 
 ## Historical staging and merge failures
 
