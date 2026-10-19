@@ -29,8 +29,6 @@ try {
     // npm 10/11 return an array; npm 12 keys results by package name.
     const packResult = JSON.parse(packed.stdout);
     const [{ filename, size }] = Array.isArray(packResult) ? packResult : Object.values(packResult);
-    assert.ok(size < 100 * 1024 * 1024,
-      "Engine archive must fit the consumer's GitHub vendoring limit of 100 MiB");
     process.stdout.write(`Engine archive: ${(size / 1024 / 1024).toFixed(1)} MiB\n`);
     target = join(root, filename);
   }

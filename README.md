@@ -10,6 +10,32 @@ MVP are in [docs/mvp-prd.md](docs/mvp-prd.md).
 There is no project layer. A fresh engine root creates exactly one Book;
 reopening that root always returns the same book.
 
+## Install
+
+```bash
+npm install videobook-engine
+```
+
+The engine is an ESM package for Node.js 22 or newer. Its native dependencies
+ship prebuilt binaries. DoltLite and USearch cover macOS arm64 and x64, Linux
+x64 and arm64, and Windows x64. ONNX Runtime covers the same platforms except
+macOS x64, so the local similarity models need Apple Silicon on a Mac.
+
+DoltLite and USearch run an install script that keeps the packaged prebuild
+or, on any other platform, builds the addon from source. Source builds need a
+C/C++ toolchain and use the engine's `node-gyp` dependency, so they work
+under any package manager. ONNX Runtime's install script only downloads
+optional CUDA libraries on Linux. npm 12 skips dependency install scripts
+unless they are allowed. The prebuilt platforms work without them; to allow
+them, for example for a source build:
+
+```bash
+npm install videobook-engine --allow-scripts=@dolthub/doltlite,usearch,onnxruntime-node
+```
+
+A consuming package can instead list the three packages under
+`allowScripts` in its `package.json`.
+
 ## Quick start
 
 ```ts
@@ -53,7 +79,6 @@ const engine = createEngine({
 Commits stay consistent; only the WAL tail is at risk on power loss, so
 set this only for roots you would delete anyway. Engine creation is
 measurably faster (~210ms → ~180ms per fresh root on arm64).
-```
 
 `initialBookName` is required only when `data/videobook.db` does not exist yet. On
 later opens it is optional and never changes the stored book. Rename the book
@@ -72,7 +97,7 @@ project, executes this quick start from the installed README, and verifies
 that reopening the catalog preserves the book and artifact.
 
 The package bundles its pinned Transformers.js runtime and uses one external
-Sharp 0.35.4 image decoder with native ONNX dependencies. This avoids shipping
+Sharp 0.35.5 image decoder with native ONNX dependencies. This avoids shipping
 Transformers' older Sharp dependency or requiring consumer overrides. Build
 provenance and third-party licenses are included under `dist/third-party/`.
 The package smoke checks both resolution paths, `npm ls sharp`, image
@@ -85,7 +110,7 @@ so the source-only dependency lint excludes them from unused-dependency checks.
 ## MVP contracts
 
 Contract version 1, introduced with schema v5 and carried by the current
-schema v24 catalog, defines the media-time, stream, transcript, sequence,
+schema v28 catalog, defines the media-time, stream, transcript, sequence,
 temporal-search, edit-intent, job, and copy-forward migration boundary:
 
 ```ts
@@ -129,14 +154,15 @@ versioned `runtime_%` ignore policy, and are never staged. Semantic surrogate
 identities are UUIDv7 values. Artifact labels are free-text display names and can be
 reused after hard deletion; immutable CAS objects remain available to history.
 
-The current catalog format is schema version 24. Valid schema version 22 and 23
-catalogs upgrade in place. Catalogs with cells outside the fixed 64-by-8
+The current catalog format is schema version 28. Valid catalogs at schema
+versions 22 through 27 upgrade in place. Catalogs with cells outside the fixed 64-by-8
 notebook grid are rejected, and other catalog versions require an explicit migration
 or a fresh engine root.
 
-The 33 versioned semantic tables are `engine_schema`, `book`, `artifacts`,
+The 36 versioned semantic tables are `engine_schema`, `book`, `artifacts`,
 `objects`, `artifact_files`, `artifact_streams`, `book_metadata`,
-`artifact_metadata`, `entities`, `notebooks`, `notebook_fields`, `cells`,
+`artifact_metadata`, `entities`, `artifact_tags`, `artifact_tag_dismissals`,
+`artifact_tag_snapshots`, `notebooks`, `notebook_fields`, `cells`,
 `notebook_cell_executions`, `notebook_generation_plans`,
 `notebook_run_plans`, `edges`, `runs`, `cell_references`,
 `pinned_search_results`, `transcripts`, `transcript_segments`,
@@ -148,11 +174,11 @@ is the commit log itself: every semantic commit carries its operation,
 parameters, and write set in a structured commit message, authored by the
 configured engine identity.
 
-The 23 local-only tables are `runtime_meta`, `runtime_jobs`, `job_runs`,
+The 24 local-only tables are `runtime_meta`, `runtime_jobs`, `job_runs`,
 `runtime_resource_leases`, `runtime_object_publications`,
 `runtime_workspace_entries`, `runtime_artifact_views`,
 `runtime_pending_tasks`, `runtime_generation_errors`, `runtime_settings`,
-`runtime_logs`, `runtime_commit_outbox`, `runtime_index_manifests`,
+`runtime_logs`, `runtime_usage`, `runtime_commit_outbox`, `runtime_index_manifests`,
 `runtime_index_generations`, `runtime_index_coverage`,
 `runtime_media_segments`, `runtime_segment_text`,
 `runtime_segment_embeddings`, `runtime_segment_fingerprints`,
