@@ -1,6 +1,36 @@
 # DoltLite staging and native merge verification
 
-The engine pins official `@dolthub/doltlite@0.50.9`, released September 10,
+## Current dependency: 0.51.1, October 20, 2026
+
+Engine 5.7.1 pins official `@dolthub/doltlite@0.51.1` and its install-script
+policy to the same version. The [upstream release](https://github.com/dolthub/doltlite/releases/tag/v0.51.1)
+includes concurrency, reopened-catalog allocation, schema-conflict recovery,
+and ignored AUTOINCREMENT sequence fixes. No custom native patch is installed.
+
+- [Registry tarball](https://registry.npmjs.org/@dolthub/doltlite/-/doltlite-0.51.1.tgz).
+- Node wrapper `gitHead`: `45964131fc803de726be884d4ada9c44fde2536c`.
+- Lockfile integrity: `sha512-/DkkJcJtHeWeu3e7VdZKgZDgFfrePAg5tF8KlEfHUg4XX/5FCZGNqppxL0+zZbyaflC8cTnAxIbjITnOci2n+A==`.
+
+The supported upgrade is directly from 0.50.9. Format 12 is retained, with no
+engine schema migration. The [0.51.0 compatibility notes](https://github.com/dolthub/doltlite/releases/tag/v0.51.0)
+describe incompatible numeric-key encoding in 0.50.15 through 0.50.18; catalogs
+written by those intermediate versions require separate assessment.
+
+Compatibility probes pass on macOS arm64 and Ubuntu 26.04 x64/arm64, including
+staging, full-catalog fast-forward and three-way merges, conflict rollback,
+runtime rows/indexes, foreign keys, CAS contents, queued jobs, deleted-ID
+high-water marks, and reopening with the old 0.50.9 binding after new writes.
+The current full catalog has 60 tables, 24 runtime tables, and 116 schema objects.
+
+The existing `scripts/native-followup-probe.mjs` now passes its hard-reset
+sequence check: the deleted ID 2 stays reserved and the next allocation is 3.
+Its advisory wrapper fast-forward check still fails, so the diagnostic retains
+exit status 1. Actual merge ancestry and rows pass; no engine control flow
+depends on that advisory flag. The wrapper follow-up remains upstream.
+
+## Historical 0.50.9 adoption and verification
+
+The engine previously pinned official `@dolthub/doltlite@0.50.9`, released September 10,
 2026. It replaces the temporary `0.50.6-videobook.1` GitHub fork. The
 [native release](https://github.com/dolthub/doltlite/releases/tag/v0.50.9)
 includes the ignored-runtime merge fix from

@@ -1,6 +1,6 @@
 {
   "name": "videobook-engine",
-  "version": "5.7.0",
+  "version": "5.7.1",
   "description": "Dolt-native local-first storage engine for Videobook",
   "type": "module",
   "exports": {
@@ -72,7 +72,7 @@
     "node": ">=22"
   },
   "dependencies": {
-    "@dolthub/doltlite": "0.50.9",
+    "@dolthub/doltlite": "0.51.1",
     "node-gyp": "12.1.0",
     "sharp": "0.35.5",
     "usearch": "2.26.0",
@@ -97,7 +97,7 @@
     "smol-toml": "^1.8.0"
   },
   "allowScripts": {
-    "@dolthub/doltlite@0.50.9": true,
+    "@dolthub/doltlite@0.51.1": true,
     "esbuild@0.28.1": true,
     "fsevents@2.3.3": true,
     "protobufjs@7.6.5": true,

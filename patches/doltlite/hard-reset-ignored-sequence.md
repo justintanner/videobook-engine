@@ -74,6 +74,12 @@ plus the Node addon compiled against the regenerated amalgamation):
 
 ## Adoption
 
+Adopted October 20, 2026 through official `@dolthub/doltlite@0.51.1` in engine
+5.7.1. Upstream [PR 4083](https://github.com/dolthub/doltlite/pull/4083) is
+merged, and the released binary preserves sequence 2 and allocates ID 3 in
+the recorded regression on macOS arm64 and Linux x64/arm64. This historical
+source patch remains for provenance and is not applied during installation.
+
 Rechecked September 10, 2026: official `@dolthub/doltlite@0.50.9` still drops
 the ignored sequence, and the next insert fails with
 `prepare: database disk image is malformed`. The engine now uses that official

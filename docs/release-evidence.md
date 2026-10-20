@@ -9,6 +9,22 @@ This is an assessment of the requirements in
 Beads contains the work assignments and current status; this report records
 the evidence and its limits at these revisions.
 
+## October 20 DoltLite 0.51.1 upgrade
+
+Engine 5.7.1 upgrades the exact official DoltLite dependency and install policy
+from 0.50.9 to 0.51.1. Schema 28 and the public engine API are unchanged.
+The candidate passes 480 tests with 12 optional skips, typecheck, build, and
+native staging/catalog/runtime/reopen probes on macOS arm64. Native probes
+also pass on Ubuntu 26.04 with Node 24.21.0 on x64 and arm64, including old
+0.50.9 binding reopen after new writes. No user library was used for testing.
+
+The upstream hard-reset fix preserves the ignored sequence high-water mark
+and next job ID. The advisory fast-forward wrapper limitation remains;
+actual ancestry and stored rows pass. See [dependency provenance and
+compatibility limits](doltlite-staging.md#current-dependency-0511-october-20-2026).
+This dependency update does not supply the missing judged corpus or change
+the MVP acceptance status above.
+
 ## October 18 acceptance recheck and ZIP packaging cleanup
 
 The current registry package is `videobook-engine@5.7.0`; `npm whoami`
