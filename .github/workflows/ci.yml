@@ -30,5 +30,8 @@ jobs:
           git config --global user.email "ci@videocity.test"
       - run: npm run typecheck
       - run: npm run build
-      - run: npm test
+      - name: Run functional tests
+        run: npm test -- --exclude tests/edit-transactions.test.ts
+      - name: Run edit transaction and latency checks in isolation
+        run: npm test -- tests/edit-transactions.test.ts
       - run: npm run test:package
