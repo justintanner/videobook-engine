@@ -9,6 +9,41 @@ This is an assessment of the requirements in
 Beads contains the work assignments and current status; this report records
 the evidence and its limits at these revisions.
 
+## November 4 usage estimates and rollups (5.8.0)
+
+Engine 5.8.0 adds the quote, actual-basis and attribution fields to `UsageEntry`
+and the `engine.usage.rollup` summary, for the cost work in apicity epic
+`ac-0lt830`. See the [usage ledger](engine-layout.md#usage-ledger). The public API
+change is additive. Schema 28 is unchanged: `runtime_usage` gains its columns and
+indexes at open, with no Dolt commit. The engine holds no price tables.
+
+It also moves `node-gyp` from 12.1.0 to 12.4.0. Advisories published October 30
+([GHSA-3g3m-2fjr-6pw4](https://github.com/advisories/GHSA-3g3m-2fjr-6pw4) and
+[GHSA-g3hv-75wg-m249](https://github.com/advisories/GHSA-g3hv-75wg-m249)) reach
+12.1.0 through make-fetch-happen, cacache, glob and minimatch, so a clean install
+of the published 5.7.1 audits with six moderate findings and the package gate
+fails. 12.4.0 removes that path and keeps the same Node range. DoltLite's
+source-build fallback builds and loads with 12.4.0 on Linux x64.
+
+Implementation commit `7019ac0` passes
+[Node 22/24 CI](https://github.com/justintanner/videobook-engine/actions/runs/41785543323),
+including the clean-package install and its zero-vulnerability runtime audit.
+Locally on Node 24, typecheck, lint and build pass, and the functional suite passes
+499 tests with 12 optional skips.
+
+Three further checks go beyond the suite:
+
+- The registry 5.7.1 package and this build took turns on one catalog. Rows written
+  by 5.7.1 read back with null new fields and keep their stored bytes, the upgrade
+  adds no commit, and 5.7.1 reopens the upgraded catalog and keeps writing to it.
+- Consumer `c9983c05` passes its 36 usage tests and three TypeScript projects
+  against this build. Its Playwright end-to-end usage test was not run.
+- 48 deliberate faults in the new code each fail at least one usage test.
+
+One local check did not pass. The 1,000-clip edit budget fails on the shared worker,
+at a load near 30 on 12 cores, on the unchanged `a65bc6b` as well as on this build:
+six of six runs each. It passes in CI with its limits unchanged.
+
 ## October 20 DoltLite 0.51.1 upgrade
 
 Engine 5.7.1 upgrades the exact official DoltLite dependency and install policy
