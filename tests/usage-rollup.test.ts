@@ -250,6 +250,56 @@ describe("estimate beside actual", () => {
     expect(engine.usage.rollup({ runId: "run" }).totals).toMatchObject({ count: 1, reportedUsd: 0.38, estimateUsd: 0.4 });
   });
 
+  it("absorbs a pending row into the settled row that holds its external ID, leaving no stray row", async () => {
+    const { engine, root } = await setup();
+    write(engine, usage("settled", { externalId: "task", status: "completed", basis: "reported", costUsd: 0.2, rateSource: "stated", actualBasis: "stated", warnings: ["kept"], inputTokens: 7 }));
+    write(engine, usage("retry", { status: "pending", basis: "estimated", costUsd: 0.4, estimateUsd: 0.4, estimateSource: "table", estimateRateAsOf: "2026-11-01", runId: "run", cellId: "cell" }));
+
+    const merged = write(engine, usage("retry", { externalId: "task", status: "pending", basis: "estimated", costUsd: 0.4, rateSource: "table", warnings: ["stale"], inputTokens: 9, jobId: "job", actualBasis: "none" }));
+
+    const settled = {
+      id: "settled", externalId: "task", status: "completed", basis: "reported", costUsd: 0.2, rateSource: "stated", actualBasis: "stated", warnings: ["kept"], inputTokens: 7,
+      estimateUsd: 0.4, estimateSource: "table", estimateRateAsOf: "2026-11-01", runId: "run", cellId: "cell", jobId: "job",
+    };
+    expect(merged).toMatchObject(settled);
+    expect(engine.usage.read("settled")).toMatchObject(settled);
+    expect(engine.usage.read("retry")).toBeNull();
+    expect(engine.usage.rollup({ runId: "run" }).totals).toMatchObject({ count: 1, actualUsd: 0.2, estimateUsd: 0.4, settledEstimateUsd: 0.4, pendingCount: 0, pendingEstimateUsd: 0, pendingUsd: 0, unsettled: 0 });
+
+    const reopened = await reopen(engine, root);
+    expect(reopened.usage.summary().totals).toMatchObject({ count: 1, pendingCount: 0, unpriced: 0 });
+    expect(reopened.usage.read("settled")).toMatchObject(settled);
+  });
+
+  it("keeps the settled row's own quote and attribution over those of a row it absorbs", async () => {
+    const { engine } = await setup();
+    write(engine, usage("settled", { externalId: "task", status: "completed", basis: "estimated", costUsd: 0.2, actualBasis: "derived", estimateUsd: 0.25, estimateSource: "first", runId: "first-run" }));
+    write(engine, usage("retry", { status: "pending", estimateUsd: 0.9, estimateSource: "second", runId: "second-run" }));
+    write(engine, usage("retry", { externalId: "task", status: "pending", estimateUsd: 0.8 }));
+    expect(engine.usage.read("settled")).toMatchObject({ status: "completed", costUsd: 0.2, actualBasis: "derived", estimateUsd: 0.25, estimateSource: "first", runId: "first-run" });
+    expect(engine.usage.read("retry")).toBeNull();
+  });
+
+  it("takes the stronger figure when a pending write absorbs a row that already has one", async () => {
+    const { engine } = await setup();
+    write(engine, usage("settled", { externalId: "task", status: "completed", basis: "estimated", costUsd: 0.2, actualBasis: "derived" }));
+    write(engine, usage("stated", { status: "completed", basis: "reported", costUsd: 0.3, actualBasis: "stated", listUsd: 0.4 }));
+    write(engine, usage("stated", { externalId: "task", status: "pending" }));
+    expect(engine.usage.read("settled")).toMatchObject({ status: "completed", basis: "reported", costUsd: 0.3, actualBasis: "stated", listUsd: 0.4 });
+    expect(engine.usage.read("stated")).toBeNull();
+  });
+
+  it("still ignores a stale pending write with nothing to absorb", async () => {
+    const { engine } = await setup();
+    const settled = write(engine, usage("settled", { externalId: "task", status: "completed", basis: "reported", costUsd: 0.2 }));
+    expect(write(engine, usage("settled", { status: "pending", estimateUsd: 0.9, runId: "run", costUsd: 9 }))).toEqual(settled);
+    expect(write(engine, usage("settled", { externalId: "task", status: "pending", estimateUsd: 0.9 }))).toEqual(settled);
+    expect(write(engine, usage("new-id", { externalId: "task", status: "pending", estimateUsd: 0.9 }))).toEqual(settled);
+    expect(engine.usage.read("settled")).toEqual(settled);
+    expect(engine.usage.read("new-id")).toBeNull();
+    expect(engine.usage.summary().totals.count).toBe(1);
+  });
+
   it("never overwrites a reported cost, and keeps its actual basis and list price with it", async () => {
     const { engine } = await setup();
     write(engine, usage("call", { status: "completed", basis: "reported", costUsd: 0.2, rateSource: "stated", actualBasis: "stated", listUsd: 0.3 }));

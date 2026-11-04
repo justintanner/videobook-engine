@@ -524,7 +524,8 @@ spreads a row it read earlier is held to the same rules, so a stale snapshot can
 put a quote back over a stated or derived cost. A `stated` or `derived` label with
 no cost behind it is stored as null. When a write with an external ID merges two
 rows, the merged row keeps the estimate, attribution and stronger actual of the row
-it absorbs.
+it absorbs. A pending write cannot move a settled row: with no row to absorb it
+changes nothing, and with one it only fills in the quote and attribution.
 
 `cellId`, `runId` and `jobId` are caller-chosen strings that mean something only
 within one book. The queue's numeric job ID restarts in each book, so use

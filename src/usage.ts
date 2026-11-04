@@ -220,18 +220,23 @@ export function createUsageApi(context: EngineContext) {
     const current = external ?? byId;
     const absorbed = external && byId && byId.id !== external.id ? byId : null;
     if (current && (current.provider !== input.provider || current.model !== input.model || current.activity !== input.activity)) invalid("Usage identity cannot change");
-    if (current && current.status !== "pending" && current.status !== "uncertain" && input.status === "pending") return current;
+    const stale = current !== null && current.status !== "pending" && current.status !== "uncertain" && input.status === "pending";
+    if (current && stale && !absorbed) return current;
+    // A stale pending write cannot move a settled row. When it brings a row to absorb,
+    // it can only fill in what that call knew: the quote and the attribution.
+    const { id, provider, model, activity, estimateUsd, estimateSource, estimateRateAsOf, notebookId, cellId, jobId, runId } = input;
+    const patch: UsageInput = stale ? { id, provider, model, activity, estimateUsd, estimateSource, estimateRateAsOf, notebookId, cellId, jobId, runId } : input;
     // A patch never clears these: null means "nothing new". A quote and its attribution
     // belong to the call that made them, so the first value stays; an actual may refine.
-    const first = <K extends AddedField>(field: K) => (current?.[field] ?? absorbed?.[field] ?? input[field] ?? null) as UsageEntry[K];
-    const latest = <K extends AddedField>(field: K) => (input[field] ?? current?.[field] ?? absorbed?.[field] ?? null) as UsageEntry[K];
-    const quote = [current, absorbed, input].find((row) => typeof row?.estimateUsd === "number");
+    const first = <K extends AddedField>(field: K) => (current?.[field] ?? absorbed?.[field] ?? patch[field] ?? null) as UsageEntry[K];
+    const latest = <K extends AddedField>(field: K) => (patch[field] ?? current?.[field] ?? absorbed?.[field] ?? null) as UsageEntry[K];
+    const quote = [current, absorbed, patch].find((row) => typeof row?.estimateUsd === "number");
     const entry: UsageEntry = {
       status: "pending", basis: "unknown", externalId: null,
       inputTokens: null, outputTokens: null, cachedTokens: null, tokenBased: false,
       costUsd: null, units: null, unit: null, rateSource: null, pricingVersion: null,
       artifactId: null, operation: null, warnings: [], createdAt: now,
-      ...current, ...input, id: current?.id ?? input.id, updatedAt: now,
+      ...current, ...patch, id: current?.id ?? input.id, updatedAt: now,
       estimateUsd: quote ? quote.estimateUsd ?? null : latest("estimateUsd"),
       estimateSource: quote ? quote.estimateSource ?? null : latest("estimateSource"),
       estimateRateAsOf: quote ? quote.estimateRateAsOf ?? null : latest("estimateRateAsOf"),
@@ -240,13 +245,13 @@ export function createUsageApi(context: EngineContext) {
     };
     if (current) entry.createdAt = current.createdAt;
     const held = actualRank(absorbed) > actualRank(current) ? absorbed : current;
-    if (held && actualRank(held) > actualRank(input)) {
+    if (held && actualRank(held) > actualRank(patch)) {
       entry.costUsd = held.costUsd;
       entry.basis = held.basis;
       entry.rateSource = held.rateSource;
       entry.actualBasis = held.actualBasis;
       entry.listUsd = held.listUsd;
-    } else if (!input.actualBasis && actualRank(input) > actualRank(held)) {
+    } else if (!patch.actualBasis && actualRank(patch) > actualRank(held)) {
       entry.actualBasis = null;
     }
     validate(entry);
