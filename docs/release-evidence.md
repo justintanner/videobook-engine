@@ -44,6 +44,29 @@ One local check did not pass. The 1,000-clip edit budget fails on the shared wor
 at a load near 30 on 12 cores, on the unchanged `a65bc6b` as well as on this build:
 six of six runs each. It passes in CI with its limits unchanged.
 
+### Publication
+
+[`videobook-engine@5.8.0`](https://www.npmjs.com/package/videobook-engine/v/5.8.0)
+is published as npm `latest` from source
+`c8b7e7dd75c99809648e612d5550a5abb1e49941`, tagged `v5.8.0`.
+[Node 22/24 CI](https://github.com/justintanner/videobook-engine/actions/runs/41786460479)
+passes for that exact source, including the edit budget above.
+
+The registry archive is byte-identical to the tested package: 2,581,348 bytes,
+SHA256 `f02cd9a582adf31f17a1466927cefbf431fad55a4fa3bd66636f9ddc6cb5bc79`, npm
+integrity
+`sha512-T95c4LdWdgwaqv1jrDnh/qn63jJ3dx0G2aTjA9/pEdzuRa84VwsQ16xBYIxMXgFQhhSV/V6p9mmHNTPUizf3+A==`.
+A clean public registry install with no token in the environment passes ZIP
+security, browser exports, tags and reopen, remote checksums, README usage, the
+full-catalog, runtime, index and job-ID probes, media decode and a
+zero-vulnerability runtime audit. This check does not run the optional cached
+CLIP/CLAP inference tests.
+
+npm 12 accepts a publish and processes it afterwards: this version took about
+three minutes to appear. Fetching the archive URL before then caches a 404 on the
+registry's CDN for five minutes, which also failed `npm pack` from an empty cache
+until it expired. Wait for `npm view` to show the version before fetching it.
+
 ## October 20 DoltLite 0.51.1 upgrade
 
 Engine 5.7.1 upgrades the exact official DoltLite dependency and install policy
