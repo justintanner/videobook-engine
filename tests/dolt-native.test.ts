@@ -13,6 +13,7 @@ import { DatabaseSync } from "@dolthub/doltlite";
 import { v7 as uuidv7 } from "uuid";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { closeCatalogDatabase } from "../src/catalog-close.js";
 import { EngineContext } from "../src/context.js";
 import { createEngine, type Engine } from "../src/engine.js";
 import type { ContentStore } from "../src/engine-types.js";
@@ -148,7 +149,7 @@ async function removeRoot(root: string): Promise<void> {
   let lastError: unknown;
   for (let attempt = 0; attempt < 10; attempt += 1) {
     try {
-      await rm(root, { recursive: true, force: true, maxRetries: 1 });
+      await rm(root, { recursive: true, force: true });
       return;
     } catch (error) {
       lastError = error;
@@ -199,7 +200,7 @@ describe("single-book Dolt engine", () => {
       catalog.prepare("PRAGMA table_info(book)").all() as Array<{ name: string }>
     ).map((column) => column.name);
     expect(bookColumns).toEqual(["book_id", "name", "created_at"]);
-    catalog.close();
+    closeCatalogDatabase(catalog);
 
     const reopened = createEngine({ dataDir, workspaceDir });
     expect(reopened.book.get()).toEqual({
@@ -387,7 +388,7 @@ describe("single-book Dolt engine", () => {
         )
         .get(),
     ).toBeUndefined();
-    db.close();
+    closeCatalogDatabase(db);
   });
 
   it.each([3, 4, 13])("rejects v%s catalogs without an explicit migration", async (version) => {
@@ -405,7 +406,7 @@ describe("single-book Dolt engine", () => {
       INSERT INTO engine_schema(singleton, version, created_at)
       VALUES (1, ${version}, 0);`,
     );
-    db.close();
+    closeCatalogDatabase(db, { wrote: true });
 
     expect(() =>
       createEngine({
@@ -454,7 +455,7 @@ describe("single-book Dolt engine", () => {
         (row) => row.table_name === "runtime_artifact_views" && row.staged === 1,
       ),
     ).toBe(false);
-    db.close();
+    closeCatalogDatabase(db);
   });
 
   it("treats sequences as the single timeline model", async () => {
@@ -554,7 +555,7 @@ describe("single-book Dolt engine", () => {
     ).map((column) => column.name);
     expect(manifestColumns).not.toContain("size_bytes");
     expect(manifestColumns).not.toContain("mime_type");
-    db.close();
+    closeCatalogDatabase(db);
   });
 
   it("validates caller-supplied semantic IDs as UUIDv7", async () => {
@@ -717,7 +718,7 @@ describe("single-book Dolt engine", () => {
     db.doltReset("--hard");
     expect(db.doltMerge("same-cell-left").conflicts).toBe(0);
     expect(() => db.doltMerge("same-cell-right")).toThrow(/cannot merge: conflicts detected/i);
-    db.close();
+    closeCatalogDatabase(db, { wrote: true });
   });
 
   it("merges same-position rows from independent forks without losing rows", async () => {
@@ -807,7 +808,7 @@ describe("single-book Dolt engine", () => {
         )
         .all() as Array<{ track_id: string }>).map((row) => row.track_id),
     ).toEqual([leftTrack, rightTrack].sort());
-    db.close();
+    closeCatalogDatabase(db, { wrote: true });
   });
 
   it("projects queued work into an artifact runtime view", async () => {
@@ -1002,7 +1003,7 @@ describe("single-book Dolt engine", () => {
         mismatched.push(table);
       }
     }
-    db.close();
+    closeCatalogDatabase(db);
     expect(mismatched).toEqual([]);
   });
 
@@ -1118,7 +1119,7 @@ describe("single-book Dolt engine", () => {
       .get(enqueued.job.operationId) as { state: string; result_json: string };
     expect(audit.state).toBe("done");
     expect(JSON.parse(audit.result_json)).toEqual({ output: "ok" });
-    db.close();
+    closeCatalogDatabase(db);
   });
 
   it("publishes CAS objects before backing up the catalog", async () => {

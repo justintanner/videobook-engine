@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "@dolthub/doltlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { closeCatalogDatabase } from "../src/catalog-close.js";
 import { createEngine } from "../src/engine.js";
 import type { Engine } from "../src/engine.js";
 import type { UsageInput, UsageRollupTotals, UsageTotals } from "../src/usage.js";
@@ -11,7 +12,7 @@ const roots: string[] = [];
 const engines: Engine[] = [];
 afterEach(async () => {
   for (const engine of engines.splice(0)) engine.close();
-  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true, maxRetries: 3 })));
+  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
 async function setup() {
@@ -105,7 +106,7 @@ async function catalogFromV5_7_1(rows: Array<ReturnType<typeof v5_7_1Body>>) {
     for (const row of rows) insertV5_7_1Row(db, row);
     return { root, head: db.doltHashOf("HEAD") };
   } finally {
-    db.close();
+    closeCatalogDatabase(db, { wrote: true });
   }
 }
 
@@ -139,7 +140,7 @@ describe("usage rows written before the estimate fields", () => {
       expect(db.doltStatus()).toEqual([]);
       expect((db.prepare("SELECT version FROM engine_schema").get() as { version: number }).version).toBe(28);
     } finally {
-      db.close();
+      closeCatalogDatabase(db);
     }
   });
 
@@ -166,7 +167,7 @@ describe("usage rows written before the estimate fields", () => {
       try {
         return (db.prepare("SELECT sql FROM sqlite_master WHERE tbl_name='runtime_usage' AND sql IS NOT NULL ORDER BY name").all() as Array<{ sql: string }>).map((row) => row.sql.replace(/\s+/gu, " ").replace(/ IF NOT EXISTS/u, ""));
       } finally {
-        db.close();
+        closeCatalogDatabase(db);
       }
     };
     const fresh = shape(root);

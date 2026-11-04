@@ -6,6 +6,7 @@ import * as path from "node:path";
 import { DatabaseSync } from "@dolthub/doltlite";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { closeCatalogDatabase } from "../src/catalog-close.js";
 import { SCHEMA_VERSION } from "../src/catalog-metadata.js";
 import {
   SEMANTIC_SCHEMA_SQL,
@@ -24,7 +25,7 @@ afterEach(async () => {
   await Promise.all(
     roots
       .splice(0)
-      .map((root) => rm(root, { recursive: true, force: true, maxRetries: 3 })),
+      .map((root) => rm(root, { recursive: true, force: true })),
   );
 });
 
@@ -58,7 +59,7 @@ function downgrade(root: string, version: number): void {
   db.prepare(
     "SELECT dolt_commit('-m', 'downgrade fixture', '--author', 'Videobook <videobook@localhost>') AS hash",
   ).get();
-  db.close();
+  closeCatalogDatabase(db, { wrote: true });
 }
 
 /**
@@ -83,7 +84,7 @@ function rewriteWithoutTagHistory(root: string, version: number): void {
       >,
     ]),
   );
-  source.close();
+  closeCatalogDatabase(source);
   rmSync(catalog, { recursive: true, force: true });
 
   const rebuilt = new DatabaseSync(catalog);
@@ -122,7 +123,7 @@ function rewriteWithoutTagHistory(root: string, version: number): void {
       "SELECT dolt_commit('-m', 'legacy catalog without tag tables', '--author', 'Videobook <videobook@localhost>') AS hash",
     )
     .get();
-  rebuilt.close();
+  closeCatalogDatabase(rebuilt, { wrote: true });
 }
 
 function tableNames(root: string): string[] {
@@ -134,7 +135,7 @@ function tableNames(root: string): string[] {
        ORDER BY name`,
     )
     .all() as Array<{ name: string }>;
-  db.close();
+  closeCatalogDatabase(db);
   return rows.map((row) => row.name);
 }
 
@@ -143,7 +144,7 @@ function recordedVersion(root: string): number {
   const row = db
     .prepare("SELECT version FROM engine_schema WHERE singleton=1")
     .get() as { version: number };
-  db.close();
+  closeCatalogDatabase(db);
   return row.version;
 }
 
@@ -226,7 +227,7 @@ describe("schema 24 asset tag migration", () => {
           .filter((entry) => entry.message.startsWith("Add asset tag tables")),
       ).toHaveLength(1);
     } finally {
-      db.close();
+      closeCatalogDatabase(db);
     }
     upgraded.close();
   });
@@ -251,7 +252,7 @@ describe("schema 24 asset tag migration", () => {
         .doltStatus()
         .filter((entry) => entry.table_name.startsWith("artifact_tag")),
     ).toEqual([]);
-    db.close();
+    closeCatalogDatabase(db);
 
     // Reopening an upgraded catalog is a no-op: no second migration commit.
     upgraded.close();
@@ -310,7 +311,7 @@ describe("schema 24 asset tag migration", () => {
       stamped: true,
       version: 25,
     });
-    db.close();
+    closeCatalogDatabase(db, { wrote: true });
   });
 
   const boundaries = [
@@ -364,7 +365,7 @@ describe("schema 24 asset tag migration", () => {
         expect(probe.prepare("SELECT COUNT(*) AS n FROM runtime_commit_outbox").get()).toEqual({ n: 0 });
         expect(probe.doltLog().filter((entry) => entry.message.startsWith("Add asset tag tables"))).toHaveLength(1);
       } finally {
-        probe.close();
+        closeCatalogDatabase(probe);
       }
     } finally {
       recovered.close();

@@ -12,6 +12,7 @@ import * as path from "node:path";
 import { DatabaseSync } from "@dolthub/doltlite";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { closeCatalogDatabase } from "../src/catalog-close.js";
 import { createEngine, type Engine } from "../src/index.js";
 import type { ContentStore } from "../src/engine-types.js";
 
@@ -96,7 +97,7 @@ function tombstoneRow(
       .get(hash) as
       { size_bytes: number; forgotten_at: number | null } | undefined;
   } finally {
-    db.close();
+    closeCatalogDatabase(db);
   }
 }
 
@@ -449,7 +450,7 @@ describe("forgettable objects", () => {
         .get(transcript.revision) as { count: number };
       expect(historical.count).toBe(1);
     } finally {
-      db.close();
+      closeCatalogDatabase(db);
     }
     expect(
       tombstoneRow(dataDir, transcript.payloadHash)?.forgotten_at,

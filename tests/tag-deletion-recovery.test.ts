@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "@dolthub/doltlite";
 import { afterEach, describe, expect, it } from "vitest";
+import { closeCatalogDatabase } from "../src/catalog-close.js";
 import { createEngine } from "../src/engine.js";
 import { ASSET_TAG_TABLES } from "../src/migrate-tags-v24.js";
 
@@ -10,7 +11,7 @@ const roots: string[] = [];
 
 afterEach(async () => {
   await Promise.all(roots.splice(0).map((root) =>
-    rm(root, { recursive: true, force: true, maxRetries: 3 })));
+    rm(root, { recursive: true, force: true })));
 });
 
 function value<T>(result: { ok: true; value: T } | { ok: false; error: { message: string } }): T {
@@ -56,7 +57,7 @@ async function legacyDeletion() {
     }
     return { root, databasePath, doomed, survivor, survivorTags, taggedRevision, legacyHead };
   } finally {
-    db.close();
+    closeCatalogDatabase(db, { wrote: true });
   }
 }
 
@@ -124,7 +125,7 @@ describe("legacy artifact tag deletion recovery", () => {
           db.prepare("SELECT dolt_add('artifact_tags') AS result").get();
         }
       } finally {
-        db.close();
+        closeCatalogDatabase(db, { wrote: true });
       }
       expect(() => createEngine({ rootDir: fixture.root })).toThrow(/uncommitted changes/);
       const verify = new DatabaseSync(fixture.databasePath, { readOnly: true });

@@ -12,7 +12,7 @@ const opened: Array<{ engine: Engine; root: string }> = [];
 afterEach(async () => {
   for (const { engine, root } of opened.splice(0)) {
     engine.close();
-    await rm(root, { recursive: true, force: true, maxRetries: 3 });
+    await rm(root, { recursive: true, force: true });
   }
 });
 

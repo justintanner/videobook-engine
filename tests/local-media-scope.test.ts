@@ -60,7 +60,7 @@ async function fixture() {
     server.closeAllConnections();
     await new Promise<void>((resolve) => server.close(() => resolve()));
     engine.close();
-    await rm(root, { recursive: true, force: true, maxRetries: 3 });
+    await rm(root, { recursive: true, force: true });
   });
   await engine.ready;
   const artifact = value(await engine.artifacts.create("image", "Original"));
@@ -95,7 +95,7 @@ describe("local media scope", () => {
     });
     cleanups.push(async () => {
       engine.close();
-      await rm(root, { recursive: true, force: true, maxRetries: 3 });
+      await rm(root, { recursive: true, force: true });
     });
     await engine.ready;
     const artifact = value(await engine.artifacts.create("image", "Original"));

@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { DatabaseSync } from "@dolthub/doltlite";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { closeCatalogDatabase } from "../src/catalog-close.js";
 import { SCHEMA_VERSION } from "../src/catalog-metadata.js";
 import { createEngine } from "../src/index.js";
 import {
@@ -19,7 +20,7 @@ const roots: string[] = [];
 afterEach(async () => {
   await Promise.all(
     roots.splice(0).map((root) =>
-      rm(root, { recursive: true, force: true, maxRetries: 3 }),
+      rm(root, { recursive: true, force: true }),
     ),
   );
 });
@@ -213,7 +214,7 @@ describe("schema 23 notebook grid address migration", () => {
     db.prepare(
       "SELECT dolt_commit('-m', 'downgrade fixture to schema 23', '--author', 'Videobook <videobook@localhost>') AS hash",
     ).get();
-    db.close();
+    closeCatalogDatabase(db, { wrote: true });
 
     const upgraded = createEngine({ rootDir: root });
     await upgraded.ready;
@@ -229,7 +230,7 @@ describe("schema 23 notebook grid address migration", () => {
     expect(
       reopened.prepare("SELECT version FROM engine_schema").get(),
     ).toEqual({ version: SCHEMA_VERSION });
-    reopened.close();
+    closeCatalogDatabase(reopened);
     upgraded.close();
   });
 });

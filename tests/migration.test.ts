@@ -10,6 +10,7 @@ import { v7 as uuidv7 } from "uuid";
 import { afterEach, describe, expect, it } from "vitest";
 import sharp from "sharp";
 
+import { closeCatalogDatabase } from "../src/catalog-close.js";
 import {
   createEngine,
   dryRunV4Migration,
@@ -22,7 +23,7 @@ const roots: string[] = [];
 afterEach(async () => {
   await Promise.all(
     roots.splice(0).map((root) =>
-      rm(root, { recursive: true, force: true, maxRetries: 3 })
+      rm(root, { recursive: true, force: true })
     ),
   );
 });
@@ -181,7 +182,7 @@ async function fixture(options: {
   if (options.empty) database.exec('DELETE FROM cells; DELETE FROM notebooks;');
   database.prepare("SELECT dolt_add('.') AS result").get();
   database.prepare("SELECT dolt_commit('-m', 'Schema v4 fixture') AS hash").get();
-  database.close();
+  closeCatalogDatabase(database, { wrote: true });
   await copyFile(buildingPath, databasePath);
   await rm(buildingPath);
   return { root, databasePath, bookId, notebookId, cellId, artifactId, objectHash, secondCellId, edgeId, entityId, runId, promptId, messageId, videoId, audioId, generators };
@@ -377,7 +378,7 @@ describe("schema-v4 copy-forward migration", () => {
     const database = new DatabaseSync(source.databasePath);
     database.exec('PRAGMA foreign_keys=OFF');
     database.prepare("INSERT INTO edges VALUES (?, ?, ?, ?, 'reference')").run(source.notebookId, uuidv7(), uuidv7(), source.cellId);
-    database.close();
+    closeCatalogDatabase(database, { wrote: true });
     const result = await migrateV4({ sourceRoot: source.root, destinationRoot: `${source.root}-invalid`, dryRun: false });
     expect(result).toMatchObject({ ok: false, error: { code: 'INVALID_INPUT', details: { issues: expect.arrayContaining([
       expect.objectContaining({ message: 'Missing notebook-local source_cell_id' }),
@@ -389,7 +390,7 @@ describe("schema-v4 copy-forward migration", () => {
     const before = value(dryRunV4Migration(source.root));
     const database = new DatabaseSync(source.databasePath);
     database.prepare("UPDATE cells SET prompt='Changed prompt' WHERE cell_id=?").run(source.cellId);
-    database.close();
+    closeCatalogDatabase(database, { wrote: true });
     const after = value(dryRunV4Migration(source.root));
     expect(after.sourceHeadRevision).toBe(before.sourceHeadRevision);
     expect(after.migrationKey).not.toBe(before.migrationKey);
@@ -548,7 +549,7 @@ describe("schema-v4 copy-forward migration", () => {
         if (phase !== 'publish') return;
         const database = new DatabaseSync(source.databasePath);
         database.prepare("UPDATE cells SET prompt='Changed after copy' WHERE cell_id=?").run(source.cellId);
-        database.close();
+        closeCatalogDatabase(database, { wrote: true });
       } });
     expect(result).toMatchObject({ ok: false, error: { code: 'STALE_REVISION' } });
     expect(await readdir(parent)).toEqual([]);

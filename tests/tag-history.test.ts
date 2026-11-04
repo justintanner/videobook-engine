@@ -6,6 +6,7 @@ import * as path from "node:path";
 import { DatabaseSync } from "@dolthub/doltlite";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { closeCatalogDatabase } from "../src/catalog-close.js";
 import { createEngine, type Engine } from "../src/engine.js";
 import type { ArtifactKind } from "../src/engine-types.js";
 import { ASSET_TAG_TABLES } from "../src/migrate-tags-v24.js";
@@ -16,7 +17,7 @@ afterEach(async () => {
   await Promise.all(
     roots
       .splice(0)
-      .map((root) => rm(root, { recursive: true, force: true, maxRetries: 3 })),
+      .map((root) => rm(root, { recursive: true, force: true })),
   );
 });
 
@@ -141,7 +142,7 @@ describe("tag state through history", () => {
       "SELECT dolt_commit('-m', 'pre-tag revision', '--author', 'Videobook <videobook@localhost>') AS hash",
     ).get();
     const preTagRevision = db.doltLog({ limit: 1 })[0]!.commit_hash;
-    db.close();
+    closeCatalogDatabase(db, { wrote: true });
 
     const upgraded = createEngine({ rootDir: root });
     await upgraded.ready;
@@ -246,7 +247,7 @@ describe("tag state through history", () => {
       expect(db.prepare(`SELECT COUNT(*) AS total FROM dolt_at_${table}(?)`).get(deletedRevision))
         .toEqual({ total: 0 });
     }
-    db.close();
+    closeCatalogDatabase(db);
     expect(failure(engine.tags.read(artifactId)).code).toBe("NOT_FOUND");
     engine.close();
 

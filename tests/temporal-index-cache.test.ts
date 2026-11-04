@@ -10,7 +10,7 @@ const roots: string[] = [];
 const indexes: Array<TemporalVectorIndex<string>> = [];
 afterEach(async () => {
   for (const index of indexes.splice(0)) index.dispose();
-  for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true, maxRetries: 3 });
+  for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
 });
 
 const vectors = Array.from({ length: 2_048 }, (_, index) => {

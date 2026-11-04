@@ -6,6 +6,7 @@ import * as path from "node:path";
 import { DatabaseSync } from "@dolthub/doltlite";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { closeCatalogDatabase } from "../src/catalog-close.js";
 import {
   createEngine,
   type Engine,
@@ -336,7 +337,7 @@ describe("audio similarity API", () => {
           .get(),
       ).toBeUndefined();
     } finally {
-      catalog.close();
+      closeCatalogDatabase(catalog);
     }
 
     engine = createEngine({
@@ -586,5 +587,5 @@ function value<T>(
 }
 
 async function removeRoot(root: string): Promise<void> {
-  await rm(root, { recursive: true, force: true, maxRetries: 1 });
+  await rm(root, { recursive: true, force: true });
 }

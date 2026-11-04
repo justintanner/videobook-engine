@@ -78,7 +78,7 @@ describe("commit hygiene", () => {
       .prepare("SELECT state FROM job_runs WHERE run_id=?")
       .get(enqueued.job.operationId) as { state: string } | undefined;
     expect(run?.state).toBe("done");
-    verify.close();
+    closeCatalogDatabase(verify);
   });
 
   it("stages FK-cascade-affected tables when committing", async () => {

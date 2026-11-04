@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { DatabaseSync } from "@dolthub/doltlite";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { closeCatalogDatabase } from "../src/catalog-close.js";
 import { createEngine } from "../src/index.js";
 import {
   applyV22NotebookGridMigration,
@@ -19,7 +20,7 @@ const roots: string[] = [];
 afterEach(async () => {
   await Promise.all(
     roots.splice(0).map((root) =>
-      rm(root, { recursive: true, force: true, maxRetries: 3 }),
+      rm(root, { recursive: true, force: true }),
     ),
   );
 });
@@ -215,7 +216,7 @@ describe("schema 22 notebook grid migration", () => {
     db.prepare(
       "SELECT dolt_commit('-m', 'downgrade fixture to schema 22', '--author', 'Videobook <videobook@localhost>') AS hash",
     ).get();
-    db.close();
+    closeCatalogDatabase(db, { wrote: true });
 
     const upgraded = createEngine({ rootDir: root });
     await upgraded.ready;

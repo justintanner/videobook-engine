@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { DatabaseSync } from "@dolthub/doltlite";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { closeCatalogDatabase } from "../src/catalog-close.js";
 import { createEngine, type Engine } from "../src/engine.js";
 import type { ContentStore, EngineError } from "../src/engine-types.js";
 import { bootstrapFork, mergeBack } from "../src/fork.js";
@@ -21,7 +22,7 @@ const roots: string[] = [];
 
 afterEach(async () => {
   await Promise.all(
-    roots.splice(0).map((root) => rm(root, { recursive: true, force: true, maxRetries: 3 })),
+    roots.splice(0).map((root) => rm(root, { recursive: true, force: true })),
   );
 });
 
@@ -422,7 +423,7 @@ describe("merge-back integration flow", () => {
         .all() as Array<{ label: string }>
     ).map((row) => row.label);
     expect(remoteLabels).toEqual(["aud-upstream", "img-base", "vid-fork"]);
-    verify.close();
+    closeCatalogDatabase(verify, { wrote: true });
 
     // Re-running the flow against the integrated catalog (the merge
     // workspace is a healthy copy whose main carries the integration

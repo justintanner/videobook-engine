@@ -6,6 +6,7 @@ import { DatabaseSync } from "@dolthub/doltlite";
 import { v7 as uuidv7 } from "uuid";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { closeCatalogDatabase } from "../src/catalog-close.js";
 import { createArtifactsApi } from "../src/artifacts.js";
 import { createBookApi } from "../src/books.js";
 import { createMessagesApi, createPromptsApi } from "../src/communications.js";
@@ -27,7 +28,7 @@ const roots: string[] = [];
 
 afterEach(async () => {
   await Promise.all(
-    roots.splice(0).map((root) => rm(root, { recursive: true, force: true, maxRetries: 3 })),
+    roots.splice(0).map((root) => rm(root, { recursive: true, force: true })),
   );
 });
 
@@ -114,7 +115,7 @@ describe("declared write sets", () => {
       2,
     );
     db.exec("COMMIT");
-    db.close();
+    closeCatalogDatabase(db, { wrote: true });
 
     const reopened = createEngine({ dataDir, workspaceDir });
     await reopened.ready;
@@ -131,7 +132,7 @@ describe("declared write sets", () => {
       .prepare("SELECT COUNT(*) AS count FROM runtime_commit_outbox")
       .get() as unknown as { count: number };
     expect(outbox.count).toBe(0);
-    verify.close();
+    closeCatalogDatabase(verify);
   });
 
   it("declares the complete write set for every public write operation", async () => {

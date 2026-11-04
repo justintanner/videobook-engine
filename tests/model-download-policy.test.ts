@@ -31,7 +31,7 @@ describe("local model download permission", () => {
     env.remoteHost = originalHost;
     server.closeAllConnections();
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
-    await rm(root, { recursive: true, force: true, maxRetries: 3 });
+    await rm(root, { recursive: true, force: true });
   });
 
   it.each([undefined, false])("does not fetch temporal model files with permission %s", async (allowModelDownload) => {

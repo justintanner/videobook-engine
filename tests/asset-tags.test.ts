@@ -6,6 +6,7 @@ import * as path from "node:path";
 import { DatabaseSync } from "@dolthub/doltlite";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { closeCatalogDatabase } from "../src/catalog-close.js";
 import { SCHEMA_VERSION } from "../src/catalog-metadata.js";
 import { createEngine, type Engine } from "../src/engine.js";
 import {
@@ -22,7 +23,7 @@ afterEach(async () => {
   await Promise.all(
     roots
       .splice(0)
-      .map((root) => rm(root, { recursive: true, force: true, maxRetries: 3 })),
+      .map((root) => rm(root, { recursive: true, force: true })),
   );
 });
 
@@ -520,7 +521,7 @@ describe("asset tag persistence", () => {
     expect(db.prepare("SELECT version FROM engine_schema").get()).toEqual({
       version: SCHEMA_VERSION,
     });
-    db.close();
+    closeCatalogDatabase(db);
     reopened.close();
   });
 

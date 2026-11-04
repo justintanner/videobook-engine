@@ -63,7 +63,7 @@ it("measures independent edit preview/commit distributions with mutation and det
     expect(printed.environment.logicalCpus).toBeGreaterThan(0);
     expect(printed.peakRssBytes).toBeGreaterThan(0);
   } finally {
-    await rm(root, { recursive: true, force: true, maxRetries: 3 });
+    await rm(root, { recursive: true, force: true });
   }
 }, 60_000);
 

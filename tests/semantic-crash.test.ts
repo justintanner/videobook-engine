@@ -9,7 +9,7 @@ import { EngineContext } from "../src/context.js";
 
 const roots: string[] = [];
 afterEach(async () => {
-  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true, maxRetries: 3 })));
+  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
 function value<T>(result: { ok: true; value: T } | { ok: false; error: { message: string } }): T {

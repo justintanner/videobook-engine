@@ -19,7 +19,7 @@ const configuration: ModelWorkerConfiguration = {
 };
 afterEach(async () => {
   await Promise.all(pools.splice(0).map((pool) => pool.close()));
-  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true, maxRetries: 3 })));
+  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 function pool(maxWorkers = 2, idleMs = 30_000) {
   const value = new ModelWorkerPool({ workerUrl: new URL("./fixtures/model-worker.mjs", import.meta.url), maxWorkers, idleMs, heapMb: 32 });

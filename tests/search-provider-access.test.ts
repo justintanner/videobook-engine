@@ -48,7 +48,7 @@ describe("application-owned search provider consent", () => {
     for (const engine of engines) engine.close();
     server.closeAllConnections();
     await new Promise<void>((resolve) => server.close(() => resolve()));
-    await rm(root, { recursive: true, force: true, maxRetries: 3 });
+    await rm(root, { recursive: true, force: true });
   });
 
   function engine(similarity?: SimilarityConfig) {

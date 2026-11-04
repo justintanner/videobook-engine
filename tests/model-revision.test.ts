@@ -46,7 +46,7 @@ describe("immutable similarity model revisions", () => {
     env.remoteHost = originalHost;
     server.closeAllConnections();
     await new Promise<void>((resolve) => server.close(() => resolve()));
-    await rm(root, { recursive: true, force: true, maxRetries: 3 });
+    await rm(root, { recursive: true, force: true });
   });
 
   function engine(kind: Kind, selection: Selection = {}, allowModelDownload = false) {

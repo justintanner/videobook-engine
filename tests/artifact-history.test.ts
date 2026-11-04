@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { DatabaseSync } from "@dolthub/doltlite";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { closeCatalogDatabase } from "../src/catalog-close.js";
 import { createEngine, type Engine } from "../src/index.js";
 
 const roots: string[] = [];
@@ -91,7 +92,7 @@ describe("artifact media history", () => {
     reopened.close();
     const db = new DatabaseSync(path.join(root, "data", "videobook.db"));
     expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
-    db.close();
+    closeCatalogDatabase(db);
   });
 
   it("refuses to remove a referenced stream source without partially restoring the artifact", async () => {

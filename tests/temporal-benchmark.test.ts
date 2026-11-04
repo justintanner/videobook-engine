@@ -37,6 +37,6 @@ it("measures bounded indexing and repeated temporal queries on a reusable fixtur
     expect(second.timings["index.commitBatch"]).toBeUndefined();
     expect(second.timings["image.warm"].samples).toBe(2);
   } finally {
-    if (root) await rm(root, { recursive: true, force: true, maxRetries: 3 });
+    if (root) await rm(root, { recursive: true, force: true });
   }
 }, 60_000);

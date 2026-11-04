@@ -112,7 +112,7 @@ describe.runIf(process.env.VIDEOBOOK_RUN_CUSTOM_MODEL_E2E === "1")("real models 
       env.remoteHost = oldHost;
       server.closeAllConnections();
       await new Promise<void>((resolve) => server.close(() => resolve()));
-      await rm(root, { recursive: true, force: true, maxRetries: 3 });
+      await rm(root, { recursive: true, force: true });
     }
   }, 180_000);
 });

@@ -10,7 +10,7 @@ const roots: string[] = [];
 const engines: Engine[] = [];
 afterEach(async () => {
   for (const engine of engines.splice(0)) engine.close();
-  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true, maxRetries: 3 })));
+  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
 async function setup() {

@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { DatabaseSync } from "@dolthub/doltlite";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { closeCatalogDatabase } from "../src/catalog-close.js";
 import { createEngine, type Engine } from "../src/engine.js";
 import type { NotebookCell, NotebookDocument } from "../src/notebook/types.js";
 
@@ -434,6 +435,6 @@ describe("engine.generations", () => {
     expect(completedRow?.output_artifact_id).toBe(output.artifactId);
     const dispatchedRow = rows.find((row) => row.status === "dispatched");
     expect(dispatchedRow?.output_artifact_id).toBeNull();
-    db.close();
+    closeCatalogDatabase(db);
   });
 });

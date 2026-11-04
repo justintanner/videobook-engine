@@ -26,7 +26,7 @@ async function removeRoot(root: string): Promise<void> {
   let lastError: unknown;
   for (let attempt = 0; attempt < 10; attempt += 1) {
     try {
-      await rm(root, { recursive: true, force: true, maxRetries: 1 });
+      await rm(root, { recursive: true, force: true });
       return;
     } catch (error) {
       lastError = error;

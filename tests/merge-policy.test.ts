@@ -6,6 +6,7 @@ import { DatabaseSync } from "@dolthub/doltlite";
 import { v7 as uuidv7 } from "uuid";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { closeCatalogDatabase } from "../src/catalog-close.js";
 import { createEngine, type Engine } from "../src/engine.js";
 import type { EngineError } from "../src/engine-types.js";
 import { MVP_CONTRACT_VERSION, type EditIntent } from "../src/mvp-contracts.js";
@@ -30,7 +31,7 @@ const roots: string[] = [];
 
 afterEach(async () => {
   await Promise.all(
-    roots.splice(0).map((root) => rm(root, { recursive: true, force: true, maxRetries: 3 })),
+    roots.splice(0).map((root) => rm(root, { recursive: true, force: true })),
   );
 });
 
@@ -145,7 +146,7 @@ describe("merge policy preconditions", () => {
         version: number;
       }).version,
     ).toBe(18);
-    db.close();
+    closeCatalogDatabase(db, { wrote: true });
   });
 });
 
@@ -228,7 +229,7 @@ describe("merge policy for RESTRICT foreign keys", () => {
         .get() as { count: number },
     ).toEqual({ count: 0 });
     verifyConstraintHealth(db);
-    db.close();
+    closeCatalogDatabase(db, { wrote: true });
   });
 });
 
@@ -351,7 +352,7 @@ describe("merge policy for derived singleton flags", () => {
     });
     expect(currentTranscripts(db)).toEqual(["t-b"]);
     verifyConstraintHealth(db);
-    db.close();
+    closeCatalogDatabase(db, { wrote: true });
   });
 
   it("reconciles multiple primary sequences to the original primary", async () => {
@@ -408,7 +409,7 @@ describe("merge policy for derived singleton flags", () => {
         .all() as Array<{ sequence_id: string }>,
     ).toEqual([{ sequence_id: primaryId }]);
     verifyConstraintHealth(db);
-    db.close();
+    closeCatalogDatabase(db, { wrote: true });
   });
 });
 
@@ -454,7 +455,7 @@ describe("engine-level merge policy behavior", () => {
       expect(db.prepare("PRAGMA integrity_check").all()).toEqual([{ integrity_check: "ok" }]);
       verifyConstraintHealth(db);
     } finally {
-      db.close();
+      closeCatalogDatabase(db, { wrote: true });
     }
 
     const reopened = createEngine({ dataDir, workspaceDir: path.join(root, "workspace") });
@@ -489,7 +490,7 @@ describe("engine-level merge policy behavior", () => {
       expect(db.prepare("PRAGMA integrity_check").all()).toEqual([{ integrity_check: "ok" }]);
       verifyConstraintHealth(db);
     } finally {
-      db.close();
+      closeCatalogDatabase(db, { wrote: true });
     }
   });
 
@@ -647,7 +648,7 @@ describe("engine-level merge policy behavior", () => {
     db.prepare(
       "SELECT dolt_commit('-m', 'merge fallout: duplicate primary', '--author', 'Test <test@localhost>') AS hash",
     ).get();
-    db.close();
+    closeCatalogDatabase(db, { wrote: true });
 
     const reopened = createEngine({
       dataDir,
@@ -693,7 +694,7 @@ describe("asset tag merges", () => {
       expect(expectFault(() => mergeWithPolicy(db, "auto-b")).code).toBe("MERGE_CONFLICT");
       expect(db.doltLog({ limit: 1 })[0]?.commit_hash).toBe(head);
       expect(db.prepare("SELECT label FROM artifact_tags").all()).toEqual([{ label: "beach" }]);
-    } finally { db.close(); }
+    } finally { closeCatalogDatabase(db, { wrote: true }); }
   });
 
   it.each(["manual", "dismissal"] as const)("refuses a merge exceeding the %s tag limit before changing HEAD", async (kind) => {
@@ -715,7 +716,7 @@ describe("asset tag merges", () => {
       const head = db.doltLog({ limit: 1 })[0]?.commit_hash;
       expect(expectFault(() => mergeWithPolicy(db, "limit-b")).code).toBe("MERGE_VIOLATION");
       expect(db.doltLog({ limit: 1 })[0]?.commit_hash).toBe(head);
-    } finally { db.close(); }
+    } finally { closeCatalogDatabase(db, { wrote: true }); }
   });
 
   it("keeps unrelated manual additions from both forks", async () => {
@@ -755,7 +756,7 @@ describe("asset tag merges", () => {
       ]);
       verifyConstraintHealth(db);
     } finally {
-      db.close();
+      closeCatalogDatabase(db, { wrote: true });
     }
   });
 
@@ -795,7 +796,7 @@ describe("asset tag merges", () => {
       ).toEqual({ label: "HERO" });
       verifyConstraintHealth(db);
     } finally {
-      db.close();
+      closeCatalogDatabase(db, { wrote: true });
     }
   });
 
@@ -831,7 +832,7 @@ describe("asset tag merges", () => {
       expect(db.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
       verifyConstraintHealth(db);
     } finally {
-      db.close();
+      closeCatalogDatabase(db, { wrote: true });
     }
   });
 });

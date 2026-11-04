@@ -18,7 +18,7 @@ afterEach(async () => {
   await Promise.all(
     roots
       .splice(0)
-      .map((root) => rm(root, { recursive: true, force: true, maxRetries: 3 })),
+      .map((root) => rm(root, { recursive: true, force: true })),
   );
 });
 

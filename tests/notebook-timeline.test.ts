@@ -3,12 +3,13 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "@dolthub/doltlite";
 import { afterEach, expect, it } from "vitest";
+import { closeCatalogDatabase } from "../src/catalog-close.js";
 import { createEngine, firstEmptyNotebookGridRow, notebookOccupiedSlots } from "../src/index.js";
 import { CELLS_TABLE_DEFINITION } from "../src/schema.js";
 
 const roots: string[] = [];
 afterEach(async () => {
-  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true, maxRetries: 3 })));
+  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true })));
 });
 
 function value<T>(result: { ok: true; value: T } | { ok: false; error: { message: string } }): T {
@@ -71,7 +72,7 @@ it("upgrades an actual schema-25 cells constraint without losing cells, edges or
   db.exec("UPDATE engine_schema SET version=25 WHERE singleton=1");
   for (const table of ["cells", "engine_schema"]) db.prepare("SELECT dolt_add(?)").get(table);
   db.prepare("SELECT dolt_commit('-m', 'legacy schema 25', '--author', 'Test <test@example.test>')").get();
-  db.close();
+  closeCatalogDatabase(db, { wrote: true });
   const upgraded = createEngine({ rootDir: root });
   await upgraded.ready;
   expect(value(upgraded.notebooks.read(notebook.id))).toMatchObject({ cells: [a, b], edges: [edge] });

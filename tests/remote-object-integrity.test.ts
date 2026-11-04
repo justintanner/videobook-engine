@@ -54,7 +54,7 @@ async function fixture() {
     server.closeAllConnections();
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
     engine.close();
-    await rm(root, { recursive: true, force: true, maxRetries: 3 });
+    await rm(root, { recursive: true, force: true });
   });
   await engine.ready;
   const artifact = value(await engine.artifacts.create("video", "original label"));

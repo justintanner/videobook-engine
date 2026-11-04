@@ -6,6 +6,7 @@ import { DatabaseSync } from "@dolthub/doltlite";
 import { v7 as uuidv7 } from "uuid";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { closeCatalogDatabase } from "../src/catalog-close.js";
 import {
   computeArtifactStatus,
   createEngine,
@@ -16,7 +17,7 @@ const roots: string[] = [];
 
 afterEach(async () => {
   await Promise.all(
-    roots.splice(0).map((root) => rm(root, { recursive: true, force: true, maxRetries: 3 })),
+    roots.splice(0).map((root) => rm(root, { recursive: true, force: true })),
   );
 });
 
@@ -781,7 +782,7 @@ describe("relocated job queue, pending, failures, locks, and recovery", () => {
     catalog.prepare("DELETE FROM runtime_artifact_views WHERE artifact_id=?").run(
       artifactId,
     );
-    catalog.close();
+    closeCatalogDatabase(catalog, { wrote: true });
 
     const reopened = createEngine({ rootDir: root });
     await reopened.ready;

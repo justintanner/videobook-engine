@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { DatabaseSync } from "@dolthub/doltlite";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { closeCatalogDatabase } from "../src/catalog-close.js";
 import {
   CELLS_TABLE_COLUMNS,
   firstEmptyNotebookGridSlot,
@@ -35,7 +36,7 @@ afterEach(async () => {
   await Promise.all(
     roots
       .splice(0)
-      .map((root) => rm(root, { recursive: true, force: true, maxRetries: 3 })),
+      .map((root) => rm(root, { recursive: true, force: true })),
   );
 });
 
@@ -197,7 +198,7 @@ describe("fixed notebook grid schema 24", () => {
         notnull: number;
       }>
     ).map(({ name, notnull }) => ({ name, notnull }));
-    scratch.close();
+    closeCatalogDatabase(scratch, { wrote: true });
 
     expect(liveColumns).toEqual(pinnedColumns);
     expect(pinnedColumns.map((column) => column.name)).toEqual([
@@ -401,7 +402,7 @@ describe("fixed notebook grid schema 24", () => {
         )
         .run(notebook.id),
     ).toThrow();
-    database.close();
+    closeCatalogDatabase(database, { wrote: true });
   });
 
   it("aliases stored extract_frame rows to image on read and rejects new writes", async () => {
@@ -436,7 +437,7 @@ describe("fixed notebook grid schema 24", () => {
     database
       .prepare("SELECT dolt_commit('-m', ?, '--author', ?) AS hash")
       .get("seed legacy extract_frame row", "grid-v13 test <test@videobook>");
-    database.close();
+    closeCatalogDatabase(database, { wrote: true });
 
     const reopened = createEngine({ rootDir: root });
     await reopened.ready;
@@ -608,7 +609,7 @@ describe("fixed notebook grid schema 24", () => {
         database.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get(),
       ).toEqual({ count: 0 });
     }
-    database.close();
+    closeCatalogDatabase(database);
   });
 
   it.each([11, 12, 18, 19, 20, 21])(
@@ -622,7 +623,7 @@ describe("fixed notebook grid schema 24", () => {
       database
         .prepare("UPDATE engine_schema SET version=? WHERE singleton=1")
         .run(version);
-      database.close();
+      closeCatalogDatabase(database, { wrote: true });
 
       expect(() => createEngine({ rootDir: root })).toThrow(
         `Database schema ${version} is not supported by engine schema 28`,
@@ -815,7 +816,7 @@ describe("fixed notebook grid schema 24", () => {
     database
       .prepare("UPDATE engine_schema SET version=10 WHERE singleton=1")
       .run();
-    database.close();
+    closeCatalogDatabase(database, { wrote: true });
 
     expect(() => createEngine({ rootDir: root })).toThrow(
       "Database schema 10 is not supported by engine schema 28",
