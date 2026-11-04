@@ -53,3 +53,34 @@ and consumer archive switching have separate process-interruption fixtures.
 The optional `semanticCommitBoundary` callback is a diagnostic fault-injection
 hook; normal consumers should omit it. `after-table-stage` may occur several
 times for one operation, and recovery can invoke callbacks during engine open.
+
+## One owning process
+
+A catalog needs one owning process while it writes. A semantic write commits in
+two steps, and an outbox entry does not record who owns it, so reopening cannot
+tell a crashed writer from a live one between those steps. A second process that
+opens the catalog replays the live writer's entry, and the two race for the Dolt
+commit.
+
+With one process writing in a loop and another opening the catalog:
+
+- The open often throws. About four in five opens threw when they overlapped a
+  stream of commits, and about one in six when both processes started together.
+- The owner's write can return `IO_ERROR` with `nothing to commit, working tree
+  clean` or `cannot commit: database is busy or branch HEAD changed`, even though
+  the write committed. A second process that commits while the writer is between
+  staging and its own Dolt commit causes this every time. Every write reported as
+  failed was present afterwards with one commit of its own, so retrying one
+  creates a duplicate.
+- Nothing is lost. After every run the worktree was clean, the outbox was empty,
+  each row had exactly one commit and a plain open succeeded.
+
+Engine 5.7.1 behaves the same way. The rates depend on timing, so treat them as
+indicative.
+
+Consumers must keep a second process away from a catalog that is being written.
+Videobook does this with a per-library server lock, taken before any catalog
+opens. Its other commands relay to the lock holder, refuse to run, or do not open
+a catalog. Sharing a catalog between live processes would need outbox entries that
+record their owner, and a commit step that treats an operation someone else
+already committed as a success.
