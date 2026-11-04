@@ -760,6 +760,26 @@ const RUNTIME_SIMILARITY_SCHEMA_SQL = `
     ON runtime_similarity_embeddings(object_hash, embedding_space);
 `;
 
+// Added to runtime_usage after engine 5.7.1. Runtime tables are never versioned,
+// so every catalog gains these in place at open, with no schema-version bump and
+// no Dolt commit. The indexes need the columns, so they cannot join the script below.
+export const RUNTIME_USAGE_ROLLUP_COLUMNS = [
+  ["estimate_nanos", "BIGINT"],
+  ["actual_basis", "TEXT"],
+  ["run_id", "TEXT"],
+  ["cell_id", "TEXT"],
+  ["job_id", "TEXT"],
+] as const;
+
+export const RUNTIME_USAGE_ROLLUP_INDEX_SQL = `
+  CREATE INDEX IF NOT EXISTS runtime_usage_run
+    ON runtime_usage(run_id);
+  CREATE INDEX IF NOT EXISTS runtime_usage_cell
+    ON runtime_usage(cell_id);
+  CREATE INDEX IF NOT EXISTS runtime_usage_job
+    ON runtime_usage(job_id);
+`;
+
 export const RUNTIME_SCHEMA_SQL = `
   CREATE TABLE IF NOT EXISTS runtime_usage (
     id TEXT PRIMARY KEY,

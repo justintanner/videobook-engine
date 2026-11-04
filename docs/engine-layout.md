@@ -467,6 +467,7 @@ never be staged. They coordinate work or cache derivable data.
 | `runtime_generation_errors` | `artifact_id TEXT`<br>`message TEXT`<br>`fail_code TEXT?`<br>`prompt TEXT?`<br>`failed_at INTEGER` | `artifact_id PK`. Latest local generation failure per artifact. |
 | `runtime_settings` | `key TEXT`<br>`value_json TEXT`<br>`updated_at INTEGER` | `key PK`. Local preferences such as viewer orientation. |
 | `runtime_logs` | `id INTEGER AUTOINCREMENT`<br>`name TEXT`<br>`body_json TEXT`<br>`created_at INTEGER` | `id PK`. Structured local logs. |
+| `runtime_usage` | `id TEXT`<br>`provider TEXT`<br>`external_id TEXT?`<br>`activity TEXT`<br>`model TEXT`<br>`status TEXT`<br>`basis TEXT`<br>`input_tokens BIGINT?`<br>`output_tokens BIGINT?`<br>`cached_tokens BIGINT?`<br>`token_based INTEGER`<br>`cost_nanos BIGINT?`<br>`body_json TEXT`<br>`created_at BIGINT`<br>`updated_at BIGINT`<br>`estimate_nanos BIGINT?`<br>`actual_basis TEXT?`<br>`run_id TEXT?`<br>`cell_id TEXT?`<br>`job_id TEXT?` | `id PK`; `(provider, external_id) UQ`. One row per provider call; see [Usage ledger](#usage-ledger). |
 | `runtime_commit_outbox` | `operation_id TEXT`<br>`tables_json TEXT`<br>`message TEXT`<br>`created_at INTEGER` | `operation_id PK`. Crash-recovery bridge between a committed SQL mutation and its Dolt commit. |
 
 ### Similarity and search caches
@@ -489,6 +490,11 @@ never be staged. They coordinate work or cache derivable data.
 | `runtime_resource_artifact` | `runtime_resource_leases(artifact_id, revoked_at)` |
 | `runtime_pending_external` | `UNIQUE runtime_pending_tasks(task_id)` |
 | `runtime_logs_lookup` | `runtime_logs(name, created_at)` |
+| `runtime_usage_external` | `UNIQUE runtime_usage(provider, external_id)` |
+| `runtime_usage_recent` | `runtime_usage(created_at, id)` |
+| `runtime_usage_run` | `runtime_usage(run_id)` |
+| `runtime_usage_cell` | `runtime_usage(cell_id)` |
+| `runtime_usage_job` | `runtime_usage(job_id)` |
 | `runtime_similarity_kind` | `runtime_similarity_embeddings(kind, embedding_space, updated_at)` |
 | `runtime_similarity_object` | `runtime_similarity_embeddings(object_hash, embedding_space)` |
 | `runtime_text_similarity_lookup` | `runtime_text_similarity_documents(embedding_space, updated_at)` |
@@ -496,6 +502,65 @@ never be staged. They coordinate work or cache derivable data.
 | `runtime_text_similarity_content` | `runtime_text_similarity_documents(content_hash, embedding_space)` |
 | `runtime_text_similarity_chunk_lookup` | `runtime_text_similarity_chunks(embedding_space, document_id, chunk_index)` |
 | `runtime_text_similarity_chunk_document` | `runtime_text_similarity_chunks(document_id, chunk_index)` |
+
+### Usage ledger
+
+`engine.usage` keeps one row per provider call. `body_json` holds the whole
+entry; the other columns exist to look rows up and sum them. The engine stores
+figures and holds no rates: every price comes from the caller, through
+`@apicity/cost`.
+
+A row keeps its estimate and its actual side by side.
+
+| Fields | Meaning | When a later `record()` patches the row |
+| --- | --- | --- |
+| `estimateUsd`, `estimateSource`, `estimateRateAsOf` | The quote before the call | The first estimate stays, with its source and date. Zero counts as set. |
+| `costUsd`, `basis`, `rateSource`, `actualBasis`, `listUsd` | What the call cost and how that is known: `CostActual.basis` and `statedListUsd` | These move together when a figure is replaced. A stated figure beats a derived one, which beats anything else, so a weaker patch leaves all five alone. An equal or stronger figure replaces them, so a newer `reported` cost replaces an older one. |
+| `cacheWriteTokens` | Tokens written to a provider cache | The latest non-null value wins. The engine does not check it against `inputTokens`. |
+| `notebookId`, `cellId`, `jobId`, `runId` | Who made the call | The first value stays. A patch can fill a null, but cannot move or clear it. |
+
+A null or undefined in a patch means "nothing new" for all of these. A patch that
+spreads a row it read earlier is held to the same rules, so a stale snapshot cannot
+put a quote back over a stated or derived cost. A `stated` or `derived` label with
+no cost behind it is stored as null. When a write with an external ID merges two
+rows, the merged row keeps the estimate, attribution and stronger actual of the row
+it absorbs.
+
+`cellId`, `runId` and `jobId` are caller-chosen strings that mean something only
+within one book. The queue's numeric job ID restarts in each book, so use
+`operationId`, and clear attribution when copying a row into another book.
+
+`engine.usage.rollup(filter?)` sums rows for a run, a cell, a job, any
+combination, or the whole book. `totals` uses the rules of `UsageTotals`, and
+`runs`, `cells` and `jobs` break the same rows down by non-null ID, so a call with
+no cell counts toward the book only. It adds:
+
+| Field | Sum |
+| --- | --- |
+| `actualUsd` | Known actual: `reported` costs, and `estimated` costs labelled `stated` or `derived`. Pending rows are excluded. |
+| `estimateUsd` | The quoted `estimateUsd` of every row. |
+| `settledEstimateUsd` | The quotes of the rows behind `actualUsd`, plus free rows. Compare this with `actualUsd`. |
+| `pendingEstimateUsd` | The quoted `estimateUsd` of pending rows. |
+| `unsettled` | Rows with no settled actual: pending, uncertain, unpriced, or holding only a quote. A total is partial while this is above zero. |
+| `unestimated` | Rows with no quote. An estimate total understates while this is above zero. |
+
+A row that completes with only its quote in `costUsd` is not an actual. `estimatedUsd`
+still counts it, as it always has, but `actualUsd` does not, and it stays in
+`unsettled` until a stated or derived figure arrives. A row with no `actualBasis` on the
+`estimated` basis counts as actual only with token counts, because older rows have
+no label and only usage can have put tokens behind a figure.
+
+`estimatedUsd` keeps its `UsageTotals` meaning, a cost on the `estimated` basis, so
+`reportedUsd + estimatedUsd` stays the charge total everywhere. The quote total is
+`estimateUsd`, with no `d`. `pendingUsd` and `pendingEstimateUsd` can describe the
+same quote when a pending row holds it in both `costUsd` and `estimateUsd`, so do
+not add them. A filter key that is present must hold a valid ID:
+`{ runId: undefined }` throws, rather than widening to the whole book.
+
+The added columns reach every catalog at open by `ALTER TABLE`, without a schema
+version bump or a Dolt commit, because runtime tables are never versioned. Rows
+written before them keep their stored bytes and read back with nulls. Engine 5.7.1
+can still open an upgraded catalog and leaves the added columns as they are.
 
 ## Revision and recovery structures
 

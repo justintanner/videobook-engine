@@ -209,4 +209,15 @@ export {
   type CellTableValue,
 } from "./catalog-metadata.js";
 export { isDestructiveEditOperation } from "./edit-policy.js";
-export type { UsageEntry, UsageInput, UsageTotals, UsageGroup, UsageSummary } from "./usage.js";
+export type {
+  UsageActualBasis,
+  UsageEntry,
+  UsageGroup,
+  UsageInput,
+  UsageRollup,
+  UsageRollupFilter,
+  UsageRollupGroup,
+  UsageRollupTotals,
+  UsageSummary,
+  UsageTotals,
+} from "./usage.js";

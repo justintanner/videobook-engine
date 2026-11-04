@@ -33,6 +33,8 @@ import { applyV23NotebookGridMigration } from "./migrate-grid-v23.js";
 import {
   RUNTIME_SCHEMA_SQL,
   RUNTIME_TABLES,
+  RUNTIME_USAGE_ROLLUP_COLUMNS,
+  RUNTIME_USAGE_ROLLUP_INDEX_SQL,
   SCHEMA_VERSION,
   SEMANTIC_SCHEMA_SQL,
   SEMANTIC_TABLES,
@@ -454,7 +456,7 @@ export class DoltStore {
       // version. Recover its declared structural write set before deciding
       // which migrations remain, just as for ordinary semantic writes.
       this.ensureIgnorePatterns();
-      this.db.exec(RUNTIME_SCHEMA_SQL);
+      this.applyRuntimeSchema();
       this.assertRuntimeUnstaged();
       this.recoverOutbox();
       row = this.schemaRow();
@@ -513,7 +515,7 @@ export class DoltStore {
       this.ensureIgnorePatterns();
     }
 
-    this.db.exec(RUNTIME_SCHEMA_SQL);
+    this.applyRuntimeSchema();
     const runtimeSchema = this.db.prepare("SELECT value_json FROM runtime_meta WHERE key='schema_version'")
       .get() as { value_json: string } | undefined;
     if (runtimeSchema?.value_json !== String(SCHEMA_VERSION)) {
@@ -531,6 +533,29 @@ export class DoltStore {
     this.assertRuntimeUnstaged();
     this.recoverOutbox();
     this.verifyCleanSemanticWorktree();
+  }
+
+  private applyRuntimeSchema(): void {
+    this.db.exec(RUNTIME_SCHEMA_SQL);
+    const missing = () => {
+      const present = new Set(
+        (
+          this.db.prepare("PRAGMA table_info(runtime_usage)").all() as unknown as Array<{
+            name: string;
+          }>
+        ).map((column) => column.name),
+      );
+      return RUNTIME_USAGE_ROLLUP_COLUMNS.filter(([name]) => !present.has(name));
+    };
+    if (missing().length > 0) {
+      // Recheck under the writer lock: another process may be opening this catalog.
+      this.runtime(() => {
+        for (const [name, type] of missing()) {
+          this.db.exec(`ALTER TABLE runtime_usage ADD COLUMN ${name} ${type}`);
+        }
+      });
+    }
+    this.db.exec(RUNTIME_USAGE_ROLLUP_INDEX_SQL);
   }
 
   private schemaRow(): SchemaRow {
