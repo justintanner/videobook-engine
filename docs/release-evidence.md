@@ -42,6 +42,29 @@ Three local checks did not pass in the full run on the shared worker, at a load 
   of 1,000 ms, as it did on the shared worker for 5.8.0. This run did not repeat that
   baseline comparison.
 
+### Publication
+
+[`videobook-engine@5.8.1`](https://www.npmjs.com/package/videobook-engine/v/5.8.1)
+is published as npm `latest` from source
+`a7a1fad809b8dc859733962e939e04e2a6f2f453`, tagged `v5.8.1`.
+[Node 22/24 CI](https://github.com/justintanner/videobook-engine/actions/runs/41819713120)
+passes for that exact source, including the three checks above.
+
+The registry archive is byte-identical to the tested package: 2,583,147 bytes,
+SHA256 `88632cee60a1b9b3ed648d58d4e69d40ead64f61a8e8874c2aa279181d652992`, npm
+integrity
+`sha512-v+dfQ9meZiwY4avVYTHv8To2+laY6H/kA0dez2VvagxOUayOZj7JptaufZE2QM/FVxGhbC+4KvirbNYSTNEPNA==`.
+Against the registry 5.8.0 archive it differs only in `dist/usage.js`, the source
+maps for that file and for `dist/usage.d.ts`, three docs and the `package.json`
+version.
+
+A clean public registry install with no token in the environment passes ZIP
+security, browser exports, tags and reopen, remote checksums, README usage, the
+full-catalog, runtime, index and job-ID probes, media decode and a
+zero-vulnerability runtime audit. On that install, the stray-row sequence above
+leaves one row. This check does not run the optional cached CLIP/CLAP inference
+tests.
+
 ## November 4 usage estimates and rollups (5.8.0)
 
 Engine 5.8.0 adds the quote, actual-basis and attribution fields to `UsageEntry`
