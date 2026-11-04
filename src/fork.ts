@@ -10,6 +10,7 @@ import type {
   ContentStore,
   EngineIdentity,
 } from "./engine-types.js";
+import { closeCatalogDatabase } from "./catalog-close.js";
 import { ObjectStore } from "./cas.js";
 import { createEngine, type Engine } from "./engine.js";
 import {
@@ -168,10 +169,10 @@ export async function bootstrapFork(
       // Older commits can retain invalid index roots even after upgrading
       // DoltLite. Validate before handing the catalog to the engine.
       db.prepare("SELECT COUNT(*) AS count FROM sqlite_master").get();
-      db.close();
+      closeCatalogDatabase(db);
     } catch (error) {
       try {
-        db.close();
+        closeCatalogDatabase(db);
       } catch {
         // The clone is already unusable; ignore close errors.
       }
@@ -355,7 +356,7 @@ async function mergeBackIn(
       reconciledSequences: reconciled.sequences,
     };
   } finally {
-    db.close();
+    closeCatalogDatabase(db, { wrote: true });
   }
 }
 

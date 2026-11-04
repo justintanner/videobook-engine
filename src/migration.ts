@@ -7,6 +7,7 @@ import { setImmediate as yieldTurn } from "node:timers/promises";
 import { DatabaseSync } from "@dolthub/doltlite";
 import { v7 as uuidv7 } from "uuid";
 
+import { closeCatalogDatabase } from "./catalog-close.js";
 import { ObjectStore } from "./cas.js";
 import { createEngine } from "./engine.js";
 import { initialOrderKeys } from "./order-keys.js";
@@ -266,7 +267,7 @@ export async function migrateV4(
       sourceRender(sourceDatabase, book.book_id),
     );
     stageMigration(destinationDatabase);
-    destinationDatabase.close();
+    closeCatalogDatabase(destinationDatabase, { wrote: true });
     destinationDatabase = undefined;
     const objectCounts = await copyObjects(
       sourceDatabase,
@@ -365,7 +366,7 @@ export async function migrateV4(
     return err(migrationError(cause));
   } finally {
     sourceSnapshot?.close();
-    destinationDatabase?.close();
+    if (destinationDatabase) closeCatalogDatabase(destinationDatabase, { wrote: true });
     engine?.close();
     if (destinationRoot) await rm(destinationRoot, { recursive: true, force: true, maxRetries: 3 });
   }

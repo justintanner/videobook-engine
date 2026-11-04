@@ -6,6 +6,7 @@ import { DatabaseSync } from "@dolthub/doltlite";
 import { v7 as uuidv7 } from "uuid";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { closeCatalogDatabase } from "../src/catalog-close.js";
 import {
   createEngine,
   MVP_CONTRACT_VERSION,
@@ -182,7 +183,7 @@ describe("sequence track lifecycle", () => {
     db.prepare(
       "SELECT dolt_commit('-m', 'simulate merged duplicate keys') AS hash",
     ).get();
-    db.close();
+    closeCatalogDatabase(db, { wrote: true });
 
     // Moving the last track between the duplicates self-repairs the keys
     // instead of failing with "Order keys out of order".

@@ -654,6 +654,39 @@ the engine deliberately does not implement it.
   malformed, mismatched records and nonempty WAL/journal files preserve the
   size-triggered GC fallback. Runtime schema metadata is only rewritten when
   its version changes, avoiding a write on every read-only open.
+- Opening a cleanly closed catalog of the current version and closing it without
+  writing leaves it byte-identical, so the compaction record survives and close
+  does not compact. Open must therefore read before it writes: on a compacted
+  catalog an insert of no rows or an empty `BEGIN IMMEDIATE` still commits,
+  appending a bare root.
+- `close()` can return before the native close happens. The wrapper's
+  `close()` is `sqlite3_close_v2`, and it cannot finalize a `StatementSync`; only
+  the garbage-collection destructor does, on a native immediate after a
+  collection. Until then the connection stays open, and its real close would
+  write a clean-close marker under the `.videobook.db-lock` sidecar, creating the
+  sidecar if it is gone and appending to the catalog file. Deleting a catalog
+  right after close could then fail with `ENOTEMPTY` or leave the sidecar behind.
+  `closeCatalogDatabase` prevents that for every writable connection the engine
+  opens. A peer connection with no statements closes for real and writes the
+  marker, and a read on the closing connection adopts it, so the deferred close
+  has nothing to write. No GC or timing is involved.
+  - A last commit that added no chunks needs one more step. The store is
+    content-addressed, so a commit that returns to chunks it already holds, such
+    as a row inserted and then deleted or an insert of no rows on a compacted
+    catalog, appends a bare root. A peer reads that as a marker already written
+    and appends nothing, while the connection still owes one for its own commit.
+    If the connection committed and the peer appended nothing, it writes a
+    `clean_close` row to the ignored `runtime_meta` table, which gives the peer a
+    commit to mark. A session that committed nothing does not write.
+  - The deferred close still happens, so the connection's file descriptors and
+    memory stay held until collection. This is harmless for removal on Linux and
+    macOS. Windows can refuse to delete a file with an open handle; the engine's
+    CI does not run on Windows, so that case is untested.
+  - A connection opened read-only never writes a marker and needs none of this.
+  - `tests/catalog-close.test.ts` holds a statement across close, empties the
+    directory, forces a collection and asserts nothing comes back. Its first test
+    pins the native behaviour: if it stops holding after a DoltLite change,
+    `closeCatalogDatabase` may no longer be needed.
 - Run `deleteObject` and `gc` only while no imports are in flight; CAS puts
   happen outside the serialized write chain, so a concurrent import could
   race the sweep.

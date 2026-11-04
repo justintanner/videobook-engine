@@ -203,9 +203,13 @@ function toRollupTotals<T extends RollupRow>({ reportedNanos, estimatedNanos, pe
 }
 
 export function createUsageApi(context: EngineContext) {
-  context.store.runtime((now) => {
-    context.store.db.prepare("INSERT INTO runtime_meta(key, value_json, updated_at) VALUES ('usage_started_at', ?, ?) ON CONFLICT(key) DO NOTHING").run(String(now), now);
-  });
+  // Read first: every engine constructs this, and a runtime transaction commits
+  // even when its insert changes nothing, which would make each open a write.
+  if (!context.store.db.prepare("SELECT 1 AS present FROM runtime_meta WHERE key='usage_started_at'").get()) {
+    context.store.runtime((now) => {
+      context.store.db.prepare("INSERT INTO runtime_meta(key, value_json, updated_at) VALUES ('usage_started_at', ?, ?) ON CONFLICT(key) DO NOTHING").run(String(now), now);
+    });
+  }
 
   const decode = (row: StoredRow | undefined): UsageEntry | null => {
     const entry = row ? parseJson<UsageEntry | null>(row.body_json, null) : null;

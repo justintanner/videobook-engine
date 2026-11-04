@@ -6,6 +6,7 @@ import { DatabaseSync } from "@dolthub/doltlite";
 import { v7 as uuidv7 } from "uuid";
 import { afterEach, describe, expect, it } from "vitest";
 
+import { closeCatalogDatabase } from "../src/catalog-close.js";
 import { EngineContext } from "../src/context.js";
 import { createEngine } from "../src/engine.js";
 import { createNotebooksApi } from "../src/domain.js";
@@ -61,7 +62,7 @@ describe("commit hygiene", () => {
     // Drop the audit row so the next open must reconcile the terminal job.
     const db = new DatabaseSync(path.join(dataDir, "videobook.db"));
     db.prepare("DELETE FROM job_runs").run();
-    db.close();
+    closeCatalogDatabase(db, { wrote: true });
 
     const reopened = createEngine({
       dataDir,

@@ -22,6 +22,7 @@ import type {
   SemanticCommitBoundary,
 } from "./engine-types.js";
 import { DEFAULT_CATALOG_GC_BYTES_THRESHOLD } from "./engine-types.js";
+import { closeCatalogDatabase } from "./catalog-close.js";
 import { forgetCatalogCompaction, isCatalogCompacted, rememberCatalogCompaction } from "./catalog-gc-state.js";
 import { initialOrderKeys } from "./order-keys.js";
 import { applyV22NotebookGridMigration } from "./migrate-grid-v22.js";
@@ -106,6 +107,8 @@ export class DoltStore {
   private semanticChangeCount = 0;
   private pendingSemanticCommit = false;
   private catalogCompacted = false;
+  // Catalog size when this connection last owed no clean-close marker.
+  private markedCatalogSize = 0;
   lastCatalogGc: CatalogGcReport | undefined;
 
   constructor(input: {
@@ -141,6 +144,7 @@ export class DoltStore {
     const existed = existsSync(this.databasePath);
     this.catalogCompacted = existed && isCatalogCompacted(this.databasePath);
     this.db = new DatabaseSync(this.databasePath);
+    this.markedCatalogSize = this.catalogSize();
     // GC before configureConnection/initialize prepare any statement so
     // workingDiffProbes never holds a pre-GC StatementSync.
     try {
@@ -151,7 +155,7 @@ export class DoltStore {
     } catch (error) {
       // Initialization can fail after a durable SQL commit but before its
       // Dolt commit. Release the connection so a subsequent open can recover.
-      this.db.close();
+      closeCatalogDatabase(this.db);
       throw error;
     }
   }
@@ -176,8 +180,19 @@ export class DoltStore {
         // Best-effort: the handle must still drop even if GC fails.
       }
     }
-    this.db.close();
+    this.workingDiffProbes.clear();
+    closeCatalogDatabase(this.db, {
+      wrote: this.catalogSize() !== this.markedCatalogSize,
+    });
     if (this.catalogCompacted) rememberCatalogCompaction(this.databasePath);
+  }
+
+  private catalogSize(): number {
+    try {
+      return statSync(this.databasePath).size;
+    } catch {
+      return -1;
+    }
   }
 
   async semantic<T>(
@@ -310,6 +325,9 @@ export class DoltStore {
       // the catalog file from dolt_gc itself.
     }
     const bytesAfter = statSync(this.databasePath).size;
+    // GC that rewrote the file left no log to mark; one that removed nothing
+    // changed nothing, so whatever this connection owed it still owes.
+    if (bytesAfter !== bytesBefore) this.markedCatalogSize = bytesAfter;
     const parsed = parseDoltGcSummary(summary);
     const report: CatalogGcReport = {
       trigger,
@@ -380,7 +398,7 @@ export class DoltStore {
     if (existed && !schemaExists) {
       const userTables = this.userTables();
       if (userTables.length > 0) {
-        this.db.close();
+        closeCatalogDatabase(this.db);
         throw new EngineFault({
           code: "SCHEMA_INCOMPATIBLE",
           message:
@@ -392,7 +410,7 @@ export class DoltStore {
 
     if (!schemaExists) {
       if (!initialBook) {
-        this.db.close();
+        closeCatalogDatabase(this.db);
         throw new EngineFault({
           code: "INVALID_INPUT",
           message:
@@ -432,7 +450,7 @@ export class DoltStore {
         .prepare("SELECT version FROM engine_schema WHERE singleton = 1")
         .get() as unknown as SchemaRow | undefined;
       if (!row) {
-        this.db.close();
+        closeCatalogDatabase(this.db);
         throw new EngineFault({
           code: "SCHEMA_INCOMPATIBLE",
           message:
@@ -489,7 +507,7 @@ export class DoltStore {
         row = this.schemaRow();
       }
       if (row.version !== SCHEMA_VERSION) {
-        this.db.close();
+        closeCatalogDatabase(this.db);
         throw new EngineFault({
           code: "SCHEMA_INCOMPATIBLE",
           message: `Database schema ${row.version} is not supported by engine schema ${SCHEMA_VERSION}`,
@@ -499,14 +517,14 @@ export class DoltStore {
         .prepare("SELECT book_id FROM book")
         .all() as unknown as Array<{ book_id: string }>;
       if (books.length !== 1) {
-        this.db.close();
+        closeCatalogDatabase(this.db);
         throw new EngineFault({
           code: "SCHEMA_INCOMPATIBLE",
           message: `Book catalog must contain exactly one book record; found ${books.length}`,
         });
       }
       if (this.db.doltActiveBranch() !== "main") {
-        this.db.close();
+        closeCatalogDatabase(this.db);
         throw new EngineFault({
           code: "SCHEMA_INCOMPATIBLE",
           message: "Videobook only supports the main branch",
@@ -631,6 +649,11 @@ export class DoltStore {
   }
 
   private ensureIgnorePatterns(): void {
+    // Read first: an insert of no rows still commits, which appends a root to a
+    // compacted catalog on what should be a read-only open.
+    const present = this.db.prepare(
+      "SELECT 1 AS present FROM dolt_ignore WHERE pattern = ?",
+    );
     const insert = this.db.prepare(
       `INSERT INTO dolt_ignore(pattern, ignored)
        SELECT ?, 1
@@ -638,7 +661,9 @@ export class DoltStore {
          SELECT 1 FROM dolt_ignore WHERE pattern = ?
        )`,
     );
-    for (const pattern of IGNORE_PATTERNS) insert.run(pattern, pattern);
+    for (const pattern of IGNORE_PATTERNS) {
+      if (!present.get(pattern)) insert.run(pattern, pattern);
+    }
   }
 
   private configureRemote(remote: CatalogBackupConfig): void {
@@ -865,7 +890,7 @@ export class DoltStore {
     }
     if (dirty.length > 0) {
       if (this.recoverDeletedArtifactTags(dirty)) return;
-      this.db.close();
+      closeCatalogDatabase(this.db);
       throw new EngineFault({
         code: "STORAGE_ERROR",
         message:

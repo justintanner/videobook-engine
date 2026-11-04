@@ -84,3 +84,19 @@ opens. Its other commands relay to the lock holder, refuse to run, or do not ope
 a catalog. Sharing a catalog between live processes would need outbox entries that
 record their owner, and a commit step that treats an operation someone else
 already committed as a success.
+
+## Closing a catalog
+
+`engine.close()` writes the catalog's clean-close marker before it returns, through
+a second connection in the same process. The catalog file and its `-lock` sidecar
+do not change after that, even though the native connection can stay open until
+the garbage collector finalizes its statements. A process killed before the marker
+is written loses nothing: the marker is optional, and the next open replays the
+tail as usual.
+
+Close can add one row. A connection whose last commit added no chunks writes
+`clean_close` to the ignored `runtime_meta` table, so that the marker has a commit
+to follow. This creates no Dolt revision and changes no semantic state. Opening a
+cleanly closed catalog of the current version and closing it without writing
+changes nothing at all.
+`docs/engine-layout.md` has the mechanism, and `tests/catalog-close.test.ts` pins it.

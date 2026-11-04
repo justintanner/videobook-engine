@@ -109,6 +109,8 @@ Core modules are flat and single-purpose:
 
 - `schema.ts` — semantic/runtime schema and stage allowlists
 - `store.ts` — SQL transactions, Dolt staging/commit, outbox recovery, push
+- `catalog-close.ts` — closes a writable connection so a statement finalized
+  later cannot write into its directory; use it for every writable connection
 - `books.ts` and `artifacts.ts` — singleton book and artifact lifecycle rules
 - `cas.ts`, `files.ts`, `media.ts` — objects, mappings, materialization
 - `domain.ts`, `metadata.ts`, `communications.ts` — normalized semantic data
