@@ -9,6 +9,39 @@ This is an assessment of the requirements in
 Beads contains the work assignments and current status; this report records
 the evidence and its limits at these revisions.
 
+## November 4 usage row fix (5.8.1)
+
+Engine 5.8.1 fixes a usage bug that left one provider task with two rows. A pending
+write whose external ID already belonged to a settled row returned early, so its own
+row stayed, and rollups showed an extra count and an unsettled row. It only happens
+if a resubmit returns an existing task ID. The settled row now absorbs that row. See
+the [usage ledger](engine-layout.md#usage-ledger).
+
+The fix stops new stray rows but does not remove existing ones. In a run where the
+registry 5.8.0 package wrote the stray row and this build opened that catalog, the
+row turned `uncertain` at open and stayed through a reopen, so the rollup kept count
+2, `unsettled` 1 and `unpriced` 1. It went away only when the same resubmit arrived
+again. The same sequence on a catalog this build wrote from the start leaves one row.
+
+The release also documents that a catalog needs
+[one owning process](semantic-durability.md#one-owning-process) while it writes. That
+change is documentation only. The public API and schema 28 are unchanged.
+
+Base commit `1344761` passes
+[Node 22/24 CI](https://github.com/justintanner/videobook-engine/actions/runs/41794838246).
+Locally on Node 24, typecheck, lint and build pass, and the functional suite passes
+501 tests with 12 optional skips.
+
+Three local checks did not pass in the full run on the shared worker, at a load of
+18 to 30 on 12 cores, and all three pass in that CI run with their limits unchanged:
+
+- The large v4 catalog migration test hit its 60-second limit, and the tagged
+  temporal search cutoff test hit its 30-second limit. Run alone, their files pass:
+  19 of 19 and 16 of 16.
+- The 1,000-clip edit budget failed, with a commit taking 1,667 ms against its limit
+  of 1,000 ms, as it did on the shared worker for 5.8.0. This run did not repeat that
+  baseline comparison.
+
 ## November 4 usage estimates and rollups (5.8.0)
 
 Engine 5.8.0 adds the quote, actual-basis and attribution fields to `UsageEntry`
