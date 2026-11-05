@@ -104,10 +104,13 @@ async function verifyFile(path: string, expected: { sha256: string; size: number
 }
 
 function assertIdle(context: EngineContext): void {
-  const active = context.store.db.prepare("SELECT id FROM runtime_jobs WHERE state IN ('queued','running','completing') LIMIT 1").get();
-  const pending = context.store.db.prepare("SELECT artifact_id FROM runtime_pending_tasks LIMIT 1").get();
-  const lease = context.store.db.prepare("SELECT lease_id FROM runtime_resource_leases WHERE revoked_at IS NULL AND expires_at > ? LIMIT 1").get(Date.now());
-  if (active || pending || lease) throw new EngineFault({ code: "IN_USE", message: "Book has active jobs, provider tasks or media work; wait until it is idle before exporting" });
+  const active = context.store.db.prepare("SELECT id, type FROM runtime_jobs WHERE state IN ('queued','running','completing') LIMIT 1").get() as { id: number; type: string } | undefined;
+  const pending = context.store.db.prepare("SELECT artifact_id, task_type FROM runtime_pending_tasks LIMIT 1").get() as { artifact_id: string; task_type: string } | undefined;
+  const lease = context.store.db.prepare("SELECT resource_key, pid, expires_at FROM runtime_resource_leases WHERE revoked_at IS NULL AND expires_at > ? LIMIT 1").get(Date.now()) as { resource_key: string; pid: number | null; expires_at: number } | undefined;
+  const reason = active ? `job ${active.id} (${active.type})`
+    : pending ? `provider task ${pending.task_type} for ${pending.artifact_id}`
+      : lease ? `media lease ${lease.resource_key} (pid ${lease.pid}, expires ${new Date(lease.expires_at).toISOString()})` : null;
+  if (reason) throw new EngineFault({ code: "IN_USE", message: `Book has active jobs, provider tasks or media work: ${reason}; wait until it is idle before exporting` });
 }
 
 function scrubSnapshot(path: string): void {
