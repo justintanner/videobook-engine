@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { create as tarCreate } from "tar";
 import { DatabaseSync } from "@dolthub/doltlite";
+import { closeCatalogDatabase } from "../src/catalog-close.js";
 import { afterEach, describe, expect, it } from "vitest";
 import { createEngine, type Engine } from "../src/engine.js";
 import { packBookArchive, inspectBookArchive, restoreBookArchive, releaseBookSnapshot, createBookImportWorkspace, releaseBookImportWorkspace } from "../src/book-archive.js";
@@ -81,7 +82,7 @@ describe("portable book archives", () => {
     engine.close();
     const db = new DatabaseSync(join(root, "source", "data", "videobook.db"));
     db.prepare("SELECT dolt_remote('add', 'source', ?)").get(join(root, "private-backup"));
-    db.close();
+    closeCatalogDatabase(db, { wrote: true });
     const reopened = createEngine({ rootDir: join(root, "source") });
     engines.push(reopened);
     await reopened.ready;
@@ -90,7 +91,7 @@ describe("portable book archives", () => {
     try {
       expect(catalog.prepare("SELECT * FROM dolt_remotes()").all()).toEqual([]);
       expect(catalog.doltLog({ limit: 1 })[0]?.commit_hash).toBe(reopened.head);
-    } finally { catalog.close(); }
+    } finally { closeCatalogDatabase(catalog); }
   });
 
   it("does not overwrite an existing archive or import root", async () => {

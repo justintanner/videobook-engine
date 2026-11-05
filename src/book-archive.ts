@@ -9,6 +9,7 @@ import { DatabaseSync } from "@dolthub/doltlite";
 import type { Book } from "./engine-types.js";
 import type { EngineContext } from "./context.js";
 import { EngineFault } from "./store.js";
+import { closeCatalogDatabase } from "./catalog-close.js";
 import { SCHEMA_VERSION } from "./schema.js";
 import { isUuidV7 } from "./ids.js";
 import { pipeline } from "node:stream/promises";
@@ -117,7 +118,7 @@ function scrubSnapshot(path: string): void {
     }
     db.exec("DELETE FROM runtime_object_publications; DELETE FROM runtime_workspace_entries");
   } finally {
-    db.close();
+    closeCatalogDatabase(db, { wrote: true });
   }
 }
 
@@ -244,7 +245,7 @@ function validateCatalog(path: string, manifest: BookArchiveManifest): void {
     if (objects.length !== inventory.size || objects.some((object) => inventory.get(object.object_hash) !== object.size_bytes)) invalid("Catalog object inventory does not match the archive");
     if (db.prepare("SELECT id FROM runtime_jobs WHERE state IN ('queued','running','completing') LIMIT 1").get()
       || db.prepare("SELECT artifact_id FROM runtime_pending_tasks LIMIT 1").get()) invalid("Archive contains active work");
-  } finally { db.close(); }
+  } finally { closeCatalogDatabase(db); }
 }
 
 export async function restoreBookArchive(archivePath: string, rootDir: string, options: { signal?: AbortSignal } = {}): Promise<BookArchiveManifest> {
