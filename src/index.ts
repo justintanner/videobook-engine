@@ -1,4 +1,16 @@
 export { createEngine, Engine } from "./engine.js";
+export {
+  BOOK_AUTOMATION_PAUSED_KEY,
+  packBookArchive,
+  inspectBookArchive,
+  restoreBookArchive,
+  releaseBookSnapshot,
+  createBookImportWorkspace,
+  cleanupBookImportWorkspaces,
+  cleanupBookSnapshots,
+  releaseBookImportWorkspace,
+} from "./book-archive.js";
+export type { BookArchiveManifest, BookArchiveResult, BookSnapshot } from "./book-archive.js";
 
 export type * from "./engine-types.js";
 export {

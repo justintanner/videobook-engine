@@ -1,4 +1,5 @@
 import { stat } from "node:fs/promises";
+import { createBookSnapshot } from "./book-archive.js";
 
 import type {
   CollectGarbageOptions,
@@ -29,6 +30,7 @@ const STRAY_GRACE_MS = 600_000;
 
 export function createStorageApi(context: EngineContext) {
   return {
+    snapshot: (options?: { ownerPid?: number }) => createBookSnapshot(context, options),
     status: (): StorageStatus => storageStatus(context),
     backup: (): Promise<Result<StorageStatus, EngineError>> => backup(context),
     deleteObject: (

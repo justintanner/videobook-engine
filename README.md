@@ -349,6 +349,50 @@ preserving media kind and embedding-space boundaries.
 
 ## Backups
 
+### Portable book archives
+
+`engine.storage.snapshot()` captures an idle book without closing the live
+engine. It briefly fences catalog access while pinning immutable objects and
+taking a consistent database snapshot. Queued/running jobs, pending provider
+tasks, and active media leases reject the snapshot. Other books remain usable.
+
+```ts
+import { packBookArchive, releaseBookSnapshot, restoreBookArchive } from "videobook-engine";
+
+const snapshot = await engine.storage.snapshot();
+try {
+  const archive = await packBookArchive(snapshot.rootDir, "/exports/story.videobook.tar.gz");
+  console.log(archive.path, archive.sha256);
+} finally {
+  await releaseBookSnapshot(snapshot.rootDir);
+}
+await restoreBookArchive("/exports/story.videobook.tar.gz", "/staging/restored-story");
+```
+
+Archive format 1 contains `manifest.json`, `catalog.db`, and one
+`objects/<sha256>` entry per non-forgotten object. The manifest declares the
+book identity, semantic HEAD, engine/schema versions, and every object's size
+and SHA-256. The catalog retains Dolt history and runtime records; source
+catalog remotes, publication receipts for remote storage, and workspace cache
+entries are removed. Credentials, model caches, and duplicate workspaces are
+outside the format. Missing non-forgotten objects fail export; forgotten media
+remains forgotten. Workspaces materialize from canonical objects on demand.
+
+`inspectBookArchive()` checks the versioned manifest and inventory without
+publishing a book. `restoreBookArchive()` requires a new destination directory,
+streams extraction, verifies catalog integrity and object checksums, and removes
+incomplete restoration on failure. It rejects incompatible schemas, active
+work, links, duplicate/unexpected paths, and inventory mismatches. Packing and
+restoration accept an optional `{ signal }` for cancellation. A completed
+archive never overwrites an existing output file. Compression runs after the
+snapshot fence is released, so later source edits do not change the archive.
+
+`createBookImportWorkspace()` and `releaseBookImportWorkspace()` provide
+library-local staging; `cleanupBookImportWorkspaces()` recovers staging left
+by dead owners. The application reserves identity/name, atomically adopts a
+validated restoration, and uses `BOOK_AUTOMATION_PAUSED_KEY` to pause imported
+automatic work before making it visible.
+
 Configure `remoteObjects` to publish content-addressed objects and
 `catalogBackup` to push the Dolt catalog. `engine.storage.backup()` publishes
 objects first, then pushes the catalog, so a restored catalog never points to

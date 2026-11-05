@@ -82,6 +82,21 @@ assert.ok(history.length >= 2, "Artifact creation and file write appear in histo
 assert.ok(existsSync(".videobook/data/videobook.db"));
 const reopened = createEngine({ rootDir: ".videobook" });
 try {
+  const { packBookArchive, inspectBookArchive, restoreBookArchive, releaseBookSnapshot } = await import("videobook-engine");
+  await reopened.ready;
+  const snapshot = await reopened.storage.snapshot();
+  try {
+    const archive = await packBookArchive(snapshot.rootDir, "portable.tar.gz");
+    assert.equal((await inspectBookArchive(archive.path)).book.bookId, book.bookId);
+    await restoreBookArchive(archive.path, ".portable-restored");
+    const portable = createEngine({ rootDir: ".portable-restored" });
+    try {
+      await portable.ready;
+      assert.equal(portable.book.get().bookId, book.bookId);
+      assert.equal(portable.head, snapshot.manifest.head);
+      assert.equal((await portable.files.read(script.value.artifactId, "original.md")).ok, true);
+    } finally { portable.close(); }
+  } finally { await releaseBookSnapshot(snapshot.rootDir); }
   assert.equal(reopened.book.get().bookId, book.bookId);
   assert.equal(reopened.artifacts.get(script.value.artifactId).value.label, "opening draft");
   const provider = { manifestId: "package-consent", async prepare() {}, async embedText() { return new Float32Array([1]); } };
