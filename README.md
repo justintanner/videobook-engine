@@ -352,7 +352,7 @@ preserving media kind and embedding-space boundaries.
 ### Portable book archives
 
 `engine.storage.snapshot()` captures an idle book without closing the live
-engine. It briefly fences catalog access while pinning immutable objects and
+engine. It briefly fences semantic writes and new jobs while pinning immutable objects and
 taking a consistent database snapshot. Queued/running jobs, pending provider
 tasks, and active media leases reject the snapshot. Other books remain usable.
 

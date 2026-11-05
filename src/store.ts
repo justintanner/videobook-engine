@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import { mkdirSync, existsSync, statSync } from "node:fs";
 import * as path from "node:path";
 
@@ -85,9 +84,8 @@ interface SemanticMutation<T> {
 }
 
 export class DoltStore {
-  private readonly database: DatabaseSync;
+  readonly db: DatabaseSync;
   private snapshotting = false;
-  private readonly snapshotScope = new AsyncLocalStorage<boolean>();
   readonly dataDir: string;
   readonly databasePath: string;
   readonly objectsDir: string;
@@ -146,7 +144,7 @@ export class DoltStore {
 
     const existed = existsSync(this.databasePath);
     this.catalogCompacted = existed && isCatalogCompacted(this.databasePath);
-    this.database = new DatabaseSync(this.databasePath);
+    this.db = new DatabaseSync(this.databasePath);
     this.markedCatalogSize = this.catalogSize();
     // GC before configureConnection/initialize prepare any statement so
     // workingDiffProbes never holds a pre-GC StatementSync.
@@ -167,18 +165,15 @@ export class DoltStore {
     return this.db.doltLog({ limit: 1 })[0]?.commit_hash ?? "";
   }
 
-  get db(): DatabaseSync {
-    if (this.snapshotting && this.snapshotScope.getStore() !== true) {
-      throw new EngineFault({ code: "LOCKED", message: "Book snapshot in progress; retry shortly" });
-    }
-    return this.database;
+  get isSnapshotting(): boolean {
+    return this.snapshotting;
   }
 
   snapshot<T>(operation: () => Promise<T>): Promise<T> {
     return this.serial(async () => {
       this.snapshotting = true;
       try {
-        return await this.snapshotScope.run(true, operation);
+        return await operation();
       } finally {
         this.snapshotting = false;
       }

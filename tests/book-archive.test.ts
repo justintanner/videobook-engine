@@ -1,5 +1,6 @@
 import { mkdtemp, readFile, rm, writeFile, mkdir, symlink, access } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { join } from "node:path";
 import { create as tarCreate } from "tar";
 import { DatabaseSync } from "@dolthub/doltlite";
@@ -44,6 +45,40 @@ async function snapshot(engine: Engine) {
 }
 
 describe("portable book archives", () => {
+  it("keeps reads available and serializes edits behind a live snapshot", async () => {
+    const { engine } = await fixture();
+    const original = engine.book.get();
+    let done = false;
+    const saving = snapshot(engine).finally(() => { done = true; });
+    const renamed = engine.book.rename("after-snapshot");
+    const readErrors: unknown[] = [];
+    while (!done) {
+      try { engine.book.get(); engine.artifacts.list(); }
+      catch (error) { readErrors.push(error); }
+      await nextTurn();
+    }
+    const saved = await saving;
+    expect(readErrors).toEqual([]);
+    expect(saved.manifest.book).toEqual(original);
+    expect(value(await renamed).name).toBe("after-snapshot");
+  });
+  it("round trips an empty book without requiring a media directory", async () => {
+    const root = await mkdtemp(join(tmpdir(), "archive-empty-"));
+    roots.push(root);
+    const source = createEngine({ rootDir: join(root, "source"), initialBookName: "empty" });
+    engines.push(source);
+    await source.ready;
+    value(await source.notebooks.create("Main"));
+    const saved = await snapshot(source);
+    expect(saved.manifest.objects).toEqual([]);
+    const archive = await packBookArchive(saved.rootDir, join(root, "empty.tar.gz"));
+    await restoreBookArchive(archive.path, join(root, "restored"));
+    const restored = createEngine({ rootDir: join(root, "restored") });
+    engines.push(restored);
+    await restored.ready;
+    expect(restored.book.get()).toEqual(source.book.get());
+    expect(restored.notebooks.list()).toEqual(source.notebooks.list());
+  });
   it("preserves identity, complete history, old media and settings while the source remains open", async () => {
     const { root, engine, artifact, first } = await fixture();
     const head = engine.head;

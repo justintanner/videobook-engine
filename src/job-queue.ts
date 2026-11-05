@@ -44,6 +44,7 @@ export class JobQueue {
   ) {}
 
   enqueue(options: EnqueueOptions): EnqueueResult {
+    if (this.store.isSnapshotting) throw new EngineFault({ code: "LOCKED", message: "Book snapshot in progress; retry shortly" });
     const resolvedArtifactId = options.artifactId
       ? this.resolveArtifactId(options.artifactId)
       : null;

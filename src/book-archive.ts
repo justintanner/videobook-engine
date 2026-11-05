@@ -143,6 +143,7 @@ export async function createBookSnapshot(context: EngineContext, options: { owne
         catch { await copyFile(source, destination); }
       }
       const catalogPath = join(rootDir, "catalog.db");
+      assertIdle(context);
       context.store.db.exec(`VACUUM INTO '${catalogPath.replaceAll("'", "''")}'`);
       scrubSnapshot(catalogPath);
       const enginePackage = createRequire(import.meta.url)("../package.json") as { version: string };
@@ -287,7 +288,7 @@ export async function restoreBookArchive(archivePath: string, rootDir: string, o
     }
     await mkdir(join(rootDir, "data"), { recursive: true });
     await rename(catalog, join(rootDir, "data", "videobook.db"));
-    await rm(join(rootDir, "objects"), { recursive: true });
+    await rm(join(rootDir, "objects"), { recursive: true, force: true });
     await rm(join(rootDir, "manifest.json"));
     return manifest;
   } catch (error) {
