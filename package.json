@@ -51,6 +51,7 @@
     "fixtures"
   ],
   "scripts": {
+    "test:archives": "node scripts/test-book-archives.mjs",
     "test:package": "node scripts/package-smoke.mjs",
     "benchmark:api": "tsx benchmarks/run-api-benchmark.ts",
     "benchmark:api:smoke": "tsx benchmarks/run-api-benchmark.ts --quick",

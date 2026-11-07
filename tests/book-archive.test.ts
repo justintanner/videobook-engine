@@ -1,7 +1,7 @@
 import { mkdtemp, readFile, rm, writeFile, mkdir, symlink, access } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { join } from "node:path";
+import { isAbsolute, join, relative } from "node:path";
 import { create as tarCreate } from "tar";
 import { DatabaseSync } from "@dolthub/doltlite";
 import { closeCatalogDatabase } from "../src/catalog-close.js";
@@ -20,6 +20,15 @@ const value = <T>(result: { ok: true; value: T } | { ok: false; error: { message
 afterEach(async () => {
   for (const engine of engines.splice(0)) engine.close();
   await Promise.all(snapshots.splice(0).map(releaseBookSnapshot));
+  const owner = process.env.VIDEOBOOK_ARCHIVE_TEST_ROOT;
+  if (owner) {
+    for (const root of roots.splice(0)) {
+      const child = relative(owner, root);
+      expect(child.startsWith("..")).toBe(false);
+      expect(isAbsolute(child)).toBe(false);
+    }
+    return;
+  }
   await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true, maxRetries: 3 })));
 });
 
