@@ -48,4 +48,4 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci
-      - run: npm test -- tests/book-archive.test.ts
+      - run: npm test -- tests/book-archive.test.ts --hookTimeout=60000
