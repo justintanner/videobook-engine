@@ -35,3 +35,17 @@ jobs:
       - name: Run edit transaction and latency checks in isolation
         run: npm test -- tests/edit-transactions.test.ts
       - run: npm run test:package
+
+  windows-archives:
+    name: Portable book archives on Windows
+    runs-on: windows-latest
+    env:
+      ONNXRUNTIME_NODE_INSTALL: skip
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm test -- tests/book-archive.test.ts

@@ -144,7 +144,7 @@ export async function createBookSnapshot(context: EngineContext, options: { owne
       }
       const catalogPath = join(rootDir, "catalog.db");
       assertIdle(context);
-      context.store.db.exec(`VACUUM INTO '${catalogPath.replaceAll("'", "''")}'`);
+      context.store.db.exec(`VACUUM INTO '${catalogPath.replaceAll("\\", "/").replaceAll("'", "''")}'`);
       scrubSnapshot(catalogPath);
       const enginePackage = createRequire(import.meta.url)("../package.json") as { version: string };
       const manifest: BookArchiveManifest = {
