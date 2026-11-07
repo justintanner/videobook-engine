@@ -3,13 +3,12 @@ import { createReadStream, createWriteStream } from "node:fs";
 import { copyFile, link, lstat, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve, sep } from "node:path";
 import { create as tarCreate, list as tarList, extract as tarExtract } from "tar";
-import { DatabaseSync } from "@dolthub/doltlite";
 import type { Book } from "./engine-types.js";
 import type { EngineContext } from "./context.js";
 import { EngineFault } from "./store.js";
-import { closeCatalogDatabase } from "./catalog-close.js";
+import { runBookCatalog } from "./book-archive-catalog.js";
 import { SCHEMA_VERSION } from "./schema.js";
 import { isUuidV7 } from "./ids.js";
 import { pipeline } from "node:stream/promises";
@@ -113,18 +112,6 @@ function assertIdle(context: EngineContext): void {
   if (reason) throw new EngineFault({ code: "IN_USE", message: `Book has active jobs, provider tasks or media work: ${reason}; wait until it is idle before exporting` });
 }
 
-function scrubSnapshot(path: string): void {
-  const db = new DatabaseSync(path);
-  try {
-    for (const row of db.prepare("SELECT * FROM dolt_remotes()").all()) {
-      db.prepare("SELECT dolt_remote('remove', ?)").get((row as { name: string }).name);
-    }
-    db.exec("DELETE FROM runtime_object_publications; DELETE FROM runtime_workspace_entries");
-  } finally {
-    closeCatalogDatabase(db, { wrote: true });
-  }
-}
-
 export async function createBookSnapshot(context: EngineContext, options: { ownerPid?: number } = {}): Promise<BookSnapshot> {
   return context.store.snapshot(async () => {
     assertIdle(context);
@@ -144,8 +131,8 @@ export async function createBookSnapshot(context: EngineContext, options: { owne
       }
       const catalogPath = join(rootDir, "catalog.db");
       assertIdle(context);
-      context.store.db.exec(`VACUUM INTO '${catalogPath.replaceAll("\\", "/").replaceAll("'", "''")}'`);
-      scrubSnapshot(catalogPath);
+      context.store.db.exec(`VACUUM INTO '${catalogPath.replaceAll(sep, "/").replaceAll("'", "''")}'`);
+      await runBookCatalog({ operation: "scrub", path: catalogPath });
       const enginePackage = createRequire(import.meta.url)("../package.json") as { version: string };
       const manifest: BookArchiveManifest = {
         format: "videobook-book", version: 1, schemaVersion: SCHEMA_VERSION,
@@ -234,24 +221,6 @@ export async function inspectBookArchive(path: string): Promise<BookArchiveManif
   return manifest;
 }
 
-function validateCatalog(path: string, manifest: BookArchiveManifest): void {
-  const db = new DatabaseSync(path, { readOnly: true });
-  try {
-    const schema = db.prepare("SELECT version FROM engine_schema WHERE singleton=1").get() as { version: number };
-    const book = db.prepare("SELECT book_id, name, created_at FROM book").get() as { book_id: string; name: string; created_at: number };
-    if (schema?.version !== manifest.schemaVersion || book?.book_id !== manifest.book.bookId
-      || book.name !== manifest.book.name || book.created_at !== manifest.book.createdAt
-      || db.doltLog({ limit: 1 })[0]?.commit_hash !== manifest.head) invalid("Catalog identity, revision or schema does not match the archive");
-    if (db.prepare("PRAGMA integrity_check").all().some((row) => Object.values(row)[0] !== "ok")
-      || db.prepare("PRAGMA foreign_key_check").all().length > 0) invalid("Archive catalog failed integrity checks");
-    const objects = db.prepare("SELECT object_hash, size_bytes FROM objects WHERE forgotten_at IS NULL ORDER BY object_hash").all() as unknown as Array<{ object_hash: string; size_bytes: number }>;
-    const inventory = new Map(manifest.objects.map((object) => [object.sha256, object.size]));
-    if (objects.length !== inventory.size || objects.some((object) => inventory.get(object.object_hash) !== object.size_bytes)) invalid("Catalog object inventory does not match the archive");
-    if (db.prepare("SELECT id FROM runtime_jobs WHERE state IN ('queued','running','completing') LIMIT 1").get()
-      || db.prepare("SELECT artifact_id FROM runtime_pending_tasks LIMIT 1").get()) invalid("Archive contains active work");
-  } finally { closeCatalogDatabase(db); }
-}
-
 export async function restoreBookArchive(archivePath: string, rootDir: string, options: { signal?: AbortSignal } = {}): Promise<BookArchiveManifest> {
   const manifest = await inspectBookArchive(archivePath);
   options.signal?.throwIfAborted();
@@ -278,7 +247,7 @@ export async function restoreBookArchive(archivePath: string, rootDir: string, o
     if (JSON.stringify(extracted) !== JSON.stringify(manifest)) invalid("Archive changed during import");
     const catalog = join(rootDir, "catalog.db");
     await verifyFile(catalog, manifest.catalog);
-    validateCatalog(catalog, manifest);
+    await runBookCatalog({ operation: "validate", path: catalog, manifest });
     for (const object of manifest.objects) {
       const source = join(rootDir, "objects", object.sha256);
       await verifyFile(source, object);
