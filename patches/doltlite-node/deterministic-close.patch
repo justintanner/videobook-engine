@@ -1,0 +1,269 @@
+diff --git a/README.md b/README.md
+index 48e413f..3773d19 100644
+--- a/README.md
++++ b/README.md
+@@ -104,7 +104,7 @@ db.exec("SELECT dolt_commit('-Am', 'my message')")
+ |--------|-------------|
+ | `exec(sql)` | Run SQL, no return value |
+ | `prepare(sql)` | Compile a `StatementSync` |
+-| `close()` | Close the connection |
++| `close()` | Close the connection and finalize its statements |
+ | `open(path)` | (Re-)open at path |
+ | `location()` | Filesystem path, or `null` for `:memory:` |
+ | `createFunction(name, fn)` | Register a scalar UDF |
+diff --git a/index.d.ts b/index.d.ts
+index 767f276..2e3d8a2 100644
+--- a/index.d.ts
++++ b/index.d.ts
+@@ -115,7 +115,11 @@ export class DatabaseSync {
+   exec(sql: string): void
+   /** Compile a SQL statement for repeated execution. */
+   prepare(sql: string): StatementSync
+-  /** Close the database connection. */
++  /**
++   * Close the database connection. Finalizes every statement prepared on it,
++   * so the database files are released before this returns; using one of
++   * those statements afterwards throws.
++   */
+   close(): void
+   /** (Re-)open the database at the given path. */
+   open(path: string): void
+diff --git a/src/database.cpp b/src/database.cpp
+index 1537104..fd7164b 100644
+--- a/src/database.cpp
++++ b/src/database.cpp
+@@ -66,9 +66,19 @@ Database::Database(const Napi::CallbackInfo& info) : Napi::ObjectWrap<Database>(
+ }
+ 
+ Database::~Database() {
++  // Each statement holds a reference to its DatabaseSync, so statements can
++  // only outlive it while the environment is torn down. Detach them so their
++  // destructors neither finalise twice nor touch this object.
++  for (Statement* stmt : statements_) stmt->Detach();
++  statements_.clear();
+   if (db_) { sqlite3_close_v2(db_); db_ = nullptr; }
+ }
+ 
++void Database::FinalizeStatements() {
++  for (Statement* stmt : statements_) stmt->Finalize();
++  statements_.clear();
++}
++
+ // ── node:sqlite-compatible API ───────────────────────────────────────────────
+ 
+ Napi::Value Database::Open(const Napi::CallbackInfo& info) {
+@@ -94,6 +104,11 @@ Napi::Value Database::Open(const Napi::CallbackInfo& info) {
+ }
+ 
+ Napi::Value Database::Close(const Napi::CallbackInfo& info) {
++  // Like node:sqlite, finalise the connection's statements first. Otherwise
++  // sqlite3_close_v2 leaves a zombie connection that keeps the database files
++  // open until the garbage collector finalises the last statement, and on
++  // Windows those files cannot be deleted until then.
++  FinalizeStatements();
+   if (db_) { sqlite3_close_v2(db_); db_ = nullptr; }
+   path_.clear();
+   return info.Env().Undefined();
+diff --git a/src/database.h b/src/database.h
+index 9c4dec7..1660908 100644
+--- a/src/database.h
++++ b/src/database.h
+@@ -2,6 +2,9 @@
+ #include <napi.h>
+ #include "doltlite.h"
+ #include <string>
++#include <unordered_set>
++
++class Statement;
+ 
+ class Database : public Napi::ObjectWrap<Database> {
+ public:
+@@ -12,9 +15,19 @@ public:
+   sqlite3* Handle() { return db_; }
+   bool IsOpen() const { return db_ != nullptr; }
+ 
++  // Statements prepared on this connection and not yet finalised.
++  void TrackStatement(Statement* stmt) { statements_.insert(stmt); }
++  void UntrackStatement(Statement* stmt) { statements_.erase(stmt); }
++
+ private:
+   sqlite3* db_ = nullptr;
+   std::string path_;
++  std::unordered_set<Statement*> statements_;
++
++  // Finalises every tracked statement, so that closing the connection
++  // releases its files at once instead of when the last statement is
++  // garbage collected.
++  void FinalizeStatements();
+ 
+   // node:sqlite-compatible methods
+   Napi::Value Exec(const Napi::CallbackInfo& info);
+diff --git a/src/statement.cpp b/src/statement.cpp
+index 3515af2..372b5e9 100644
+--- a/src/statement.cpp
++++ b/src/statement.cpp
+@@ -20,8 +20,10 @@ Napi::Object Statement::Create(Napi::Env env, Database* db, sqlite3_stmt* stmt)
+   auto obj = GetConstructor(env).New({});
+   auto* self = Napi::ObjectWrap<Statement>::Unwrap(obj);
+   self->db_ = db;
++  self->dbRef_ = Napi::Persistent(db->Value());
+   self->stmt_ = stmt;
+   self->source_ = sqlite3_sql(stmt) ? sqlite3_sql(stmt) : "";
++  db->TrackStatement(self);
+   return obj;
+ }
+ 
+@@ -31,9 +33,19 @@ Statement::Statement(const Napi::CallbackInfo& info)
+     : Napi::ObjectWrap<Statement>(info) {}
+ 
+ Statement::~Statement() {
++  if (db_) db_->UntrackStatement(this);
++  Finalize();
++}
++
++void Statement::Finalize() {
+   if (stmt_) { sqlite3_finalize(stmt_); stmt_ = nullptr; }
+ }
+ 
++void Statement::Detach() {
++  Finalize();
++  db_ = nullptr;
++}
++
+ // ── run() → {changes, lastInsertRowid} ───────────────────────────────────────
+ 
+ Napi::Value Statement::Run(const Napi::CallbackInfo& info) {
+diff --git a/src/statement.h b/src/statement.h
+index d0e88d1..cee92e8 100644
+--- a/src/statement.h
++++ b/src/statement.h
+@@ -12,9 +12,18 @@ public:
+ 
+   static Napi::Object Create(Napi::Env env, Database* db, sqlite3_stmt* stmt);
+ 
++  // Called by the Database: finalises the statement; using it afterwards
++  // throws "Statement is finalised".
++  void Finalize();
++  // Called when the Database is destroyed first, which only happens when the
++  // environment is torn down: finalises and forgets the Database.
++  void Detach();
++
+ private:
+   sqlite3_stmt* stmt_ = nullptr;
+   Database* db_ = nullptr;
++  // Keeps the DatabaseSync alive while this statement is, so db_ stays valid.
++  Napi::ObjectReference dbRef_;
+   std::string source_;
+   uint64_t generation_ = 0;
+   bool returnArrays_ = false;
+diff --git a/test/database.test.ts b/test/database.test.ts
+index 7c5fb2a..5cd6cee 100644
+--- a/test/database.test.ts
++++ b/test/database.test.ts
+@@ -1,5 +1,7 @@
+ import { describe, test, expect, beforeEach, afterEach } from "bun:test"
+-import { addonAvailable, tmpDb } from "./helpers"
++import { dirname } from "path"
++import { existsSync, rmSync } from "fs"
++import { addonAvailable, openFilesUnder, tmpDb } from "./helpers"
+ import type { DatabaseSync } from "../index"
+ 
+ if (!addonAvailable()) {
+@@ -77,6 +79,65 @@ describe("DatabaseSync.close / isOpen", () => {
+     db.close()
+     expect(() => db.prepare("SELECT 1")).toThrow()
+   })
++
++  test("close() finalizes the connection's statements", () => {
++    const db: DatabaseSync = new DatabaseSync(":memory:")
++    db.exec("CREATE TABLE t (x INTEGER)")
++    const insert = db.prepare("INSERT INTO t VALUES (?)")
++    const select = db.prepare("SELECT x FROM t")
++    insert.run(1)
++    insert.run(2)
++    const rows = select.iterate()
++    expect(rows.next()).toEqual({ done: false, value: { x: 1 } })
++    db.close()
++    expect(() => insert.run(3)).toThrow("Statement is finalised")
++    expect(() => select.get()).toThrow("Statement is finalised")
++    expect(() => select.all()).toThrow("Statement is finalised")
++    expect(() => select.iterate()).toThrow("Statement is finalised")
++    expect(() => select.columns()).toThrow("Statement is finalised")
++    expect(() => rows.next()).toThrow("Statement is finalised")
++  })
++
++  test("close() releases the database files while statements are alive", () => {
++    const { path, cleanup } = tmpDb()
++    try {
++      const db: DatabaseSync = new DatabaseSync(path)
++      db.exec("CREATE TABLE t (x INTEGER)")
++      const insert = db.prepare("INSERT INTO t VALUES (?)")
++      insert.run(1)
++      const dir = dirname(path)
++      const before = openFilesUnder(dir)
++      if (before !== null) expect(before.length).toBeGreaterThan(0)
++      db.close()
++      const after = openFilesUnder(dir)
++      if (after !== null) expect(after).toEqual([])
++      // Windows refuses to delete a file that is still open.
++      rmSync(dir, { recursive: true })
++      expect(existsSync(dir)).toBe(false)
++      expect(() => insert.run(2)).toThrow("Statement is finalised")
++    } finally { cleanup() }
++  })
++
++  test("a reopened database prepares new statements", () => {
++    const { path, cleanup } = tmpDb()
++    try {
++      const db: DatabaseSync = new DatabaseSync(path)
++      db.exec("CREATE TABLE t (x INTEGER)")
++      const before = db.prepare("SELECT count(*) AS n FROM t")
++      db.close()
++      db.open(path)
++      db.exec("INSERT INTO t VALUES (1)")
++      expect(db.prepare("SELECT count(*) AS n FROM t").get()).toEqual({ n: 1 })
++      expect(() => before.get()).toThrow("Statement is finalised")
++      db.close()
++    } finally { cleanup() }
++  })
++
++  test("a statement keeps its database alive", () => {
++    const stmt = new DatabaseSync(":memory:").prepare("SELECT 1 AS x")
++    Bun.gc(true)
++    expect(stmt.get()).toEqual({ x: 1 })
++  })
+ })
+ 
+ // ── location() ───────────────────────────────────────────────────────────────
+diff --git a/test/helpers.ts b/test/helpers.ts
+index 49855b6..c1d18ba 100644
+--- a/test/helpers.ts
++++ b/test/helpers.ts
+@@ -1,6 +1,6 @@
+ import { tmpdir } from "os"
+ import { join } from "path"
+-import { mkdirSync, rmSync, existsSync, realpathSync } from "fs"
++import { mkdirSync, rmSync, existsSync, realpathSync, readdirSync, readlinkSync } from "fs"
+ import { randomBytes } from "crypto"
+ 
+ /**
+@@ -34,3 +34,19 @@ export function addonAvailable(): boolean {
+   const compiled = join(__dirname, "../build/Release/doltlite.node")
+   return existsSync(prebuilt) || existsSync(compiled)
+ }
++
++/**
++ * Files under `dir` that this process still has open, or null where they
++ * cannot be listed: only Linux exposes its descriptors in /proc.
++ */
++export function openFilesUnder(dir: string): string[] | null {
++  if (process.platform !== "linux") return null
++  const open: string[] = []
++  for (const fd of readdirSync("/proc/self/fd")) {
++    try {
++      const target = readlinkSync(join("/proc/self/fd", fd))
++      if (target.startsWith(dir + "/")) open.push(target)
++    } catch {}
++  }
++  return open
++}

@@ -25,7 +25,9 @@ an engine dependency.
   (`ve-nia`). This native fix is still absent from official 0.50.9.
 - [The Node wrapper must report the actual fast-forward outcome](../doltlite-node/README.md)
   (`ve-xkv`). This wrapper fix is also still absent from official 0.50.9.
+- [The Node wrapper's `close()` must finalize its statements](../doltlite-node/deterministic-close.md)
+  (`ve-u1y`). Absent from every official release through 0.51.10.
 
-Neither patch is applied by the engine. They retain their original source
+None of these patches is applied by the engine. They retain their original source
 revision, checksum, and validation evidence for later upstream adoption.
 Native source licensing is recorded in [LICENSE.md](LICENSE.md).

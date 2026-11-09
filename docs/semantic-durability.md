@@ -94,6 +94,10 @@ the garbage collector finalizes its statements. A process killed before the mark
 is written loses nothing: the marker is optional, and the next open replays the
 tail as usual.
 
+Until then the process also keeps the catalog's files open. Windows cannot delete
+an open file, so on Windows a book's directory can only be removed reliably once
+the process that opened its catalog has exited.
+
 Close can add one row. A connection whose last commit added no chunks writes
 `clean_close` to the ignored `runtime_meta` table, so that the marker has a commit
 to follow. This creates no Dolt revision and changes no semantic state. Opening a

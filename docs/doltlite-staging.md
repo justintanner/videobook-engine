@@ -28,6 +28,21 @@ Its advisory wrapper fast-forward check still fails, so the diagnostic retains
 exit status 1. Actual merge ancestry and rows pass; no engine control flow
 depends on that advisory flag. The wrapper follow-up remains upstream.
 
+### Wrapper follow-up: close keeps the catalog files open (November 9, 2026)
+
+`DatabaseSync.close()` cannot finalize the connection's statements, so the
+catalog's files stay open until the garbage collector finalizes the last one.
+On Windows that blocks deleting a book right after `Engine.close()` (`EBUSY` in
+the Windows archive job, run 42368177558). `node scripts/close-handle-probe.mjs`
+exits 1 on the installed 0.51.1. Up to the latest release, 0.51.10, the wrapper
+has changed only `iterate()`, and
+[dolthub/doltlite-node#11](https://github.com/dolthub/doltlite-node/issues/11)
+has had no maintainer response since November 1. The engine's earlier wrapper
+PR, [#7](https://github.com/dolthub/doltlite-node/pull/7), has also been open
+without review since October 19.
+[A tested wrapper fix](../patches/doltlite-node/deterministic-close.md) is
+recorded under `ve-u1y` and not installed.
+
 ## Historical 0.50.9 adoption and verification
 
 The engine previously pinned official `@dolthub/doltlite@0.50.9`, released September 10,

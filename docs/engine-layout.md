@@ -679,9 +679,17 @@ the engine deliberately does not implement it.
     `clean_close` row to the ignored `runtime_meta` table, which gives the peer a
     commit to mark. A session that committed nothing does not write.
   - The deferred close still happens, so the connection's file descriptors and
-    memory stay held until collection. This is harmless for removal on Linux and
-    macOS. Windows can refuse to delete a file with an open handle; the engine's
-    CI does not run on Windows, so that case is untested.
+    memory stay held until collection: `videobook.db` twice and
+    `.videobook.db-lock`. Removal still works on Linux and macOS. Windows refuses
+    to delete an open file, so a process that removes a book right after
+    `engine.close()` fails with `EBUSY` until a collection runs. The Windows
+    archive job hit this on its source books, and its harness now deletes them
+    after the test process exits. The official binding offers no way to release
+    the handles sooner: `StatementSync` has no `finalize()`.
+    `scripts/close-handle-probe.mjs` lists what stays open and exits 1 until the
+    binding finalizes at close.
+    [The tested wrapper fix](../patches/doltlite-node/deterministic-close.md)
+    (dolthub/doltlite-node#11) is recorded but not installed.
   - A connection opened read-only never writes a marker and needs none of this.
   - `tests/catalog-close.test.ts` holds a statement across close, empties the
     directory, forces a collection and asserts nothing comes back. Its first test
