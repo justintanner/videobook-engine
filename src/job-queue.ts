@@ -180,6 +180,12 @@ export class JobQueue {
     const preferredOrder = preferredTypes.length > 0
       ? `CASE WHEN type IN (${preferredTypes.map(() => "?").join(", ")}) THEN 0 ELSE 1 END, `
       : "";
+    // Empty polls need only a read, not runtime()'s Dolt status scan and transaction.
+    // This is only a hint: select and claim again under the transaction below.
+    const queued = this.store.db
+      .prepare(`SELECT 1 FROM runtime_jobs WHERE state = 'queued'${allowedFilter} LIMIT 1`)
+      .get(...(allowedTypes ?? []));
+    if (!queued) return null;
     return this.store.runtime((now) => {
       const candidate = this.store.db
         .prepare(
@@ -359,12 +365,17 @@ export class JobQueue {
   }
 
   async reap(): Promise<{ requeued: number; failed: number }> {
+    const expiredFilter = `state IN ('running','completing')
+      AND lease_expires_at IS NOT NULL AND lease_expires_at < ?`;
+    // Recheck leases inside runtime(): a heartbeat may renew one after this read.
+    const expired = this.store.db
+      .prepare(`SELECT 1 FROM runtime_jobs WHERE ${expiredFilter} LIMIT 1`)
+      .get(Date.now());
+    if (!expired) return { requeued: 0, failed: 0 };
     const result = this.store.runtime((now) => {
       const rows = this.store.db
         .prepare(
-          `${JOB_SELECT}
-           WHERE state IN ('running','completing')
-             AND lease_expires_at IS NOT NULL AND lease_expires_at < ?`,
+          `${JOB_SELECT} WHERE ${expiredFilter}`,
         )
         .all(now) as unknown as JobRow[];
       let requeued = 0;
