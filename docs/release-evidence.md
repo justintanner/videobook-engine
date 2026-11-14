@@ -46,6 +46,32 @@ behaves the same on this worker:
   and 1,360 ms, and this build with a commit of 1,569 ms and a preview of 558 ms
   against its limit of 500 ms.
 
+### Publication
+
+[`videobook-engine@5.9.2`](https://www.npmjs.com/package/videobook-engine/v/5.9.2)
+is published as npm `latest` from source
+`818a26fb39e5b144fab74fb82920c332bb41b833`, tagged `v5.9.2`.
+[Node 22/24 CI](https://github.com/justintanner/videobook-engine/actions/runs/43611969573)
+passes for that exact source, including the two checks above and the Windows
+archive job.
+
+The registry archive is byte-identical to the tested package: 2,599,770 bytes,
+SHA256 `176af71cd37f4ce846d14a7d20dc89b028801823d4476bb3bf49554f839a82b2`, npm
+integrity
+`sha512-JluE+z2WxC5vgVWZsL1kVqfeUGqnjqBpMV/j7ieHAkra2l39WhkuoHEt6JrpPl5l1mcyNflj3ui6YXrYjRe/KQ==`.
+Against the registry 5.9.1 archive it differs only in `dist/job-queue.js`, the
+source maps for that file and for `dist/job-queue.d.ts`, four docs and the
+`package.json` version.
+
+A clean public registry install with no token in the environment and an empty npm
+cache passes ZIP security, browser exports, tags and reopen, remote checksums,
+README usage, the full-catalog, runtime, index and job-ID probes, media decode and
+a zero-vulnerability runtime audit. This check does not run the optional cached
+CLIP/CLAP inference tests. With the idle shape above, the package installed from
+the registry used 1.18 percent of one core and 1.2 read calls a second. The
+registry 5.9.1 package, run on the same worker just before, used 90.8 percent and
+1,334 read calls a second.
+
 ## November 4 usage row fix (5.8.1)
 
 Engine 5.8.1 fixes a usage bug that left one provider task with two rows. A pending
