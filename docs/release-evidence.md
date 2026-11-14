@@ -9,6 +9,43 @@ This is an assessment of the requirements in
 Beads contains the work assignments and current status; this report records
 the evidence and its limits at these revisions.
 
+## November 14 idle queue polls (5.9.2)
+
+Engine 5.9.2 makes polling an empty job queue cheap. Before, `JobQueue.dequeue`
+entered a runtime transaction, which starts with a Dolt status scan, even when no
+job was queued, and `JobQueue.reap` did the same when no lease had expired. A queue
+runner polls every 250 ms by default, so an idle book kept using CPU and disk reads.
+Both now return after a plain read when there is nothing to do. When there is work,
+the claim and the lease recheck still happen inside the runtime transaction, so two
+runners never receive the same job, and a heartbeat that renews a lease after the
+read still keeps it.
+
+Measured offline with 31 engines, each with two idle runners at 250 ms, over 30
+seconds: 77.8 percent of one core and 870 read calls a second before, 1.21 percent
+and 3 read calls a second after.
+
+The public API, the queue, retry, lease and fence behaviour and schema 28 are
+unchanged, and DoltLite stays at 0.51.1. The release also carries the November 9
+documentation of [catalog files that stay open](doltlite-staging.md) after
+`Engine.close()`.
+
+Implementation commit `1d620c7` passes
+[Node 22/24 CI](https://github.com/justintanner/videobook-engine/actions/runs/43589020790),
+including the Windows archive job. Locally on Node 24, typecheck, lint and build
+pass, and the functional suite passes 535 tests with 12 optional skips.
+
+Two local checks did not pass on the shared worker, at a load of 13 to 19 on 12
+cores. Both pass in that CI run with their limits unchanged, and unchanged 5.9.1
+behaves the same on this worker:
+
+- The large v4 catalog migration test hit its 60-second limit in the full parallel
+  run. By itself it took 50 to 58 seconds, and 5.9.1 took 58. Its file, run alone,
+  failed in that test once and then passed 19 of 19.
+- The 1,000-clip edit budget failed, with a commit taking 1,352 ms against its limit
+  of 1,000 ms. In paired runs minutes apart, 5.9.1 failed it with commits of 1,429
+  and 1,360 ms, and this build with a commit of 1,569 ms and a preview of 558 ms
+  against its limit of 500 ms.
+
 ## November 4 usage row fix (5.8.1)
 
 Engine 5.8.1 fixes a usage bug that left one provider task with two rows. A pending
