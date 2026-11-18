@@ -675,6 +675,11 @@ function markWorkspaceReady(
         last_accessed_at=excluded.last_accessed_at`,
     )
     .run(artifactId, context.artifactPath(artifactId), now, now);
+  // A write made under an active artifact-work lease leaves the lease, its
+  // owner and its fence alone: a job writes several variants under one lease
+  // and only artifactWork.complete or fail hands the artifact back. Without
+  // a live lease (pending, ready, error, or an expired lease the reaper has
+  // not collected yet) the write makes the artifact ready.
   context.store.db
     .prepare(
       `INSERT INTO runtime_artifact_views(
@@ -682,7 +687,13 @@ function markWorkspaceReady(
       ) VALUES (?, 'ready', '{}', ?)
       ON CONFLICT(artifact_id) DO UPDATE SET
         status='ready', meta_json='{}', owner_id=NULL, owner_kind=NULL,
-        pid=NULL, deadline_at=NULL, updated_at=excluded.updated_at`,
+        pid=NULL, deadline_at=NULL, updated_at=excluded.updated_at
+      WHERE NOT (
+        runtime_artifact_views.status='working'
+        AND runtime_artifact_views.owner_id IS NOT NULL
+        AND (runtime_artifact_views.deadline_at IS NULL
+             OR runtime_artifact_views.deadline_at>excluded.updated_at)
+      )`,
     )
     .run(artifactId, now);
 }
