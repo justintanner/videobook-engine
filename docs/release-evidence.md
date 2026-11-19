@@ -9,11 +9,32 @@ This is an assessment of the requirements in
 Beads contains the work assignments and current status; this report records
 the evidence and its limits at these revisions.
 
-## November 19 node-gyp removed from the runtime dependencies
+## November 19 artifact-work leases and node-gyp removal (5.9.3)
 
-Unreleased; the next engine release carries it. This is a packaging change: a
-source build on a platform without a prebuilt binary can now fail under a package
-manager that supplies no `node-gyp` of its own.
+Engine 5.9.3 keeps an artifact-work lease through media file writes. Before,
+writing, copying or ingesting a file marked the artifact view `ready` and cleared
+its work owner, deadline and pid, even while a job held an artifact-work lease.
+The owner's renew and complete then returned false, and a competing begin could
+succeed between a job's variant writes. A file write now leaves a live lease
+(status `working`, owner set, deadline not passed) and its fence untouched. The
+owner releases it through `artifactWork.complete` or `fail`, and the reaper
+collects an expired lease. A write to an artifact without a live lease still makes
+it ready. Tests cover `write`, `writeFromPath`, `copy` and `ingestWorkspace` under
+one lease, the failure path, unleased writes and an expired lease that has not been
+reaped. Implementation commit `e4c999e` passes
+[Node 22/24 CI](https://github.com/justintanner/videobook-engine/actions/runs/44297524243),
+including the Windows archive job, on its third attempt. The first attempt failed
+the runtime audit on the November 17 advisory described below, before GitHub
+withdrew it, and the Windows archive job with the known `EBUSY` on an open
+catalog file; that job passed when rerun alone.
+
+It also removes `node-gyp` from the runtime dependencies, described below. The
+public API, the stored format and schema 28 are unchanged, no migration runs, and
+DoltLite stays at 0.51.1.
+
+The `node-gyp` removal is a packaging change: a source build on a platform
+without a prebuilt binary can now fail under a package manager that supplies no
+`node-gyp` of its own.
 
 `node-gyp` 12.4.0 is no longer an engine dependency. No engine source or script
 calls it. It was listed only so that a `node-gyp` binary would be in a consumer's
@@ -62,6 +83,21 @@ quick start ran on the source-built DoltLite, and a USearch add and search
 returned the stored key. The `node-gyp` version used by a source build now
 follows the consumer's package manager instead of the engine's pin. Other package
 managers and other platforms were not tested.
+
+Implementation commit `4631ba0` passes
+[Node 22/24 CI](https://github.com/justintanner/videobook-engine/actions/runs/44480289642),
+including the Windows archive job. Locally on Node 24, typecheck, lint and build
+pass, and the functional suite passes 543 tests with 12 optional skips.
+
+Two local checks did not pass on the shared worker, at a load of 11 to 20 on 12
+cores. Both pass in that CI run with their limits unchanged, and unchanged 5.9.2
+behaves the same on this worker:
+
+- The large v4 catalog migration test hit its 60-second limit in the full parallel
+  run. Its file, run alone, passed 19 of 19, that test taking 49 seconds.
+- The 1,000-clip edit budget failed, with a commit taking 1,208 ms against its limit
+  of 1,000 ms. In paired runs minutes apart, 5.9.2 failed it with commits of 1,517
+  and 1,223 ms, and this build with commits of 1,507 and 1,161 ms.
 
 ## November 14 idle queue polls (5.9.2)
 

@@ -70,9 +70,9 @@ upstream CI claim. The engine supports Node 22 and later.
 The registry package provides prebuilt addons for Linux x64/arm64, macOS
 x64/arm64, and Windows x64. Its source-build fallback runs the `node-gyp` it
 finds on the `PATH`. The engine kept a `node-gyp` dependency for that fallback
-until November 19, 2026, when it was removed as hardening; npm and pnpm put
+until 5.9.3, which removed it as hardening on November 19, 2026; npm and pnpm put
 their own bundled copy on the `PATH` (see
-[release evidence](release-evidence.md#november-19-node-gyp-removed-from-the-runtime-dependencies)).
+[release evidence](release-evidence.md#november-19-artifact-work-leases-and-node-gyp-removal-593)).
 The install policy uses the ordinary
 `@dolthub/doltlite@0.50.9` key. Official builds report
 `doltVersion() = "doltlite-amalgamation"`; package smoke checks the installed
