@@ -99,6 +99,31 @@ behaves the same on this worker:
   of 1,000 ms. In paired runs minutes apart, 5.9.2 failed it with commits of 1,517
   and 1,223 ms, and this build with commits of 1,507 and 1,161 ms.
 
+### Publication
+
+[`videobook-engine@5.9.3`](https://www.npmjs.com/package/videobook-engine/v/5.9.3)
+is published as npm `latest` from source
+`499b34f67cc992b72f35a1d6e8110cc4bf0c7a9b`, tagged `v5.9.3`.
+[Node 22/24 CI](https://github.com/justintanner/videobook-engine/actions/runs/44515910882)
+passes for that exact source, including the two checks above and the Windows
+archive job.
+
+The registry archive is byte-identical to the tested package: 2,602,056 bytes,
+SHA256 `1e88de26b6510efd94d1a48746d4908549b68e1c89f7efd556808f0a21a1214b`, npm
+integrity
+`sha512-JUvLNYbkAV06jJYS7BJ0xO4O54OtJ4Bg5QfLsFjlS8cecwoUY2CsID2oU/NIXY1SjZ/GbnPpUYyxRQ668gRrHA==`.
+Against the registry 5.9.2 archive it differs only in `dist/files.js`, the source
+maps for that file and for `dist/files.d.ts`, `README.md`, three docs and
+`package.json`, which changes the version and drops `node-gyp`.
+
+A clean public registry install with no token in the environment and an empty npm
+cache passes ZIP security, browser exports, tags and reopen, remote checksums,
+README usage, the full-catalog, runtime, index and job-ID probes, media decode and
+a zero-vulnerability runtime audit. This check does not run the optional cached
+CLIP/CLAP inference tests. A separate install of `videobook-engine@5.9.3` from
+the registry, also with an empty cache, has 36 packages, an empty
+`npm ls node-gyp` and a runtime audit with zero findings.
+
 ## November 14 idle queue polls (5.9.2)
 
 Engine 5.9.2 makes polling an empty job queue cheap. Before, `JobQueue.dequeue`
