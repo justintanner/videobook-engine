@@ -684,7 +684,10 @@ the engine deliberately does not implement it.
     to delete an open file, so a process that removes a book right after
     `engine.close()` fails with `EBUSY` until a collection runs. The Windows
     archive job hit this on its source books, and its harness now deletes them
-    after the test process exits. The official binding offers no way to release
+    after the test process exits. It hit it again on a snapshot whose catalog a
+    test had read in process; that test now reads a copy, and on Linux every
+    archive test checks that it leaves no file open in a snapshot it releases.
+    The official binding offers no way to release
     the handles sooner: `StatementSync` has no `finalize()`.
     `scripts/close-handle-probe.mjs` lists what stays open and exits 1 until the
     binding finalizes at close.

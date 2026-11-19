@@ -1,7 +1,8 @@
-import { mkdtemp, readFile, rm, writeFile, mkdir, symlink, access } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile, mkdir, symlink, access, readdir, readlink, realpath, copyFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
 import { tmpdir } from "node:os";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { isAbsolute, join, relative } from "node:path";
+import { isAbsolute, join, relative, sep } from "node:path";
 import { create as tarCreate } from "tar";
 import { DatabaseSync } from "@dolthub/doltlite";
 import { closeCatalogDatabase } from "../src/catalog-close.js";
@@ -19,7 +20,10 @@ const value = <T>(result: { ok: true; value: T } | { ok: false; error: { message
 
 afterEach(async () => {
   for (const engine of engines.splice(0)) engine.close();
-  await Promise.all(snapshots.splice(0).map(releaseBookSnapshot));
+  const released = snapshots.splice(0);
+  const held = (await Promise.all(released.map(async (rootDir) =>
+    (await openFilesUnder(rootDir)).map((path) => join(rootDir, path))))).flat();
+  await Promise.all(released.map(releaseBookSnapshot));
   const owner = process.env.VIDEOBOOK_ARCHIVE_TEST_ROOT;
   if (owner) {
     for (const root of roots.splice(0)) {
@@ -27,9 +31,10 @@ afterEach(async () => {
       expect(child.startsWith("..")).toBe(false);
       expect(isAbsolute(child)).toBe(false);
     }
-    return;
+  } else {
+    await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true, maxRetries: 3 })));
   }
-  await Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true, maxRetries: 3 })));
+  expect(held).toEqual([]);
 });
 
 async function fixture() {
@@ -45,6 +50,26 @@ async function fixture() {
   value(await engine.notebooks.create("Main"));
   engine.settings.set("example", { preserved: true });
   return { root, engine, artifact, first };
+}
+
+// Paths under `directory` that this process holds open. Only Linux lists them
+// cheaply; a handle left in a snapshot is what makes releaseBookSnapshot fail
+// with EBUSY on Windows, because a DoltLite connection closes only after GC
+// (ve-nt8).
+async function openFilesUnder(directory: string): Promise<string[]> {
+  if (process.platform !== "linux") return [];
+  let real: string;
+  try { real = await realpath(directory); }
+  catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw error;
+  }
+  const paths: string[] = [];
+  for (const fd of await readdir("/proc/self/fd")) {
+    try { paths.push(await readlink(join("/proc/self/fd", fd))); }
+    catch { /* The descriptor closed while listing. */ }
+  }
+  return paths.filter((path) => path.startsWith(real + sep)).map((path) => relative(real, path)).sort();
 }
 
 async function snapshot(engine: Engine) {
@@ -131,7 +156,11 @@ describe("portable book archives", () => {
     engines.push(reopened);
     await reopened.ready;
     const saved = await snapshot(reopened);
-    const catalog = new DatabaseSync(join(saved.rootDir, "catalog.db"), { readOnly: true });
+    // Read a copy so no connection stays open in the snapshot when it is released.
+    const probe = join(root, "snapshot-catalog.db");
+    await copyFile(join(saved.rootDir, "catalog.db"), probe);
+    expect(createHash("sha256").update(await readFile(probe)).digest("hex")).toBe(saved.manifest.catalog.sha256);
+    const catalog = new DatabaseSync(probe, { readOnly: true });
     try {
       expect(catalog.prepare("SELECT * FROM dolt_remotes()").all()).toEqual([]);
       expect(catalog.doltLog({ limit: 1 })[0]?.commit_hash).toBe(reopened.head);
