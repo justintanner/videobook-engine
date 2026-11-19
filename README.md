@@ -22,12 +22,16 @@ x64 and arm64, and Windows x64. ONNX Runtime covers the same platforms except
 macOS x64, so the local similarity models need Apple Silicon on a Mac.
 
 DoltLite and USearch run an install script that keeps the packaged prebuild
-or, on any other platform, builds the addon from source. Source builds need a
-C/C++ toolchain and use the engine's `node-gyp` dependency, so they work
-under any package manager. ONNX Runtime's install script only downloads
-optional CUDA libraries on Linux. npm 12 skips dependency install scripts
-unless they are allowed. The prebuilt platforms work without them; to allow
-them, for example for a source build:
+or, on any other platform, builds the addon from source. A source build needs a
+C/C++ toolchain and runs the `node-gyp` it finds on the `PATH`; the engine does
+not install one. npm and pnpm put their own bundled `node-gyp` there: forced
+source builds of both addons on Linux x64 built and loaded under npm 12.2.2
+(`node-gyp` 13.0.0) and pnpm 10.34.9 (`node-gyp` 11.5.0). Other package managers
+were not tested; with one of them, put a `node-gyp` on the `PATH` before a
+source build, for example with `npm install -g node-gyp`. ONNX Runtime's install
+script only downloads optional CUDA libraries on Linux. npm 12 skips dependency
+install scripts unless they are allowed. The prebuilt platforms work without
+them; to allow them, for example for a source build:
 
 ```bash
 npm install videobook-engine --allow-scripts=@dolthub/doltlite,usearch,onnxruntime-node

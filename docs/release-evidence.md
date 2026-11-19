@@ -9,6 +9,60 @@ This is an assessment of the requirements in
 Beads contains the work assignments and current status; this report records
 the evidence and its limits at these revisions.
 
+## November 19 node-gyp removed from the runtime dependencies
+
+Unreleased; the next engine release carries it. This is a packaging change: a
+source build on a platform without a prebuilt binary can now fail under a package
+manager that supplies no `node-gyp` of its own.
+
+`node-gyp` 12.4.0 is no longer an engine dependency. No engine source or script
+calls it. It was listed only so that a `node-gyp` binary would be in a consumer's
+tree for the source-build fallback of `@dolthub/doltlite` 0.51.1 (its install
+script runs `node-gyp rebuild`) and `usearch` 2.26.0 (`node-gyp-build`). Both
+ship prebuilt addons for macOS arm64 and x64, Linux x64 and arm64 and Windows
+x64, where no source build runs.
+
+The removal is hardening, by operator decision `ve-9w7` of November 19. It does
+not fix a live advisory: a clean install audited with zero findings both before
+and after. `node-gyp`'s own dependency tree had twice brought advisories into the
+package gate with no engine code change: on October 30 through make-fetch-happen,
+cacache, glob and minimatch (see 5.8.0 below), and on November 17 through
+tinyglobby and picomatch, an advisory GitHub withdrew a day later. `node-gyp`
+13.1.0, the newest, still depends on tinyglobby.
+
+`package-lock.json` loses 10 entries: `node-gyp`, abbrev, env-paths,
+exponential-backoff, graceful-fs, isexe, nopt, proc-log, undici and which. fdir,
+picomatch and tinyglobby stay at the same versions as development dependencies.
+No other version moved.
+
+A clean install of the packed tarball, set up as `scripts/package-smoke.mjs` does
+(Linux x64, Node 24.22.3, npm 12.2.2):
+
+| | Before | After |
+| --- | --- | --- |
+| Packages installed | 49 | 36 |
+| `npm ls node-gyp` | `node-gyp@12.4.0` | empty |
+| `npm audit --omit=dev` | 0 | 0 |
+
+The 13 packages that are no longer installed are `node-gyp` and the 12 that only
+it needed: the 9 above plus fdir, picomatch and tinyglobby.
+
+Source builds were forced on Linux x64 (Node 24.22.3, gcc 15.2.0, Python 3.13)
+by removing the `linux-x64` prebuild of each addon from a scratch install of the
+tarball without the dependency, then rebuilding it with install scripts allowed:
+
+- npm 12.2.2, November 18: npm put its bundled `node-gyp` 13.0.0 on the `PATH`.
+  DoltLite built in 3 min 47 s and USearch in 6 min 45 s.
+- pnpm 10.34.9, November 19: pnpm put its bundled `node-gyp` 11.5.0 on the
+  `PATH`, ahead of the system's `node-gyp` 12.1.0. DoltLite built in 2 min 31 s
+  and USearch in 3 min 48 s.
+
+In both cases each addon loaded from its `build/Release` directory, the README
+quick start ran on the source-built DoltLite, and a USearch add and search
+returned the stored key. The `node-gyp` version used by a source build now
+follows the consumer's package manager instead of the engine's pin. Other package
+managers and other platforms were not tested.
+
 ## November 14 idle queue polls (5.9.2)
 
 Engine 5.9.2 makes polling an empty job queue cheap. Before, `JobQueue.dequeue`
